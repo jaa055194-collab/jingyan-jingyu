@@ -1,0 +1,17 @@
+name: jingyu_client_kit
+description: 鲸言鲸语客户端内核（不依赖 Flutter）：插件契约与宿主、离线发件箱、差集同步游标。Flutter 外壳只做 UI 绑定。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  jingyu_core:
+    path: ../jingyu_core
+  jingyu_protocol:
+    path: ../jingyu_protocol
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

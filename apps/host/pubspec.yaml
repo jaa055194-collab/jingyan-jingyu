@@ -1,0 +1,19 @@
+name: jingyu_host
+description: 鲸言鲸语宿主服务（家中常驻电脑）。框架阶段：模块装配、HTTP 入口、消息内核骨架、出站 URL 防护、审计。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  jingyu_core:
+    path: ../../packages/jingyu_core
+  jingyu_protocol:
+    path: ../../packages/jingyu_protocol
+  jingyu_host_kit:
+    path: ../../packages/jingyu_host_kit
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0
