@@ -11,6 +11,13 @@ import 'src/accounts/accounts_module.dart';
 import 'src/accounts/db_authenticator.dart';
 import 'src/accounts/password_hasher.dart';
 import 'src/accounts/accounts_sql_store.dart';
+import 'src/accounts/accounts_migrations.dart';
+import 'src/messages/messages_migrations.dart';
+import 'src/messages/sqlite_message_store.dart';
+import 'src/social/conversation_service.dart';
+import 'src/social/social_migrations.dart';
+import 'src/social/social_module.dart';
+import 'src/storage/migrations.dart';
 import 'src/storage/storage_module.dart';
 import 'src/config.dart';
 import 'src/messages/messages_module.dart';
@@ -39,7 +46,29 @@ class Host {
 
 /// 框架阶段默认模块。后续模块按 docs/modules 的编号追加。
 List<HostModule> defaultModules(HostConfig config, Clock clock) {
-  final storage = StorageModule(databasePath: '${config.dataDir}/host.sqlite');
+  final storage = StorageModule(
+    databasePath: '${config.dataDir}/host.sqlite',
+    migrations: [
+      ...allMigrations,
+      ...accountsMigrations,
+      ...messagesMigrations,
+      ...socialMigrations,
+    ],
+  );
+  final messages = SqliteMessageStore(
+    database: storage.database,
+    cipher: storage.cipher,
+    clock: clock,
+  );
+  final conversations = ConversationService(
+    database: storage.database,
+    clock: clock,
+    headSeq: messages.headSeqInTransaction,
+    accountExists: (tx, id) async => (await tx.query(
+      'SELECT id FROM account WHERE id = ? AND disabled = 0',
+      [id],
+    )).isNotEmpty,
+  );
   final accounts = AccountsDomain(
     store: SqlAccountsStore(storage.database),
     clock: clock,
@@ -49,7 +78,8 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     SystemModule(config: config, clock: clock, audit: storage.auditLog),
     storage,
     AccountsModule(domain: accounts),
-    MessagesModule(),
+    MessagesModule(store: messages),
+    SocialModule(conversations: conversations),
   ];
 }
 

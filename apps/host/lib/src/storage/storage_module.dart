@@ -9,19 +9,26 @@ import '../audit/audit_log.dart';
 import 'cipher.dart';
 import 'database.dart';
 import 'key_provider.dart';
+import 'migrations.dart';
 import 'sqlite_audit_log.dart';
 import 'sqlite_database.dart';
 
 /// Registers stable interfaces without I/O; persistence is opened during start.
 final class StorageModule extends HostModule {
-  StorageModule({required this.databasePath, KeyProvider? keyProvider})
-    : keyProvider = keyProvider ?? DpapiKeyProvider(path: '$databasePath.kek') {
+  StorageModule({
+    required this.databasePath,
+    KeyProvider? keyProvider,
+    List<Migration> migrations = allMigrations,
+  }) : migrations = List.unmodifiable(migrations),
+       keyProvider =
+           keyProvider ?? DpapiKeyProvider(path: '$databasePath.kek') {
     database = _DatabaseProxy(() => _database);
     cipher = _CipherProxy(() => _cipher);
     auditLog = SqliteAuditLog(database);
   }
 
   final String databasePath;
+  final List<Migration> migrations;
   final KeyProvider keyProvider;
   late final Database database;
   late final ColumnCipher cipher;
@@ -59,7 +66,7 @@ final class StorageModule extends HostModule {
     Uint8List? dek;
     AesGcmColumnCipher? wrapping;
     try {
-      db = await SqliteDatabase.open(databasePath);
+      db = await SqliteDatabase.open(databasePath, migrations: migrations);
       kek = await keyProvider.loadKek();
       if (kek.length != 32) throw StateError('KEK must be exactly 32 bytes');
       wrapping = AesGcmColumnCipher(kek);

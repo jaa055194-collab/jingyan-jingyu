@@ -1,21 +1,23 @@
 # 需求追踪与验收
 
-读取日期：2026-11-13。需求基线为仓库 v4.2 及 docs/architecture/02-decisions.md 中有原始需求答复支持的条目。此记录不代表全产品已验收；本次工作属于同一次完整交付中的实现过程。
+基线：需求v4.2及2026-11-13原始答复；代码主干`0626ae3`（M01 PR #6、M02 PR #9已合并）。本记录仅覆盖已调查要求，不宣称完整需求矩阵或全产品验收。
 
-| ID | 来源/版本/章节 | 原始要求摘要 | 审批状态 | 验收条件 | 实现位置/PR | 测试或检查 | 证据与版本 | 状态/缺口 |
-|---|---|---|---|---|---|---|---|---|
-| REQ-001 | plugins/01-plugin-spec.md §3–4；2026-11-13 插件化答复 | 插件私有存储按 id 隔离，激活期持续可用，停用释放 | 已授权 | 激活写入后连续指令能读写相同状态；不同插件同名键隔离；卸载和激活失败后上下文不可用 | packages/jingyu_client_kit/lib/src/plugin_host.dart | plugin_context_test.dart：激活/连续调用/隔离/重载/失败重试/能力快照/停用/未授权拒绝 | main 3c81587 后工作树；Windows Dart 3.14；2026-11-13 局部7测及全包18测通过 | 验证通过；仅内存，不声明跨重启持久化 |
-| REQ-002 | v4.2 FR-63；decisions B-6 | 20GB默认可调配额，80%告警，满额只停大文件；磁盘<10%全停新上传 | 已授权 | 80%与100%阈值，50MiB边界及磁盘10%边界符合原要求；文字/图片不计用量，语音仍可发送 | apps/host/lib/src/lifecycle/quota.dart | quota_test.dart：16个策略/名额行为测试 | main 3c81587 后工作树；Windows Dart 3.14；2026-11-13 test与analyze通过 | 已实现未验证（集成）；纯策略测试通过，尚未接入实际上传/磁盘计量；单位按GiB/MiB |
-| REQ-003 | decisions B-6 | 分片8MB，每账号并发上传≤3 | 已授权 | 策略返回8MiB分片，第四次申请拒绝，其他账号独立，重复/跨闸门释放不增加名额 | 同上 UploadGate | quota_test.dart：名额获取、释放、隔离和非法输入 | 同 REQ-002 | 已实现未验证（集成）；仅单isolate内名额，不代表上传端已执行 |
-| REQ-004 | modules/M02-accounts.md；FR-04～07 | 账号、邀请、设备及权限 | 已授权 | 按M02验收逐项执行，含串数据和即时撤销 | apps/host/lib/src/accounts/ | accounts_test.dart；核心测试后仍须HTTP/SQLite验收 | 当前工作树；同步KDF缺陷已由独立评审检出，异步修复验证中 | 领域核心与 SQLite 实现已实现并通过上述测试；仍无 HTTP 路由、AccountsModule/迁移装配进 StorageModule、生产鉴权装配、IP/账号/邀请码多维限流，邀请码签发后无法经服务获得可撤销 id；不是完整 M02 验收 |
-| REQ-005 | modules/M11-client-shell.md；FR-09 | Windows和Android客户端及插件接入 | 已授权 | 双端构建/设备行为/同场景Before–After证据齐备 | 尚无Flutter应用 | 未执行 | main 3c81587 无client_flutter | 受阻：设备信任契约未完成；readConversation/modelInvoke上下文未接入；不能用管理员身份冒充宿主设备 |
+| ID | 来源/章节 | 要求摘要 | 审批 | 可观察验收 | 实现 | 检查/证据 | 状态与缺口 |
+|---|---|---|---|---|---|---|---|
+| REQ-001 | plugins/01-plugin-spec §3–4 | 插件私有存储隔离、激活期持续、停用释放 | 已授权 | 指令连续读写相同状态，插件间隔离，权限快照，失效上下文拒绝访问 | client_kit/plugin_host.dart | plugin_context_test；RED先观察丢状态/扩权/停用后仍可调用，再修复GREEN | 验证通过（内存生命周期），不声明重启持久化 |
+| REQ-002 | FR-63 / decisions B-6 | 20GB默认可调；80%告警；满额拒>50MB文件；磁盘<10%全停 | 已授权 | 大小/比例精确边界、文字图片不计配额、语音可发 | lifecycle/quota.dart | quota_test：16个测试 | 纯策略通过；未接入实际计量/上传；技术单位GiB/MiB |
+| REQ-003 | decisions B-6 | 8MB分片、每账号并发≤3 | 已授权 | 第4个许可拒绝，账号隔离、重复/跨gate释放不增名额 | UploadGate | quota_test | 纯策略通过；未执行真实上传 |
+| REQ-004 | FR-04～07 / M02 | 持久账号、邀请、设备与鉴权 | 已授权 | 主干M02契约/HTTP/持久化验收 | 主干PR #9 | 沿用canonical主干tests，不维护第二套账号 | 已合并；本票最终全仓须重验 |
+| REQ-005 | FR-09 / M11 | Android与Windows客户端 | 已授权 | 双端构建/设备行为/真实Before–After | 独立PR #8 | 本票未运行客户端验收 | 未完成，不声明草案可用 |
+| REQ-006 | FR-14 / M03 | 单调seq、幂等、差集、持久ack | 已授权 | 并发重放不重复，重启保持，加密落盘不出现正文 | messages/sqlite_message_store.dart；Migration200 | sqlite_message_store_test：15项含原契约/并发/扫描/AAD/重启/失败回滚 | 局部通过；transport ack/WebSocket与跨端未读未接入 |
+| REQ-007 | FR-22 / M04 | 群成员服务器权限 | 已授权 | 非成员不可列出/读取/发送；仅owner加成员；有效账号检查 | social/conversation_service.dart、social_routes.dart、Migration300 | conversation_membership_test 6项、social_routes_test 7项 | 局部通过；好友/私聊/拉黑/群角色/退出未完成 |
+| REQ-008 | decisions C-1 | 房主可选择仅入群后历史 | 已授权 | 同Tx取head+1，服务器忽略越界afterSeq，分页不泄露旧内容 | HistoryMembershipCheck、MessagesModule._sync | message_membership_boundary_test 2项；默认host端到端补充验证 | 局部通过；不把客户端过滤当权限 |
+| REQ-009 | M01/M03/M04工程约束 | 统一迁移装配 | 已授权 | 默认单库顺序1/100/200/300、旧M01默认不变 | StorageModule optional migrations、defaultModules | storage_extra_migrations_test 1项，先缺参数RED后GREEN | 局部通过，最终全仓重验 |
 
-## 当前验证记录
+## 验证口径
 
-在 main 3c81587 加 PR #6（a1ad4e7）存储变更及本分支账号、配额、插件改动的工作树上，`powershell -ExecutionPolicy Bypass -File tool/check.ps1` 于 2026-11-13 17:2x 全部通过（ALL CHECKS PASSED）：core 20、protocol 9、host_kit 9、client_kit 18、host 79；分析均为 `--fatal-infos` 且无问题。host 79 项含内存账号、真实 SQLite 账号（重启保持、隔离、并发核销、refresh 单赢家、回滚）及真实 60 万轮 PBKDF2 测试。本记录仅证明该工作树，后续代码变更需重跑。
+2026-11-13在当前增量上，31项新持久消息/群权限/HTTP/迁移测试主代理及独立审查均通过；全仓 `tool/check.ps1` 输出 `ALL CHECKS PASSED`：core 20、protocol 9、host_kit 10、client_kit 18、host 144，所有分析无问题。其后仅新增默认host的joined群端到端回归；`host_test.dart` 19项全部通过，最终host分析无问题。该回归验证真实登录后创建群、管理员非成员404、owner添加成员、服务器只返回入群后消息、列表可见。总计当前覆盖的各包测试为202项（全仓201项 + 后加的host回归1项），不是202条产品需求验收。旧工作树结果不作为未来提交通过证据。
 
-独立评审发现并修复：上下文权限集合被原始可变Set修改、卸载后已捕获上下文仍能使用。两项分别观察到回归测试RED，再实现并GREEN；评审复核未发现本次修复的新阻断。
+代码审查确认：canonical SqlAccountsStore使用差异行UPSERT而非父行REPLACE，不在账户正常认证时删除社交/消息数据。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
 
-## 尚未交付的模块
-
-M01存储存在并行工单在途实现；未经合并与重验不记入当前分支。M03–M10、M12其余功能及M13全量验收均未在此分支实现。现有测试通过不代表手机/桌面可用，不代表完整产品交付。
+未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。

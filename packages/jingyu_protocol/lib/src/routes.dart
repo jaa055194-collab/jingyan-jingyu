@@ -40,6 +40,9 @@ abstract final class Routes {
   /// 会话列表。
   static const String conversations = '$prefix/conversations';
 
+  /// Group owner adds an existing account after approving membership.
+  static const String conversationMembers = '$prefix/conversations/{conversationId}/members';
+
   /// 会话内消息：`/conversations/{conversationId}/messages`。
   static const String messages =
       '$prefix/conversations/{conversationId}/messages';
