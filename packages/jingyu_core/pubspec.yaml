@@ -1,0 +1,11 @@
+name: jingyu_core
+description: 鲸言鲸语领域原语：标识、结果类型、时钟、可见性、记忆分层、token 预算分层。与平台无关，不依赖 Flutter。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0
