@@ -19,10 +19,14 @@ final class TrustedChatContext {
   const TrustedChatContext({
     required this.initiator,
     required this.conversationKind,
+    this.scopeKey,
   });
 
   final AccountId initiator;
   final ChatConversationKind conversationKind;
+
+  /// Trusted canonical conversation identity, never sourced from request bodies.
+  final String? scopeKey;
 }
 
 /// Owner-configured, single-call chat pipeline for B1 and B2 only.
@@ -85,7 +89,21 @@ final class ModelGateway {
     required String requestId,
     required BudgetLayer layer,
     required TrustedChatContext context,
+    int? maxTokens,
+    String? expectedProviderId,
+    String? expectedModel,
   }) async {
+    if (maxTokens != null && maxTokens <= 0 ||
+        (expectedProviderId == null) != (expectedModel == null) ||
+        expectedProviderId != null &&
+            (expectedProviderId.trim().isEmpty ||
+                expectedProviderId.trim() != expectedProviderId ||
+                RegExp(r'[\x00-\x1f\x7f]').hasMatch(expectedProviderId) ||
+                expectedModel!.trim().isEmpty ||
+                expectedModel.trim() != expectedModel ||
+                RegExp(r'[\x00-\x1f\x7f]').hasMatch(expectedModel))) {
+      return err(FailureCode.invalidArgument, 'Invalid chat request');
+    }
     if (layer != BudgetLayer.b1FastBrain && layer != BudgetLayer.b2DeepChat) {
       return err(FailureCode.invalidArgument, 'Unsupported chat budget layer');
     }
@@ -94,6 +112,11 @@ final class ModelGateway {
         : ProviderCapability.chat;
     final binding = await _bindings.resolve(ai, capability);
     if (binding case Err<ResolvedBinding>(:final failure)) return Err(failure);
+    if (expectedProviderId != null &&
+        (binding.value.providerId != expectedProviderId ||
+            binding.value.model != expectedModel)) {
+      return err(FailureCode.conflict, 'Model binding changed');
+    }
     // Resolve first so replay lookup cannot reveal another operator's requests.
     // inspect intentionally blocks unknown usage, including a pending replay.
     if (await _exists(ai, requestId)) return _replay();
@@ -157,6 +180,7 @@ final class ModelGateway {
       apiKey: credential.value.apiKey,
       model: binding.value.model,
       messages: List.unmodifiable(turns),
+      maxTokens: maxTokens,
     );
     if (completion case Err<ChatCompletion>(:final failure)) {
       return err(

@@ -21,10 +21,12 @@
 | REQ-015 | FR-48/58 | 显式预算与真实用量硬停 | 已授权 | 无默认总额/时区、未知用量阻断、begin同Tx层策略、幂等结算 | usage_meter/budget_configuration/model_gateway、503/504 | usage13/budget10/gateway19/runtime5，独立review关闭竞态 | 内部调用链通过，非自动回复产品验收；在途可超额但照实入账 |
 | REQ-016 | NFR-05 / 网络生命周期 | 超时可靠回收出站TLS | 工程前置 | kill并wait退出，peer断开，名额恢复，秘密仅stdin | process_http/http_worker | process6+原guarded13，真实Windows停滞TLS重复3次 | 验证通过；生产组合用process，不单独使用guarded原型 |
 | REQ-017 | FR-49/50 / M06 / A-7 | 加密记忆与采集闸门 | 已授权局部 | opt-out零写入、空分类T1、pending不注入、T2 model用途排除、模型不能自确认 | ai/memory/memory_store、可选Migration600 | memory7项真实SQLite/AES，空分类先RED后修；父独立复跑7项及host analyze通过 | 内部仓储验证通过，未生产装配；fixture授权不能算跨用户/外部群传播权限 |
-
 | REQ-018 | FR-08/22 / M04 | 好友同意、拉黑与私聊只读 | 已授权 | target接受才好友；拉黑双向和人类AI继承；解除需重新申请；既有私聊只读 | friendship_service/routes 301、private_conversations/routes 302、CombinedMembership | friend9/HTTP5/private7/HTTP5、重排装配1，独立review | 后端链路通过；AI预授权/双端UI未完成 |
 | REQ-019 | FR-48 / 2026-11-13长期上下文要求 | 显式窗口预算与少量相关召回 | 已授权 | 固定人格不裁剪、完整近期轮次、来源与scope/topK阈值、省略ID可见 | ai/context/context_assembler | 21项含万轮历史、Unicode、计数overhead、恶意召回角色隔离，独立review | 内部装箱通过；精确tokenizer、持久重要事实召回及端到端延迟未验，不承诺零遗忘 |
 | REQ-020 | FR-41 / decisions A1 / 长期人格隔离要求 | 人格分层版本、锁定和撤回 | 已授权 | P0/P1锁生效、P2自主；canonical AI才能迭代；证据/CAS/不可替换历史/加密隔离 | ai/persona/persona_service、可选601 | 21项SQLite/AES，SQL REPLACE回归先RED后修，独立review | 内部服务通过；未装配人格UI/提示词/调度，不能算端到端抗污染已完成 |
+
+| REQ-021 | FR-48 / 长期上下文要求 | 人格与窗口到模型调用一致 | 已授权局部 | 当前卡固定提示、输出预留max_tokens一致、profile/provider/model精确匹配、换绑不误用tokenizer | ContextualChat、runtime/gateway expected pair | contextual10/gateway-runtime35，父合跑58与review关闭profile错绑Important | 内部组合通过；无自动回复入口/真实tokenizer/记忆ACL默认 |
+| REQ-022 | FR-42/45 / M06 | 60秒规则心跳与恢复gap | 已授权局部 | 不调模型，每60秒至多一条；重启只记一次gap不造活动；当前owner权限 | LifeEngine、可选602 | life13项Clock/SQLite/回滚/枚举SQL/错误脱敏，独立review | 内部规则能力通过；未生产调度/主动行为/静默窗 |
 
 ## 验证口径
 
@@ -33,6 +35,8 @@
 最新子进程与预算runtime工作树完整执行 `tool/check.ps1`：`ALL CHECKS PASSED`，core20/protocol9/host_kit10/client_kit18/host272（总329），各包分析无问题。随后仅新增trusted worker配置装配1项，assembly2项通过、最终host analyze无问题，共覆盖330项，不代表330条需求验收。独立review发现的层降级竞态和legacy model生成pending两Important均先RED回归后修复并复验关闭；config路由account/device与bearer匹配也已回归通过。
 
 最新好友/私聊、上下文与人格并行增量已完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit18/host349，总406项，各包分析无问题。随后仅加强模块重排测试的私聊路由断言，该目标再次通过。Social缺accounts依赖的404回归已RED→GREEN；persona SQL REPLACE不可变历史回归已RED→GREEN。上下文与人格内部能力仍不计全产品长期可靠性验收。
+
+2026-11-14 ContextualChat与规则心跳增量全仓 `tool/check.ps1` 再次ALL CHECKS PASSED：core20/protocol9/host_kit10/client_kit18/host383，总440项，所有分析无问题。之后只校正迁移号说明注释及本文档，不改可执行逻辑。profile换绑回归验证错误profile在pending前拒绝、preflight中换绑仍固定原已匹配dispatch。此为内部组合验证，不等于真实公网或长期产品使用验收。
 
 代码审查确认：canonical SqlAccountsStore使用差异行UPSERT而非父行REPLACE，不在账户正常认证时删除社交/消息数据。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
 

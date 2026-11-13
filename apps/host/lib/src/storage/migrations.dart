@@ -1,7 +1,8 @@
-// Version allocation: M01 1–99; M02 100–199; M03 200–299;
-// M04 300–399; M05 400–499; M06 500–599; M07 600–699;
-// M08 700–799; M09 800–899; M10 900–999; M11 1000–1099;
-// M12 1100–1199; M13 1200–1299. Published migrations are append-only.
+// Applied allocation: M01 1; M02 100; M03 200; M04 300–302;
+// M05 500–504; opt-in M06 memory/persona/life 600–602.
+// The earlier per-module range sketch did not match M05's actual versions.
+// Check all registered and opt-in migrations before allocating further versions;
+// published migration numbers and SQL are append-only, never renumbered.
 class Migration {
   const Migration(this.version, this.name, this.sql);
   final int version;
