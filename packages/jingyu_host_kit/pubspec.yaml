@@ -1,0 +1,17 @@
+name: jingyu_host_kit
+description: 鲸言鲸语宿主侧的模块框架：模块契约、注册与依赖排序、路由匹配、中间件管线。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  jingyu_core:
+    path: ../jingyu_core
+  jingyu_protocol:
+    path: ../jingyu_protocol
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

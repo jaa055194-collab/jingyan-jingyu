@@ -1,0 +1,168 @@
+/// 消息内核：会话内单调 seq、client_msg_id 幂等、差集同步（FR-14、AC-18）。
+///
+/// 这里给出接口与内存实现。持久化实现（SQLite）必须通过同一组契约测试
+/// `test/message_store_contract.dart`，见 docs/modules/M03-messages.md。
+library;
+
+import 'package:jingyu_core/jingyu_core.dart';
+import 'package:jingyu_protocol/jingyu_protocol.dart';
+
+/// 已存储的消息。
+class StoredMessage {
+  const StoredMessage({
+    required this.conversationId,
+    required this.seq,
+    required this.messageId,
+    required this.senderId,
+    required this.clientMsgId,
+    required this.kind,
+    required this.body,
+    required this.sentAt,
+  });
+
+  final String conversationId;
+  final int seq;
+  final String messageId;
+  final String senderId;
+  final String clientMsgId;
+  final MessageKind kind;
+  final Map<String, Object?> body;
+  final DateTime sentAt;
+
+  /// 下发给客户端的载荷（与 MessageEventFrame.payload 同构）。
+  Map<String, Object?> toPayload() => {
+        'conversationId': conversationId,
+        'seq': seq,
+        'messageId': messageId,
+        'senderId': senderId,
+        'kind': kind.wire,
+        'body': body,
+        'sentAt': sentAt.toUtc().toIso8601String(),
+      };
+}
+
+/// 追加结果：[duplicate] 为 true 表示命中幂等，返回的是首次写入的那条。
+class AppendResult {
+  const AppendResult(this.message, {required this.duplicate});
+
+  final StoredMessage message;
+  final bool duplicate;
+}
+
+/// 差集一页。
+class SyncPage {
+  const SyncPage(this.messages, {required this.hasMore});
+
+  final List<StoredMessage> messages;
+  final bool hasMore;
+}
+
+/// 消息存储契约。
+abstract class MessageStore {
+  /// 追加消息。同一 (conversationId, senderId, clientMsgId) 只写一次。
+  Future<Result<AppendResult>> append({
+    required String conversationId,
+    required String senderId,
+    required String clientMsgId,
+    required MessageKind kind,
+    required Map<String, Object?> body,
+  });
+
+  /// 取 seq > [afterSeq] 的消息，按 seq 升序，最多 [limit] 条。
+  Future<Result<SyncPage>> since({
+    required String conversationId,
+    required int afterSeq,
+    int limit = 200,
+  });
+
+  /// 记录设备已读位点，只前进不后退（按设备取最大值）。
+  Future<int> ack({
+    required String conversationId,
+    required String deviceId,
+    required int seq,
+  });
+
+  /// 会话当前最大 seq。
+  Future<int> headSeq(String conversationId);
+}
+
+/// 内存实现。
+class InMemoryMessageStore implements MessageStore {
+  InMemoryMessageStore({this.clock = const SystemClock(), String Function()? newId})
+      : _newId = newId ?? _counterIds();
+
+  final Clock clock;
+  final String Function() _newId;
+
+  final Map<String, List<StoredMessage>> _byConversation = {};
+  final Map<String, StoredMessage> _byIdempotencyKey = {};
+  final Map<String, int> _acks = {};
+
+  static String Function() _counterIds() {
+    var n = 0;
+    return () => 'm${++n}';
+  }
+
+  @override
+  Future<Result<AppendResult>> append({
+    required String conversationId,
+    required String senderId,
+    required String clientMsgId,
+    required MessageKind kind,
+    required Map<String, Object?> body,
+  }) async {
+    if (clientMsgId.isEmpty || clientMsgId.length > 64) {
+      return err(FailureCode.invalidArgument, 'clientMsgId 长度必须为 1–64');
+    }
+    final key = '$conversationId|$senderId|$clientMsgId';
+    final existing = _byIdempotencyKey[key];
+    if (existing != null) return Ok(AppendResult(existing, duplicate: true));
+
+    final list = _byConversation.putIfAbsent(conversationId, () => []);
+    final message = StoredMessage(
+      conversationId: conversationId,
+      seq: list.length + 1,
+      messageId: _newId(),
+      senderId: senderId,
+      clientMsgId: clientMsgId,
+      kind: kind,
+      body: Map.unmodifiable(body),
+      sentAt: clock.now().toUtc(),
+    );
+    list.add(message);
+    _byIdempotencyKey[key] = message;
+    return Ok(AppendResult(message, duplicate: false));
+  }
+
+  @override
+  Future<Result<SyncPage>> since({
+    required String conversationId,
+    required int afterSeq,
+    int limit = 200,
+  }) async {
+    if (afterSeq < 0) return err(FailureCode.invalidArgument, 'afterSeq 不能为负');
+    if (limit <= 0 || limit > 1000) return err(FailureCode.invalidArgument, 'limit 必须在 1–1000');
+    final list = _byConversation[conversationId] ?? const <StoredMessage>[];
+    final tail = list.where((m) => m.seq > afterSeq).toList();
+    return Ok(SyncPage(tail.take(limit).toList(), hasMore: tail.length > limit));
+  }
+
+  @override
+  Future<int> ack({
+    required String conversationId,
+    required String deviceId,
+    required int seq,
+  }) async {
+    final key = '$conversationId|$deviceId';
+    final head = await headSeq(conversationId);
+    final clamped = seq > head ? head : seq;
+    final current = _acks[key] ?? 0;
+    final next = clamped > current ? clamped : current;
+    _acks[key] = next;
+    return next;
+  }
+
+  @override
+  Future<int> headSeq(String conversationId) async =>
+      _byConversation[conversationId]?.length ?? 0;
+}
