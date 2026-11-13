@@ -20,14 +20,19 @@
 | REQ-014 | FR-58 / B-5 / M05 | 独立绑定与停用保留 | 已授权 | chatFast不读chat，跨owner404，model空白拒绝，有引用provider不可删除 | binding_matrix/config_routes、502 | binding12/config7/provider8、真实SQLite | 验证通过的局部；无有序fallback |
 | REQ-015 | FR-48/58 | 显式预算与真实用量硬停 | 已授权 | 无默认总额/时区、未知用量阻断、begin同Tx层策略、幂等结算 | usage_meter/budget_configuration/model_gateway、503/504 | usage13/budget10/gateway19/runtime5，独立review关闭竞态 | 内部调用链通过，非自动回复产品验收；在途可超额但照实入账 |
 | REQ-016 | NFR-05 / 网络生命周期 | 超时可靠回收出站TLS | 工程前置 | kill并wait退出，peer断开，名额恢复，秘密仅stdin | process_http/http_worker | process6+原guarded13，真实Windows停滞TLS重复3次 | 验证通过；生产组合用process，不单独使用guarded原型 |
-
 | REQ-017 | FR-49/50 / M06 / A-7 | 加密记忆与采集闸门 | 已授权局部 | opt-out零写入、空分类T1、pending不注入、T2 model用途排除、模型不能自确认 | ai/memory/memory_store、可选Migration600 | memory7项真实SQLite/AES，空分类先RED后修；父独立复跑7项及host analyze通过 | 内部仓储验证通过，未生产装配；fixture授权不能算跨用户/外部群传播权限 |
+
+| REQ-018 | FR-08/22 / M04 | 好友同意、拉黑与私聊只读 | 已授权 | target接受才好友；拉黑双向和人类AI继承；解除需重新申请；既有私聊只读 | friendship_service/routes 301、private_conversations/routes 302、CombinedMembership | friend9/HTTP5/private7/HTTP5、重排装配1，独立review | 后端链路通过；AI预授权/双端UI未完成 |
+| REQ-019 | FR-48 / 2026-11-13长期上下文要求 | 显式窗口预算与少量相关召回 | 已授权 | 固定人格不裁剪、完整近期轮次、来源与scope/topK阈值、省略ID可见 | ai/context/context_assembler | 21项含万轮历史、Unicode、计数overhead、恶意召回角色隔离，独立review | 内部装箱通过；精确tokenizer、持久重要事实召回及端到端延迟未验，不承诺零遗忘 |
+| REQ-020 | FR-41 / decisions A1 / 长期人格隔离要求 | 人格分层版本、锁定和撤回 | 已授权 | P0/P1锁生效、P2自主；canonical AI才能迭代；证据/CAS/不可替换历史/加密隔离 | ai/persona/persona_service、可选601 | 21项SQLite/AES，SQL REPLACE回归先RED后修，独立review | 内部服务通过；未装配人格UI/提示词/调度，不能算端到端抗污染已完成 |
 
 ## 验证口径
 
 2026-11-13在当前增量上，31项新持久消息/群权限/HTTP/迁移测试主代理及独立审查均通过；全仓 `tool/check.ps1` 输出 `ALL CHECKS PASSED`：core 20、protocol 9、host_kit 10、client_kit 18、host 144，所有分析无问题。其后仅新增默认host的joined群端到端回归；`host_test.dart` 19项全部通过，最终host分析无问题。该回归验证真实登录后创建群、管理员非成员404、owner添加成员、服务器只返回入群后消息、列表可见。总计当前覆盖的各包测试为202项（全仓201项 + 后加的host回归1项），不是202条产品需求验收。旧工作树结果不作为未来提交通过证据。
 
 最新子进程与预算runtime工作树完整执行 `tool/check.ps1`：`ALL CHECKS PASSED`，core20/protocol9/host_kit10/client_kit18/host272（总329），各包分析无问题。随后仅新增trusted worker配置装配1项，assembly2项通过、最终host analyze无问题，共覆盖330项，不代表330条需求验收。独立review发现的层降级竞态和legacy model生成pending两Important均先RED回归后修复并复验关闭；config路由account/device与bearer匹配也已回归通过。
+
+最新好友/私聊、上下文与人格并行增量已完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit18/host349，总406项，各包分析无问题。随后仅加强模块重排测试的私聊路由断言，该目标再次通过。Social缺accounts依赖的404回归已RED→GREEN；persona SQL REPLACE不可变历史回归已RED→GREEN。上下文与人格内部能力仍不计全产品长期可靠性验收。
 
 代码审查确认：canonical SqlAccountsStore使用差异行UPSERT而非父行REPLACE，不在账户正常认证时删除社交/消息数据。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
 

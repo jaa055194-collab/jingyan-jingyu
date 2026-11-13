@@ -39,6 +39,12 @@ abstract final class Routes {
 
   /// 会话列表。
   static const String conversations = '$prefix/conversations';
+  static const String directConversations = '$prefix/direct-conversations';
+  static const String friendState = '$prefix/friends/{accountId}';
+  static const String friendRequest = '$prefix/friends/{accountId}/requests';
+  static const String friendAccept = '$prefix/friends/{accountId}/accept';
+  static const String friendDeny = '$prefix/friends/{accountId}/deny';
+  static const String friendBlock = '$prefix/friends/{accountId}/block';
 
   /// Group owner adds an existing account after approving membership.
   static const String conversationMembers =
