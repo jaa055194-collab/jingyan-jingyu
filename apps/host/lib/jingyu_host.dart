@@ -24,6 +24,7 @@ import 'src/security/url_guard.dart';
 import 'src/messages/sqlite_message_store.dart';
 import 'src/social/conversation_service.dart';
 import 'src/social/social_migrations.dart';
+import 'src/social/group_ai_migrations.dart';
 import 'src/social/friendship_migrations.dart';
 import 'src/social/private_conversations.dart';
 import 'src/social/private_conversation_migration.dart';
@@ -66,6 +67,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       ...socialMigrations,
       friendshipMigration,
       privateConversationMigration,
+      groupAiMigration,
       ...modelsMigrations,
       aiIdentityMigration,
       bindingMigration,

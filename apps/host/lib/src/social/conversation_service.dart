@@ -178,6 +178,166 @@ class ConversationService implements HistoryMembershipCheck {
     });
   }
 
+  Future<Result<void>> transferOwnership({
+    required String actorId,
+    required String conversationId,
+    required String newOwnerId,
+  }) async {
+    if (!_validId(actorId) ||
+        !_validId(conversationId) ||
+        !_validId(newOwnerId)) {
+      return _invalid();
+    }
+    return _database.transaction((tx) async {
+      final conversation = await tx.query(
+        'SELECT owner_account_id FROM social_conversations WHERE id = ?',
+        [conversationId],
+      );
+      if (conversation.isEmpty ||
+          conversation.single['owner_account_id'] != actorId ||
+          await _activeKind(tx, actorId) == null ||
+          !(await _isMember(tx, conversationId, actorId))) {
+        return _missing();
+      }
+      // A handoff recipient must be an active human who is already a member.
+      if (await _activeKind(tx, newOwnerId) != 'human' ||
+          !(await _isMember(tx, conversationId, newOwnerId))) {
+        return _missing();
+      }
+      await tx.execute(
+        'UPDATE social_conversations SET owner_account_id = ? WHERE id = ?',
+        [newOwnerId, conversationId],
+      );
+      return const Ok(null);
+    });
+  }
+
+  Future<Result<void>> leave({
+    required String actorId,
+    required String conversationId,
+  }) async {
+    if (!_validId(actorId) || !_validId(conversationId)) return _invalid();
+    return _database.transaction((tx) async {
+      final conversation = await tx.query(
+        'SELECT owner_account_id FROM social_conversations WHERE id = ?',
+        [conversationId],
+      );
+      if (conversation.isEmpty ||
+          await _activeKind(tx, actorId) == null ||
+          !(await _isMember(tx, conversationId, actorId))) {
+        return _missing();
+      }
+      if (conversation.single['owner_account_id'] == actorId) {
+        return err(FailureCode.forbidden, 'Transfer ownership before leaving');
+      }
+      await tx.execute(
+        'DELETE FROM social_members WHERE conversation_id = ? AND account_id = ?',
+        [conversationId, actorId],
+      );
+      return const Ok(null);
+    });
+  }
+
+  Future<Result<void>> removeMember({
+    required String actorId,
+    required String conversationId,
+    required String targetId,
+  }) async {
+    if (!_validId(actorId) ||
+        !_validId(conversationId) ||
+        !_validId(targetId)) {
+      return _invalid();
+    }
+    return _database.transaction((tx) async {
+      final conversation = await tx.query(
+        'SELECT owner_account_id FROM social_conversations WHERE id = ?',
+        [conversationId],
+      );
+      if (conversation.isEmpty ||
+          conversation.single['owner_account_id'] != actorId ||
+          await _activeKind(tx, actorId) == null ||
+          !(await _isMember(tx, conversationId, actorId)) ||
+          !(await _isMember(tx, conversationId, targetId))) {
+        return _missing();
+      }
+      if (actorId == targetId) {
+        return err(FailureCode.forbidden, 'Owner cannot remove itself');
+      }
+      await tx.execute(
+        'DELETE FROM social_members WHERE conversation_id = ? AND account_id = ?',
+        [conversationId, targetId],
+      );
+      return const Ok(null);
+    });
+  }
+
+  Future<Result<void>> withdrawAi({
+    required String operatorId,
+    required String conversationId,
+    required String aiAccountId,
+  }) async {
+    if (!_validId(operatorId) ||
+        !_validId(conversationId) ||
+        !_validId(aiAccountId)) {
+      return _invalid();
+    }
+    return _database.transaction((tx) async {
+      final authorized = await tx.query(
+        '''
+SELECT 1 FROM account operator
+JOIN ai_operator mapping ON mapping.operator_id = operator.id
+JOIN account ai ON ai.id = mapping.ai_id
+JOIN social_members member ON member.account_id = ai.id
+JOIN social_conversations conversation
+  ON conversation.id = member.conversation_id
+WHERE operator.id = ? AND operator.kind = 'human' AND operator.disabled = 0
+  AND ai.id = ? AND ai.kind = 'ai' AND ai.disabled = 0
+  AND conversation.id = ?
+''',
+        [operatorId, aiAccountId, conversationId],
+      );
+      if (authorized.isEmpty) return _missing();
+      final owner = await tx.query(
+        'SELECT owner_account_id FROM social_conversations WHERE id = ?',
+        [conversationId],
+      );
+      if (owner.single['owner_account_id'] == aiAccountId) {
+        return err(FailureCode.forbidden, 'Transfer ownership before leaving');
+      }
+      await tx.execute(
+        'DELETE FROM social_members WHERE conversation_id = ? AND account_id = ?',
+        [conversationId, aiAccountId],
+      );
+      return const Ok(null);
+    });
+  }
+
+  Future<String?> _activeKind(Tx tx, String accountId) async {
+    final rows = await tx.query(
+      '''
+SELECT account.kind FROM account
+WHERE account.id = ? AND account.disabled = 0
+  AND (account.kind = 'human' OR EXISTS (
+    SELECT 1 FROM ai_operator
+    JOIN account operator ON operator.id = ai_operator.operator_id
+    WHERE ai_operator.ai_id = account.id
+      AND operator.kind = 'human' AND operator.disabled = 0
+  ))
+''',
+      [accountId],
+    );
+    return rows.isEmpty ? null : rows.single['kind'] as String;
+  }
+
+  Future<bool> _isMember(
+    Tx tx,
+    String conversationId,
+    String accountId,
+  ) async => (await tx.query(
+    'SELECT 1 FROM social_members WHERE conversation_id = ? AND account_id = ?',
+    [conversationId, accountId],
+  )).isNotEmpty;
+
   @override
   Future<int?> firstVisibleSeq(String accountId, String conversationId) async {
     if (!_validId(accountId) || !_validId(conversationId)) return null;

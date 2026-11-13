@@ -50,6 +50,20 @@ void main() {
         )).status,
         401,
       );
+      for (final route in [
+        Routes.groupOwner,
+        Routes.groupLeave,
+        Routes.groupMember,
+        Routes.groupAiWithdraw,
+        Routes.groupAiSettings,
+        Routes.groupAiInterval,
+        Routes.groupAiMute,
+      ]) {
+        expect(
+          host.registry.router.describe().any((entry) => entry.contains(route)),
+          isTrue,
+        );
+      }
       expect(
         host.registry.router.describe().any(
           (route) => route.contains(Routes.friendState),
