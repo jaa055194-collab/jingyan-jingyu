@@ -47,6 +47,7 @@ Future<void> _handle(HttpRequest request, Pipeline pipeline) async {
       query: request.uri.queryParameters,
       headers: headers,
       body: body,
+      remoteAddress: request.connectionInfo?.remoteAddress.address,
     ));
     await _write(response, result);
   } catch (_) {

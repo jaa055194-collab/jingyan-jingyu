@@ -7,13 +7,18 @@ library;
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
-import 'src/auth/token_authenticator.dart';
+import 'src/accounts/accounts_module.dart';
+import 'src/accounts/db_authenticator.dart';
+import 'src/accounts/password_hasher.dart';
+import 'src/accounts/accounts_sql_store.dart';
+import 'src/storage/storage_module.dart';
 import 'src/config.dart';
 import 'src/messages/messages_module.dart';
 import 'src/system/system_module.dart';
 
 export 'src/audit/audit_log.dart';
-export 'src/auth/token_authenticator.dart';
+export 'src/accounts/accounts_module.dart';
+export 'src/accounts/db_authenticator.dart';
 export 'src/config.dart';
 export 'src/http_server.dart';
 export 'src/messages/message_store.dart';
@@ -27,16 +32,26 @@ class Host {
 
   final Registry registry;
   final Pipeline pipeline;
-  final StaticTokenAuthenticator auth;
+  final AccountsDomain auth;
 
   Future<List<Object>> shutdown() => registry.shutdown();
 }
 
 /// 框架阶段默认模块。后续模块按 docs/modules 的编号追加。
-List<HostModule> defaultModules(HostConfig config, Clock clock) => [
-      SystemModule(config: config, clock: clock),
-      MessagesModule(),
-    ];
+List<HostModule> defaultModules(HostConfig config, Clock clock) {
+  final storage = StorageModule(databasePath: '${config.dataDir}/host.sqlite');
+  final accounts = AccountsDomain(
+    store: SqlAccountsStore(storage.database),
+    clock: clock,
+    hasher: PasswordHasher(),
+  );
+  return [
+    SystemModule(config: config, clock: clock, audit: storage.auditLog),
+    storage,
+    AccountsModule(domain: accounts),
+    MessagesModule(),
+  ];
+}
 
 /// 装配并启动宿主（不监听端口）。
 Future<Host> buildHost({
@@ -55,10 +70,10 @@ Future<Host> buildHost({
   }
   await registry.boot();
 
-  final auth = StaticTokenAuthenticator();
+  final auth = registry.services.get<AccountsDomain>();
   final pipeline = Pipeline(
     router: registry.router,
-    authenticate: auth.call,
+    authenticate: DbAuthenticator(auth).call,
     onError: (error, stack, _) => onError?.call(error, stack),
   );
   return Host._(registry, pipeline, auth);
