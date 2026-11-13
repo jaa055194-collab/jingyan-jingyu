@@ -7,6 +7,8 @@ import 'friendship_routes.dart';
 import 'private_conversations.dart';
 import 'combined_membership.dart';
 import 'private_routes.dart';
+import 'group_management_routes.dart';
+import 'group_ai_routes.dart';
 
 import '../messages/messages_module.dart';
 import 'conversation_service.dart';
@@ -73,6 +75,20 @@ class SocialModule extends HostModule {
           direct: private,
         );
       }
+      mountGroupAiRoutes(
+        router,
+        db: db,
+        clock: hostClock,
+        accounts: accounts,
+        audit: audit,
+      );
+      mountGroupManagementRoutes(
+        router,
+        conversations: conversations,
+        accounts: accounts,
+        clock: hostClock,
+        audit: audit,
+      );
       mountFriendshipRoutes(
         router,
         db: db,

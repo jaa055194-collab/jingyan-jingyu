@@ -49,6 +49,20 @@ abstract final class Routes {
   /// Group owner adds an existing account after approving membership.
   static const String conversationMembers =
       '$prefix/conversations/{conversationId}/members';
+  static const String groupOwner =
+      '$prefix/conversations/{conversationId}/owner';
+  static const String groupLeave =
+      '$prefix/conversations/{conversationId}/leave';
+  static const String groupMember =
+      '$prefix/conversations/{conversationId}/members/{accountId}';
+  static const String groupAiWithdraw =
+      '$prefix/conversations/{conversationId}/ai/{accountId}/withdraw';
+  static const String groupAiSettings =
+      '$prefix/conversations/{conversationId}/ai-settings';
+  static const String groupAiInterval =
+      '$prefix/conversations/{conversationId}/ai/{accountId}/interval';
+  static const String groupAiMute =
+      '$prefix/conversations/{conversationId}/ai/{accountId}/mute';
 
   /// 会话内消息：`/conversations/{conversationId}/messages`。
   static const String messages =
