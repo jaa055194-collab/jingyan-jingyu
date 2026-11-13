@@ -11,6 +11,7 @@ import 'src/auth/token_authenticator.dart';
 import 'src/config.dart';
 import 'src/messages/messages_module.dart';
 import 'src/system/system_module.dart';
+import 'src/storage/storage_module.dart';
 
 export 'src/audit/audit_log.dart';
 export 'src/auth/token_authenticator.dart';
@@ -33,10 +34,14 @@ class Host {
 }
 
 /// 框架阶段默认模块。后续模块按 docs/modules 的编号追加。
-List<HostModule> defaultModules(HostConfig config, Clock clock) => [
-      SystemModule(config: config, clock: clock),
-      MessagesModule(),
-    ];
+List<HostModule> defaultModules(HostConfig config, Clock clock) {
+  final storage = StorageModule(databasePath: '${config.dataDir}/host.sqlite');
+  return [
+    SystemModule(config: config, clock: clock, audit: storage.auditLog),
+    storage,
+    MessagesModule(),
+  ];
+}
 
 /// 装配并启动宿主（不监听端口）。
 Future<Host> buildHost({
