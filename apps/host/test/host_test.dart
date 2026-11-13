@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/jingyu_host.dart';
+import 'package:jingyu_host/src/social/conversation_service.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 import 'package:test/test.dart';
@@ -99,6 +100,8 @@ void main() {
     late String token;
     late String adminToken;
     late DeviceId deviceId;
+    late String conversation;
+    late String privateConversation;
     const password = 'test-password-123';
 
     setUpAll(() async {
@@ -121,6 +124,15 @@ void main() {
         displayName: 'User',
         password: password,
       )).value;
+      final conversations = host.registry.services.get<ConversationService>();
+      conversation = (await conversations.createGroup(
+        ownerAccountId: userId.value,
+        name: 'Test group',
+      )).value.id;
+      privateConversation = (await conversations.createGroup(
+        ownerAccountId: userId.value,
+        name: 'Private group',
+      )).value.id;
     });
 
     setUp(() async {
@@ -159,7 +171,7 @@ void main() {
       final sent = await host.pipeline.handle(
         HostRequest(
           method: 'POST',
-          path: path(Routes.messages, 'private'),
+          path: path(Routes.messages, privateConversation),
           headers: authed(),
           body: {
             'clientMsgId': 'private-1',
@@ -199,6 +211,7 @@ void main() {
         'storage',
         'accounts',
         'messages',
+        'social',
       ]);
       final metadata = await host.pipeline.handle(
         HostRequest(
@@ -218,7 +231,7 @@ void main() {
       Future<HostResponse> post(String cmid) => host.pipeline.handle(
         HostRequest(
           method: 'POST',
-          path: path(Routes.messages, 'c1'),
+          path: path(Routes.messages, conversation),
           headers: authed(),
           body: {
             'clientMsgId': cmid,
@@ -238,7 +251,7 @@ void main() {
       final sync = await host.pipeline.handle(
         HostRequest(
           method: 'GET',
-          path: path(Routes.sync, 'c1'),
+          path: path(Routes.sync, conversation),
           query: const {'afterSeq': '0'},
           headers: authed(),
         ),
@@ -247,15 +260,85 @@ void main() {
       expect(messages.map((m) => (m as Map)['seq']), [1, 2]);
     });
 
+    test(
+      'joined history is enforced through default authenticated HTTP assembly',
+      () async {
+        final created = await host.pipeline.handle(
+          HostRequest(
+            method: 'POST',
+            path: Routes.conversations,
+            headers: authed(),
+            body: {'name': 'Joined group', 'historyVisibility': 'joined'},
+          ),
+        );
+        expect(created.status, 200);
+        final id = (created.json as Map)['id'] as String;
+        Future<HostResponse> post(String key) => host.pipeline.handle(
+          HostRequest(
+            method: 'POST',
+            path: path(Routes.messages, id),
+            headers: authed(),
+            body: {
+              'clientMsgId': key,
+              'kind': 'text',
+              'body': {'text': key},
+            },
+          ),
+        );
+        expect((await post('before-join')).status, 200);
+        Future<HostResponse> adminSync() => host.pipeline.handle(
+          HostRequest(
+            method: 'GET',
+            path: path(Routes.sync, id),
+            headers: {'authorization': 'Bearer $adminToken'},
+          ),
+        );
+        expect((await adminSync()).status, 404);
+        final joined = await host.pipeline.handle(
+          HostRequest(
+            method: 'POST',
+            path: Routes.conversationMembers.replaceFirst(
+              '{conversationId}',
+              id,
+            ),
+            headers: authed(),
+            body: {'accountId': adminId.value},
+          ),
+        );
+        expect(joined.status, 200);
+        expect((await post('after-join')).status, 200);
+        final synced = await adminSync();
+        expect(synced.status, 200);
+        final visible = (synced.json as Map)['messages'] as List;
+        expect(visible.map((m) => ((m as Map)['body'] as Map)['text']), [
+          'after-join',
+        ]);
+        final lists = await host.pipeline.handle(
+          HostRequest(
+            method: 'GET',
+            path: Routes.conversations,
+            headers: {'authorization': 'Bearer $adminToken'},
+          ),
+        );
+        expect(lists.status, 200);
+        expect(
+          ((lists.json as Map)['conversations'] as List).any(
+            (c) => (c as Map)['id'] == id,
+          ),
+          isTrue,
+        );
+      },
+    );
+
     test('未登录 401；坏请求体 400；吊销后立即失效', () async {
       final anon = await host.pipeline.handle(
-        HostRequest(method: 'POST', path: path(Routes.messages, 'c1')),
+        HostRequest(method: 'POST', path: path(Routes.messages, conversation)),
       );
       expect(anon.status, 401);
       final bad = await host.pipeline.handle(
         HostRequest(
           method: 'POST',
-          path: path(Routes.messages, 'c1'),
+          path: path(Routes.messages, conversation),
           headers: authed(),
           body: {'kind': 'nope'},
         ),
@@ -275,7 +358,7 @@ void main() {
       final revoked = await host.pipeline.handle(
         HostRequest(
           method: 'GET',
-          path: path(Routes.sync, 'c1'),
+          path: path(Routes.sync, conversation),
           headers: authed(),
         ),
       );
