@@ -19,13 +19,17 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 
 局部31项持久消息/成员/路由/历史/迁移测试已通过。独立审查未发现本增量的严重问题，确认同Tx历史边界、服务器过滤及M02差异行持久化不会覆盖消息/社交数据。默认宿主端到端和最终全仓证据在PR描述及需求追踪中更新；旧版本的测试结果不代表后续提交通过。
 
-## M05 当前前置（未完成模型调用）
+## M05 模型配置与内部调用链
 
-新增按认证账号隔离的provider CRUD与加密key存储（Migration500），默认宿主已挂配置路由；返回仅掩码视图，审计只记录动作/目标。Migration501显式建立AiId档案到AI账号的映射，不能直接混用两种ID。单次非流式OpenAI-compatible适配器已局部验证严格usage、安全错误和不重试。
+按认证账号隔离的provider CRUD与加密key存储（Migration500）仅返回掩码视图；501显式映射AiId档案与AI账号。502保存独立chat/chatFast绑定，禁用不改配置，有绑定provider删除返回conflict。503持久预算/usage账本，504原子配置显式时区；旧null时区要求配置，不默认UTC。认证注册已有AI、绑定、预算路由已挂默认宿主。
 
-Guarded HTTP原型每次解析并固定已校验IP，真实TLS显式使用原域名验证，无证书绕过，不跟3xx。独立审查发现并修复初版自定义socket跳过TLS的严重缺陷，真实TLS正反例已验证。仍有明确Important：停滞TLS握手超时后无法立即强制关闭底层连接；仅以每isolate共享8个握手名额将资源有界，满额失败关闭。恶意端可耗尽这些名额。因此transport/adapter不接入生产模型调用，不能宣称M05可用或把此隔离措施说成清理已解决。
+内部ModelRuntime经持久化时区调用gateway：解析绑定→预算/降级→取凭证→事务登记pending→单次调用→真实usage结算。B1不替用S2；B2层耗尽只有可信主人私聊允许，日/能力硬停仍优先。unknown usage保留pending并阻止同能力后续调用，需可信对账；重复请求不重发，没有结果缓存。
 
-尚无binding/用户预算与时区配置、usage计量硬停、chat.fast路由、模型发现/连接测试、生图或真实AI回复链。前置48项（provider7/HTTP6/identity11/transport13/adapter10/默认装配1）局部验证通过，最终全仓证据另记。
+旧Guarded HTTP原型的停滞TLS握手不能单独强制回收，生产组合改用每请求独立Dart子进程。凭据仅stdin、有界IPC、deadline杀进程并等待退出；真实本地TLS测试验证3次停滞调用后peer断开且进程退出。worker使用真实DNS与固定IP/TLS原域验证，无私网测试绕过。部署显式设置JINGYU_MODEL_WORKER_EXECUTABLE与JINGYU_MODEL_WORKER_PATH两个绝对路径后注册runtime服务；缺省仅提供配置接口，不偷偷调用本机SDK。无真实公网模型调用或自动回复触发链。
+
+独立review检出的层降级inspect→begin竞态已由同Tx策略重检修复；模型空白/legacy脏值在pending前拒绝；binding配置bearer必须匹配principal账户与device。定向证据与最终全仓结果记录于需求追踪和PR。
+
+尚无有序fallback、流式、模型发现/连接测试、生图、自动对账、完整AI创建HTTP与自动AI回复链，不宣称整个M05/AC10已完成。
 
 ## 明确未完成
 

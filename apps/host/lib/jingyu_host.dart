@@ -15,6 +15,10 @@ import 'src/accounts/accounts_migrations.dart';
 import 'src/messages/messages_migrations.dart';
 import 'src/models/models_migrations.dart';
 import 'src/models/ai_identity.dart';
+import 'src/models/binding_migrations.dart';
+import 'src/models/usage_migrations.dart';
+import 'src/models/budget_timezone_migration.dart';
+import 'src/models/model_runtime.dart';
 import 'src/models/models_module.dart';
 import 'src/security/url_guard.dart';
 import 'src/messages/sqlite_message_store.dart';
@@ -59,6 +63,9 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       ...socialMigrations,
       ...modelsMigrations,
       aiIdentityMigration,
+      bindingMigration,
+      ...usageMigrations,
+      budgetTimezoneMigration,
     ],
   );
   final messages = SqliteMessageStore(
@@ -81,6 +88,21 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     hasher: PasswordHasher(),
   );
   final urlGuard = UrlGuard();
+  final executable = config.modelWorkerExecutable;
+  final workerPath = config.modelWorkerPath;
+  if ((executable == null) != (workerPath == null)) {
+    throw ArgumentError('Both model worker executable and path are required');
+  }
+  final runtime = executable == null
+      ? null
+      : ModelRuntime.withProcess(
+          db: storage.database,
+          cipher: storage.cipher,
+          urlGuard: urlGuard,
+          clock: clock,
+          executable: executable,
+          workerPath: workerPath!,
+        );
   return [
     SystemModule(
       config: config,
@@ -93,6 +115,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     MessagesModule(store: messages),
     SocialModule(conversations: conversations),
     ModelsModule(
+      runtime: runtime,
       db: storage.database,
       cipher: storage.cipher,
       urlGuard: urlGuard,

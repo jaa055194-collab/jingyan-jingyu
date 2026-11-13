@@ -60,6 +60,12 @@ abstract final class Routes {
   /// 模型接入配置。
   static const String modelProviders = '$prefix/model-providers';
   static const String modelProvider = '$prefix/model-providers/{providerId}';
+  static const String aiProfileRegister = '$prefix/ai-profiles/register';
+  static const String aiProfile = '$prefix/ai-profiles/{aiId}';
+  static const String aiBindings = '$prefix/ai-profiles/{aiId}/bindings';
+  static const String aiBinding =
+      '$prefix/ai-profiles/{aiId}/bindings/{capability}';
+  static const String aiBudget = '$prefix/ai-profiles/{aiId}/budget';
 
   /// WebSocket 长连接（通知与实时事件）。
   static const String stream = '$prefix/stream';
