@@ -212,6 +212,7 @@ void main() {
         'accounts',
         'messages',
         'social',
+        'models',
       ]);
       final metadata = await host.pipeline.handle(
         HostRequest(

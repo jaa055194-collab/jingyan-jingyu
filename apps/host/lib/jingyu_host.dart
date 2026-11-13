@@ -13,6 +13,10 @@ import 'src/accounts/password_hasher.dart';
 import 'src/accounts/accounts_sql_store.dart';
 import 'src/accounts/accounts_migrations.dart';
 import 'src/messages/messages_migrations.dart';
+import 'src/models/models_migrations.dart';
+import 'src/models/ai_identity.dart';
+import 'src/models/models_module.dart';
+import 'src/security/url_guard.dart';
 import 'src/messages/sqlite_message_store.dart';
 import 'src/social/conversation_service.dart';
 import 'src/social/social_migrations.dart';
@@ -53,6 +57,8 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       ...accountsMigrations,
       ...messagesMigrations,
       ...socialMigrations,
+      ...modelsMigrations,
+      aiIdentityMigration,
     ],
   );
   final messages = SqliteMessageStore(
@@ -74,12 +80,24 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     clock: clock,
     hasher: PasswordHasher(),
   );
+  final urlGuard = UrlGuard();
   return [
-    SystemModule(config: config, clock: clock, audit: storage.auditLog),
+    SystemModule(
+      config: config,
+      clock: clock,
+      audit: storage.auditLog,
+      urlGuard: urlGuard,
+    ),
     storage,
     AccountsModule(domain: accounts),
     MessagesModule(store: messages),
     SocialModule(conversations: conversations),
+    ModelsModule(
+      db: storage.database,
+      cipher: storage.cipher,
+      urlGuard: urlGuard,
+      clock: clock,
+    ),
   ];
 }
 

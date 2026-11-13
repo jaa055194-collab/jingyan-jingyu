@@ -41,7 +41,8 @@ abstract final class Routes {
   static const String conversations = '$prefix/conversations';
 
   /// Group owner adds an existing account after approving membership.
-  static const String conversationMembers = '$prefix/conversations/{conversationId}/members';
+  static const String conversationMembers =
+      '$prefix/conversations/{conversationId}/members';
 
   /// 会话内消息：`/conversations/{conversationId}/messages`。
   static const String messages =
@@ -58,6 +59,7 @@ abstract final class Routes {
 
   /// 模型接入配置。
   static const String modelProviders = '$prefix/model-providers';
+  static const String modelProvider = '$prefix/model-providers/{providerId}';
 
   /// WebSocket 长连接（通知与实时事件）。
   static const String stream = '$prefix/stream';
