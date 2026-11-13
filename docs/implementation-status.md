@@ -31,6 +31,12 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 
 尚无有序fallback、流式、模型发现/连接测试、生图、自动对账、完整AI创建HTTP与自动AI回复链，不宣称整个M05/AC10已完成。
 
+## M06 内部记忆仓储（未生产装配）
+
+可选Migration600与内部MemoryStore复用MemoryPolicy：opt-out先于验证/事务零写入；空分类T1 pending；正文AAD绑定owner/AI/scope/条目；SQL过滤owner/AI/active/非T2后逐条同Tx授权与解密，损坏密文返回安全internal；模型不能自行确认，状态变更及审计同事务。7项真实SQLite/AES测试已父/独立review通过。
+
+必须显式提供MemoryAuthorization，没有生产默认放行。测试群fixture核验AI principal成员、历史下界和真实来源，只证明内部授权port可用，不是生产跨用户许可。私聊/话题/来源撤权/群外传播授权未齐，未挂宿主、未接模型上下文，也未声明T2脱敏或完整记忆管理器。
+
 ## 明确未完成
 
 这只是可用群消息核心，不是完整 M03/M04：私聊/好友同意/拉黑、群管理员转让/退出移除、AI发言规则、朋友圈/话题/共享相册、编辑撤回/定时/闪照/搜索/附件、实时WebSocket与transport ack/跨端未读尚未接入。

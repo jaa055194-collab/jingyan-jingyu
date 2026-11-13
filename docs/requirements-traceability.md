@@ -17,10 +17,11 @@
 | REQ-011 | M05/M06身份接口 | AiId与AccountId显式映射 | 工程前置 | 有效AI+当前operator才可注册/解析，跨owner404，独立随机档案ID | ai_identity.dart、Migration501 | 11项identity+6项注册HTTP测试 | 局部通过；尚无人格业务/新AI创建HTTP |
 | REQ-012 | NFR-05 / M05 | DNS校验与真实连接一致、TLS原域验证 | 已授权 | pinned IP、拒私网答案、HTTPS不明文、证书/hostname拒绝、3xx不跟 | security/guarded_http.dart + process_http.dart | guarded13/process6真实本地HTTP/TLS测试；独立review复验 | 单独guarded仅原型，生产经子进程回收；不宣称所有保留地址全覆盖 |
 | REQ-013 | FR-57 / M05 | 单次OpenAI-compatible规范响应 | 已授权 | 保留base path、严格usage/roles、安全错误，无retry/fallback | openai_chat_adapter.dart | 10项测试含int溢出与错误脱敏 | 局部通过；接内部budget/binding/runtime，无真实公网或自动AI回复链 |
-
 | REQ-014 | FR-58 / B-5 / M05 | 独立绑定与停用保留 | 已授权 | chatFast不读chat，跨owner404，model空白拒绝，有引用provider不可删除 | binding_matrix/config_routes、502 | binding12/config7/provider8、真实SQLite | 验证通过的局部；无有序fallback |
 | REQ-015 | FR-48/58 | 显式预算与真实用量硬停 | 已授权 | 无默认总额/时区、未知用量阻断、begin同Tx层策略、幂等结算 | usage_meter/budget_configuration/model_gateway、503/504 | usage13/budget10/gateway19/runtime5，独立review关闭竞态 | 内部调用链通过，非自动回复产品验收；在途可超额但照实入账 |
 | REQ-016 | NFR-05 / 网络生命周期 | 超时可靠回收出站TLS | 工程前置 | kill并wait退出，peer断开，名额恢复，秘密仅stdin | process_http/http_worker | process6+原guarded13，真实Windows停滞TLS重复3次 | 验证通过；生产组合用process，不单独使用guarded原型 |
+
+| REQ-017 | FR-49/50 / M06 / A-7 | 加密记忆与采集闸门 | 已授权局部 | opt-out零写入、空分类T1、pending不注入、T2 model用途排除、模型不能自确认 | ai/memory/memory_store、可选Migration600 | memory7项真实SQLite/AES，空分类先RED后修；父独立复跑7项及host analyze通过 | 内部仓储验证通过，未生产装配；fixture授权不能算跨用户/外部群传播权限 |
 
 ## 验证口径
 
