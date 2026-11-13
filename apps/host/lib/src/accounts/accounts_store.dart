@@ -1,97 +1,63 @@
+/// Transactional memory adapter. SQL adapters must preserve this contract.
+library;
+
 import 'dart:async';
 
-import 'package:jingyu_core/jingyu_core.dart';
-
-import 'account_service.dart';
-
-class AccountRecord {
-  AccountRecord({
-    required this.id,
-    required this.kind,
-    required this.displayName,
-    required this.passwordHash,
-    this.isAdmin = false,
-    this.enabled = true,
-    this.failedLogins = 0,
-    this.lockedUntil,
-  });
-  final AccountId id;
-  final AccountKind kind;
-  final String displayName;
-  String passwordHash;
-  final bool isAdmin;
-  bool enabled;
-  int failedLogins;
-  DateTime? lockedUntil;
-}
-
-class InviteRecord {
-  InviteRecord({
-    required this.id,
-    required this.codeHash,
-    required this.expiresAt,
-    required this.maxUses,
-  });
-  final String id;
-  final String codeHash;
-  final DateTime expiresAt;
-  final int maxUses;
-  int usedCount = 0;
-  DateTime? revokedAt;
-}
-
-class DeviceRecord {
-  DeviceRecord({
-    required this.id,
-    required this.account,
-    required this.deviceName,
-    required this.accessHash,
-    required this.refreshHash,
-    required this.createdAt,
-    required this.lastUsedAt,
-  });
-  final DeviceId id;
-  final AccountId account;
-  final String deviceName;
-  String accessHash;
-  String refreshHash;
-  final DateTime createdAt;
-  DateTime lastUsedAt;
-  DateTime? revokedAt;
-}
-
+/// Storage rows contain primitives and credential digests, never raw credentials.
 class AccountsState {
-  final Map<String, AccountRecord> accounts = {};
-  final Map<String, AccountId> operators = {};
-  final Map<String, InviteRecord> invites = {};
-  final Map<String, DeviceRecord> devices = {};
-  int sequence = 0;
-  String nextId(String prefix) => '$prefix${++sequence}';
+  AccountsState({
+    Map<String, Map<String, Object?>>? accounts,
+    Map<String, Map<String, Object?>>? devices,
+    Map<String, Map<String, Object?>>? invites,
+  }) : accounts = accounts ?? {},
+       devices = devices ?? {},
+       invites = invites ?? {};
+  final Map<String, Map<String, Object?>> accounts;
+  final Map<String, Map<String, Object?>> devices;
+  final Map<String, Map<String, Object?>> invites;
+
+  AccountsState copy() => AccountsState(
+    accounts: _copy(accounts),
+    devices: _copy(devices),
+    invites: _copy(invites),
+  );
+  static Map<String, Map<String, Object?>> _copy(
+    Map<String, Map<String, Object?>> rows,
+  ) => rows.map((key, row) => MapEntry(key, Map<String, Object?>.from(row)));
+  Map<String, Object?> toJson() => {
+    'accounts': _copy(accounts),
+    'devices': _copy(devices),
+    'invites': _copy(invites),
+  };
 }
 
+/// Trusted storage boundary, not a client-facing service. Callbacks must not nest
+/// transactions. Commit on success; exceptions discard the complete working copy.
 abstract class AccountsStore {
-  /// Serializes actions within this store. This is not a rollback transaction:
-  /// callers validate and compute fallible values before mutating state.
-  /// A persistent store needs a separate database transaction/owner-aware API.
-  Future<T> serialized<T>(FutureOr<T> Function(AccountsState state) action);
+  Future<T> transaction<T>(FutureOr<T> Function(AccountsState state) action);
+  Future<AccountsState> snapshot();
 }
 
 class InMemoryAccountsStore implements AccountsStore {
-  final AccountsState _state = AccountsState();
+  AccountsState _state = AccountsState();
   Future<void> _tail = Future<void>.value();
 
   @override
-  Future<T> serialized<T>(
-    FutureOr<T> Function(AccountsState state) action,
-  ) async {
-    final previous = _tail;
-    final release = Completer<void>();
-    _tail = release.future;
-    await previous;
-    try {
-      return await action(_state);
-    } finally {
-      release.complete();
-    }
+  Future<T> transaction<T>(FutureOr<T> Function(AccountsState state) action) {
+    final result = Completer<T>();
+    _tail = _tail.then((_) async {
+      final working = _state.copy();
+      try {
+        final value = await action(working);
+        _state = working.copy();
+        result.complete(value);
+      } catch (error, stack) {
+        result.completeError(error, stack);
+      }
+    });
+    return result.future;
   }
+
+  @override
+  Future<AccountsState> snapshot() => transaction((state) => state.copy());
 }
