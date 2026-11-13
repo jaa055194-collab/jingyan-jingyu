@@ -28,6 +28,7 @@ class HostRequest {
     this.headers = const <String, String>{},
     this.body,
     this.principal,
+    this.remoteAddress,
     Map<String, String>? pathParams,
   }) : pathParams = pathParams ?? <String, String>{};
 
@@ -43,6 +44,10 @@ class HostRequest {
 
   final Principal? principal;
 
+  /// Trusted transport peer address; never derived from forwarding headers.
+  /// Null when the request has no transport (for example an in-process call).
+  final String? remoteAddress;
+
   /// 路由匹配出的路径参数，例如 `{conversationId}`。
   final Map<String, String> pathParams;
 
@@ -54,6 +59,7 @@ class HostRequest {
         headers: headers,
         body: body,
         principal: principal ?? this.principal,
+        remoteAddress: remoteAddress,
         pathParams: pathParams ?? this.pathParams,
       );
 

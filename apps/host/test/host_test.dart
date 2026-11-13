@@ -1,3 +1,7 @@
+@Timeout(Duration(minutes: 10))
+library;
+
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:jingyu_core/jingyu_core.dart';
@@ -89,19 +93,52 @@ void main() {
 
   group('宿主装配与 HTTP 管线', () {
     late Host host;
-    late String token;
     late Directory dataDir;
+    late AccountId adminId;
+    late AccountId userId;
+    late String token;
+    late String adminToken;
+    late DeviceId deviceId;
+    const password = 'test-password-123';
 
-    setUp(() async {
-      dataDir = await Directory.systemTemp.createTemp('jingyu-host-');
+    setUpAll(() async {
+      dataDir = await Directory.systemTemp.createTemp('jingyu-host-accounts-');
       host = await buildHost(
         config: HostConfig(dataDir: dataDir.path),
         clock: FakeClock(DateTime.utc(2026, 11, 13, 6)),
       );
-      token = host.auth.issue(const Principal(accountId: 'u1', deviceId: 'd1'));
+      adminId = (await host.auth.bootstrapAdmin(
+        displayName: 'Root',
+        password: password,
+      )).value;
+      final login = (await host.auth.login(
+        adminId,
+        password,
+        deviceName: 'bootstrap',
+      )).value;
+      final session = (await host.auth.scope(login.accessToken)).value;
+      userId = (await session.accounts.createHuman(
+        displayName: 'User',
+        password: password,
+      )).value;
     });
 
-    tearDown(() async {
+    setUp(() async {
+      final user = (await host.auth.login(
+        userId,
+        password,
+        deviceName: 'test',
+      )).value;
+      token = user.accessToken;
+      deviceId = user.deviceId;
+      adminToken = (await host.auth.login(
+        adminId,
+        password,
+        deviceName: 'admin',
+      )).value.accessToken;
+    });
+
+    tearDownAll(() async {
       await host.shutdown();
       await dataDir.delete(recursive: true);
     });
@@ -117,14 +154,38 @@ void main() {
       expect(res.status, 200);
     });
 
-    test('host 信息只给管理员', () async {
+    test('host 信息只给管理员且管理响应不包含消息正文', () async {
+      const secretBody = 'private message body excluded from admin metadata';
+      final sent = await host.pipeline.handle(
+        HostRequest(
+          method: 'POST',
+          path: path(Routes.messages, 'private'),
+          headers: authed(),
+          body: {
+            'clientMsgId': 'private-1',
+            'kind': 'text',
+            'body': {'text': secretBody},
+          },
+        ),
+      );
+      expect(sent.status, 200);
       final user = await host.pipeline.handle(
         HostRequest(method: 'GET', path: Routes.hostInfo, headers: authed()),
       );
       expect(user.status, 403);
-      final adminToken = host.auth.issue(
-        const Principal(accountId: 'root', deviceId: 'd0', isAdmin: true),
+      final escalation = await host.pipeline.handle(
+        HostRequest(
+          method: 'POST',
+          path: Routes.adminAccounts,
+          headers: authed(),
+          body: {
+            'displayName': 'Escalated',
+            'password': password,
+            'isAdmin': true,
+          },
+        ),
       );
+      expect(escalation.status, 403);
       final admin = await host.pipeline.handle(
         HostRequest(
           method: 'GET',
@@ -133,7 +194,24 @@ void main() {
         ),
       );
       expect(admin.status, 200);
-      expect((admin.json as Map)['modules'], ['system', 'storage', 'messages']);
+      expect((admin.json as Map)['modules'], [
+        'system',
+        'storage',
+        'accounts',
+        'messages',
+      ]);
+      final metadata = await host.pipeline.handle(
+        HostRequest(
+          method: 'GET',
+          path: Routes.adminAccounts,
+          headers: {'authorization': 'Bearer $adminToken'},
+        ),
+      );
+      expect(metadata.status, 200);
+      expect(
+        jsonEncode([admin.json, metadata.json]),
+        isNot(contains(secretBody)),
+      );
     });
 
     test('发送 → 幂等重发 → 差集同步', () async {
@@ -183,7 +261,17 @@ void main() {
         ),
       );
       expect(bad.status, 400);
-      host.auth.revoke(token);
+      final revoke = await host.pipeline.handle(
+        HostRequest(
+          method: 'POST',
+          path: Routes.authDeviceRevoke.replaceFirst(
+            '{deviceId}',
+            deviceId.value,
+          ),
+          headers: authed(),
+        ),
+      );
+      expect(revoke.status, 200);
       final revoked = await host.pipeline.handle(
         HostRequest(
           method: 'GET',
@@ -196,10 +284,76 @@ void main() {
   });
 
   group('真实端口冒烟', () {
-    test('HttpServer 上 health 返回 200', () async {
-      final dataDir = await Directory.systemTemp.createTemp(
-        'jingyu-host-http-',
+    test('transport peer ignores spoofed forwarding headers', () async {
+      final router = Router()
+        ..get(
+          '/peer/{id}',
+          (request) async => HostResponse.ok({'peer': request.remoteAddress}),
+          access: Access.public,
+        );
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final serving = serve(
+        server,
+        Pipeline(router: router, authenticate: (_) async => null),
       );
+      final client = HttpClient();
+      try {
+        for (var i = 0; i < 5; i++) {
+          final request = await client.get(
+            '127.0.0.1',
+            server.port,
+            '/peer/$i',
+          );
+          request.headers.set('x-forwarded-for', '203.0.113.8');
+          request.headers.set('forwarded', 'for=203.0.113.9');
+          final response = await request.close();
+          expect(response.statusCode, 200);
+          final payload =
+              jsonDecode(await utf8.decoder.bind(response).join()) as Map;
+          expect(payload['peer'], '127.0.0.1', reason: 'request $i');
+        }
+      } finally {
+        client.close(force: true);
+        await server.close(force: true);
+        await serving;
+      }
+    });
+    test('transport peer survives reading a JSON POST body', () async {
+      final router = Router()
+        ..post(
+          '/peer/{id}',
+          (request) async => HostResponse.ok({
+            'peer': request.remoteAddress,
+            'body': request.body,
+          }),
+          access: Access.public,
+        );
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final serving = serve(
+        server,
+        Pipeline(router: router, authenticate: (_) async => null),
+      );
+      final client = HttpClient();
+      try {
+        final request = await client.post('127.0.0.1', server.port, '/peer/42');
+        request.headers.contentType = ContentType.json;
+        request.headers.set('x-forwarded-for', '203.0.113.8');
+        request.headers.set('forwarded', 'for=203.0.113.9');
+        request.write(jsonEncode({'accountId': 'test-account'}));
+        final response = await request.close();
+        expect(response.statusCode, 200);
+        final payload =
+            jsonDecode(await utf8.decoder.bind(response).join()) as Map;
+        expect(payload['body'], {'accountId': 'test-account'});
+        expect(payload['peer'], '127.0.0.1');
+      } finally {
+        client.close(force: true);
+        await server.close(force: true);
+        await serving;
+      }
+    });
+    test('HttpServer 上 health 返回 200', () async {
+      final dataDir = await Directory.systemTemp.createTemp('jingyu-health-');
       final host = await buildHost(config: HostConfig(dataDir: dataDir.path));
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final serving = serve(server, host.pipeline);
