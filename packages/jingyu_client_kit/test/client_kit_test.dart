@@ -11,12 +11,23 @@ class _Plugin extends ClientPlugin {
   final void Function(PluginRegistrar r) onActivate;
 
   @override
-  Future<void> activate(PluginRegistrar registrar) async => onActivate(registrar);
+  Future<void> activate(PluginRegistrar registrar) async =>
+      onActivate(registrar);
 }
 
-PluginManifest _m(String id,
-        {Set<PluginCapability> caps = const {}, int api = pluginApiVersion, bool hostOnly = false}) =>
-    PluginManifest(id: id, name: id, version: '1.0.0', apiVersion: api, capabilities: caps, hostOnly: hostOnly);
+PluginManifest _m(
+  String id, {
+  Set<PluginCapability> caps = const {},
+  int api = pluginApiVersion,
+  bool hostOnly = false,
+}) => PluginManifest(
+  id: id,
+  name: id,
+  version: '1.0.0',
+  apiVersion: api,
+  capabilities: caps,
+  hostOnly: hostOnly,
+);
 
 void main() {
   group('PluginManifest', () {
@@ -31,17 +42,46 @@ void main() {
         'license': 'MIT',
         'assetCredits': ['dsh-pet CC BY-NC-SA 4.0'],
       });
-      expect(m.capabilities, {PluginCapability.roomScene, PluginCapability.modelInvoke});
+      expect(m.capabilities, {
+        PluginCapability.roomScene,
+        PluginCapability.modelInvoke,
+      });
       expect(m.platforms, {'windows'});
     });
 
     test('拒绝非法 id、版本、能力与平台', () {
-      Map<String, Object?> base() => {'id': 'a.b', 'name': 'x', 'version': '1.0.0', 'apiVersion': 1};
-      expect(() => PluginManifest.fromJson({...base(), 'id': 'NoDot'}), throwsFormatException);
-      expect(() => PluginManifest.fromJson({...base(), 'version': '1.0'}), throwsFormatException);
-      expect(() => PluginManifest.fromJson({...base(), 'capabilities': ['root']}), throwsFormatException);
-      expect(() => PluginManifest.fromJson({...base(), 'platforms': ['ios']}), throwsFormatException);
-      expect(() => PluginManifest.fromJson({...base()}..remove('apiVersion')), throwsFormatException);
+      Map<String, Object?> base() => {
+        'id': 'a.b',
+        'name': 'x',
+        'version': '1.0.0',
+        'apiVersion': 1,
+      };
+      expect(
+        () => PluginManifest.fromJson({...base(), 'id': 'NoDot'}),
+        throwsFormatException,
+      );
+      expect(
+        () => PluginManifest.fromJson({...base(), 'version': '1.0'}),
+        throwsFormatException,
+      );
+      expect(
+        () => PluginManifest.fromJson({
+          ...base(),
+          'capabilities': ['root'],
+        }),
+        throwsFormatException,
+      );
+      expect(
+        () => PluginManifest.fromJson({
+          ...base(),
+          'platforms': ['ios'],
+        }),
+        throwsFormatException,
+      );
+      expect(
+        () => PluginManifest.fromJson({...base()}..remove('apiVersion')),
+        throwsFormatException,
+      );
     });
   });
 
@@ -52,26 +92,41 @@ void main() {
     setUp(() {
       sent.clear();
       host = PluginHost(
-        environment: const PluginEnvironment(platform: 'android', isHostMachine: false),
+        environment: const PluginEnvironment(
+          platform: 'android',
+          isHostMachine: false,
+        ),
         sendText: (c, t) async => sent.add('$c:$t'),
       );
     });
 
     test('按能力授权：未声明能力的登记失败并回滚', () async {
-      final ok = await host.load(_Plugin(
-        _m('x.bad'),
-        (r) => r.addSlashCommand(SlashCommand(name: 'hi', description: '', run: (_, _) async => null)),
-      ));
+      final ok = await host.load(
+        _Plugin(
+          _m('x.bad'),
+          (r) => r.addSlashCommand(
+            SlashCommand(
+              name: 'hi',
+              description: '',
+              run: (_, _) async => null,
+            ),
+          ),
+        ),
+      );
       expect(ok, isFalse);
       expect(host.errors.single.pluginId, 'x.bad');
       expect(host.commandsFor({}), isEmpty);
     });
 
     test('激活中途失败时已登记贡献全部回滚', () async {
-      final ok = await host.load(_Plugin(_m('x.half', caps: {PluginCapability.slashCommands}), (r) {
-        r.addSlashCommand(SlashCommand(name: 'a', description: '', run: (_, _) async => null));
-        throw StateError('boom');
-      }));
+      final ok = await host.load(
+        _Plugin(_m('x.half', caps: {PluginCapability.slashCommands}), (r) {
+          r.addSlashCommand(
+            SlashCommand(name: 'a', description: '', run: (_, _) async => null),
+          );
+          throw StateError('boom');
+        }),
+      );
       expect(ok, isFalse);
       expect(host.commandsFor({}), isEmpty);
       expect(host.activeIds, isEmpty);
@@ -79,23 +134,36 @@ void main() {
 
     test('版本、平台与 hostOnly 不符被拒绝', () async {
       expect(await host.load(_Plugin(_m('x.old', api: 99), (_) {})), isFalse);
-      expect(await host.load(_Plugin(_m('x.live2d', hostOnly: true), (_) {})), isFalse);
+      expect(
+        await host.load(_Plugin(_m('x.live2d', hostOnly: true), (_) {})),
+        isFalse,
+      );
       expect(host.errors.map((e) => e.pluginId), ['x.old', 'x.live2d']);
     });
 
     test('斜杠指令按绑定能力显示并可执行', () async {
-      await host.load(_Plugin(
-        _m('x.draw', caps: {PluginCapability.slashCommands, PluginCapability.sendMessage}),
-        (r) => r.addSlashCommand(SlashCommand(
-          name: '画图',
-          description: '生成图片',
-          requiresAiCapability: 'image_gen',
-          run: (args, ctx) async {
-            await ctx.sendText('c1', '画：$args');
-            return 'ok';
-          },
-        )),
-      ));
+      await host.load(
+        _Plugin(
+          _m(
+            'x.draw',
+            caps: {
+              PluginCapability.slashCommands,
+              PluginCapability.sendMessage,
+            },
+          ),
+          (r) => r.addSlashCommand(
+            SlashCommand(
+              name: '画图',
+              description: '生成图片',
+              requiresAiCapability: 'image_gen',
+              run: (args, ctx) async {
+                await ctx.sendText('c1', '画：$args');
+                return 'ok';
+              },
+            ),
+          ),
+        ),
+      );
       expect(host.commandsFor({'chat'}), isEmpty);
       expect(host.commandsFor({'chat', 'image_gen'}).single.name, '画图');
       expect(await host.runSlash('/画图 一只猫'), 'ok');
@@ -104,9 +172,26 @@ void main() {
     });
 
     test('同名指令冲突时后者加载失败', () async {
-      SlashCommand cmd() => SlashCommand(name: 'x', description: '', run: (_, _) async => null);
-      expect(await host.load(_Plugin(_m('a.one', caps: {PluginCapability.slashCommands}), (r) => r.addSlashCommand(cmd()))), isTrue);
-      expect(await host.load(_Plugin(_m('a.two', caps: {PluginCapability.slashCommands}), (r) => r.addSlashCommand(cmd()))), isFalse);
+      SlashCommand cmd() =>
+          SlashCommand(name: 'x', description: '', run: (_, _) async => null);
+      expect(
+        await host.load(
+          _Plugin(
+            _m('a.one', caps: {PluginCapability.slashCommands}),
+            (r) => r.addSlashCommand(cmd()),
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        await host.load(
+          _Plugin(
+            _m('a.two', caps: {PluginCapability.slashCommands}),
+            (r) => r.addSlashCommand(cmd()),
+          ),
+        ),
+        isFalse,
+      );
       expect(host.activeIds, ['a.one']);
     });
 
@@ -134,13 +219,17 @@ void main() {
     setUp(() => dropped = null);
 
     test('按顺序发送，网络失败时保留队首', () async {
-      final box = Outbox(newClientMsgId: () => 'id${DateTime.now().microsecondsSinceEpoch}');
+      final box = Outbox(
+        newClientMsgId: () => 'id${DateTime.now().microsecondsSinceEpoch}',
+      );
       box.enqueue('c1', MessageKind.text, {'text': 'a'});
       box.enqueue('c1', MessageKind.text, {'text': 'b'});
       var calls = 0;
       final report = await box.flush((item) async {
         calls++;
-        return calls == 1 ? const Ok<void>(null) : err<void>(FailureCode.unavailable, 'offline');
+        return calls == 1
+            ? const Ok<void>(null)
+            : err<void>(FailureCode.unavailable, 'offline');
       });
       expect(report.sent, 1);
       expect(report.remaining, 1);

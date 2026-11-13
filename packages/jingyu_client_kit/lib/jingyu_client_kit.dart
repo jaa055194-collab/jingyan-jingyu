@@ -15,3 +15,8 @@ export 'src/plugin_host.dart';
 export 'src/plugin_package.dart';
 export 'src/plugin_package_builder.dart';
 export 'src/sync_cursor.dart';
+export 'src/persistence.dart' show ClientPersistence, writeClientSection;
+export 'src/shell_controller.dart';
+export 'src/conversation_consent.dart';
+export 'src/app_lock.dart';
+export 'src/onboarding.dart';
