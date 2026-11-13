@@ -66,6 +66,9 @@ final class ModelRuntime {
     required String requestId,
     required BudgetLayer layer,
     required TrustedChatContext context,
+    int? maxTokens,
+    String? expectedProviderId,
+    String? expectedModel,
   }) async {
     final config = await BudgetConfiguration.forOwner(
       ownerId: ownerId,
@@ -84,6 +87,15 @@ final class ModelRuntime {
       dayForClock: (clock) =>
           BudgetDay.fromClock(clock, offsetMinutes: config.value.offsetMinutes),
       adapter: _adapter,
-    ).chat(ai, turns, requestId: requestId, layer: layer, context: context);
+    ).chat(
+      ai,
+      turns,
+      requestId: requestId,
+      layer: layer,
+      context: context,
+      maxTokens: maxTokens,
+      expectedProviderId: expectedProviderId,
+      expectedModel: expectedModel,
+    );
   }
 }

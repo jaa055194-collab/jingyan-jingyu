@@ -33,6 +33,7 @@ void main() {
   late Future<Result<GuardedResponse>> Function() reply;
   var calls = 0;
   final models = <String>[];
+  final payloads = <Map<String, dynamic>>[];
   final ai = AiId.parse('profile');
   final clock = FakeClock(DateTime.utc(2026, 11, 13));
   Future<void> Function()? beforeResolve;
@@ -64,7 +65,9 @@ void main() {
     calls++;
     expect(method, 'POST');
     expect(uri.toString(), 'https://models.example/v1/chat/completions');
-    models.add((jsonDecode(utf8.decode(body!)) as Map)['model'] as String);
+    final payload = jsonDecode(utf8.decode(body!)) as Map<String, dynamic>;
+    payloads.add(payload);
+    models.add(payload['model'] as String);
     return reply();
   });
   void compose() {
@@ -149,17 +152,24 @@ void main() {
     String id, {
     BudgetLayer layer = BudgetLayer.b2DeepChat,
     TrustedChatContext? context,
+    int? maxTokens,
+    String? expectedProviderId,
+    String? expectedModel,
   }) => gateway.chat(
     ai,
     const [ChatTurn(role: 'user', content: 'hello')],
     requestId: id,
     layer: layer,
     context: context ?? ownerPrivate,
+    maxTokens: maxTokens,
+    expectedProviderId: expectedProviderId,
+    expectedModel: expectedModel,
   );
   setUp(() async {
     calls = 0;
     beforeResolve = null;
     models.clear();
+    payloads.clear();
     reply = () async => Ok(response());
     dir = await Directory.systemTemp.createTemp('jingyu-gateway-');
     db = await SqliteDatabase.open(
@@ -359,6 +369,116 @@ void main() {
       expect(await db.query('SELECT * FROM usage_ledger'), isEmpty);
     },
   );
+  test(
+    'nonpositive maxTokens reject before outbound or pending usage',
+    () async {
+      for (final maxTokens in [0, -1]) {
+        final result = await chat(
+          'invalid-max-$maxTokens',
+          maxTokens: maxTokens,
+        );
+        expect(result.failureOrNull?.code, FailureCode.invalidArgument);
+      }
+      expect(calls, 0);
+      expect(await db.query('SELECT * FROM usage_ledger'), isEmpty);
+    },
+  );
+  test('explicit maxTokens reach the provider payload', () async {
+    expect((await chat('explicit-max', maxTokens: 37)).isOk, true);
+    expect(payloads.single['max_tokens'], 37);
+  });
+  test(
+    'invalid expected binding pairs reject before outbound or pending usage',
+    () async {
+      final pairs = <({String? provider, String? model})>[
+        (provider: 'provider', model: null),
+        (provider: null, model: 'model'),
+        (provider: '', model: ''),
+        (provider: 'provider', model: ''),
+        (provider: ' provider', model: 'model'),
+        (provider: 'provider', model: 'model\n'),
+      ];
+      for (final pair in pairs) {
+        final result = await gateway.chat(
+          ai,
+          const [ChatTurn(role: 'user', content: 'hello')],
+          requestId: 'invalid-binding-${pair.provider}-${pair.model}',
+          layer: BudgetLayer.b2DeepChat,
+          context: ownerPrivate,
+          expectedProviderId: pair.provider,
+          expectedModel: pair.model,
+        );
+        expect(result.failureOrNull?.code, FailureCode.invalidArgument);
+      }
+      expect(calls, 0);
+      expect(await db.query('SELECT * FROM usage_ledger'), isEmpty);
+    },
+  );
+  test(
+    'expected binding mismatch conflicts before outbound or pending usage',
+    () async {
+      final result = await chat(
+        'binding-mismatch',
+        expectedProviderId: 'different-provider',
+        expectedModel: 'S2',
+      );
+      expect(result.failureOrNull?.code, FailureCode.conflict);
+      expect(calls, 0);
+      expect(await db.query('SELECT * FROM usage_ledger'), isEmpty);
+    },
+  );
+  test('matching expected binding preserves explicit maxTokens', () async {
+    expect(
+      (await chat(
+        'binding-match',
+        expectedProviderId: mainProvider,
+        expectedModel: 'S2',
+        maxTokens: 37,
+      )).isOk,
+      true,
+    );
+    expect(payloads.single['max_tokens'], 37);
+  });
+  test(
+    'binding changed during URL preflight keeps resolved dispatch',
+    () async {
+      beforeResolve = () async {
+        expect(
+          (await bindings.set(
+            ai,
+            ProviderCapability.chat,
+            providerId: mainProvider,
+            model: 'changed-after-resolve',
+          )).isOk,
+          true,
+        );
+      };
+      expect(
+        (await chat(
+          'binding-race',
+          expectedProviderId: mainProvider,
+          expectedModel: 'S2',
+          maxTokens: 37,
+        )).isOk,
+        true,
+      );
+      expect(models, ['S2']);
+      expect(payloads.single['max_tokens'], 37);
+    },
+  );
+  test('omitted maxTokens stay absent from the provider payload', () async {
+    expect((await chat('omitted-max')).isOk, true);
+    expect(payloads.single.containsKey('max_tokens'), isFalse);
+  });
+  test('trusted scope key is optional and retained', () {
+    expect(ownerPrivate.scopeKey, isNull);
+    final scoped = TrustedChatContext(
+      initiator: AccountId.parse('alice'),
+      conversationKind: ChatConversationKind.private,
+      scopeKey: 'private:alice:profile',
+    );
+    expect(scoped.scopeKey, 'private:alice:profile');
+  });
   test(
     'invalid turns are rejected without outbound or pending usage',
     () async {

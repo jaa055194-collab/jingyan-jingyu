@@ -29,6 +29,7 @@ void main() {
   late ModelRuntime runtime;
   late String providerId;
   var calls = 0;
+  var receivedMaxTokens = <Object?>[];
   final ai = AiId.parse('profile');
   final clock = FakeClock(DateTime.utc(2026, 11, 13, 20));
   final guard = UrlGuard(resolver: (_) async => [InternetAddress('8.8.8.8')]);
@@ -55,6 +56,7 @@ void main() {
     expect(method, 'POST');
     expect(uri.toString(), 'https://models.example/v1/chat/completions');
     final payload = jsonDecode(utf8.decode(body!)) as Map;
+    receivedMaxTokens.add(payload['max_tokens']);
     expect(payload['model'], 'chat-model');
     expect(payload['messages'], [
       {'role': 'user', 'content': 'hello'},
@@ -115,6 +117,9 @@ void main() {
     String requestId, {
     String owner = 'alice',
     ModelRuntime? service,
+    int? maxTokens,
+    String? expectedProviderId,
+    String? expectedModel,
   }) => (service ?? runtime).chat(
     ownerId: owner,
     ai: ai,
@@ -122,9 +127,13 @@ void main() {
     requestId: requestId,
     layer: BudgetLayer.b2DeepChat,
     context: context,
+    maxTokens: maxTokens,
+    expectedProviderId: expectedProviderId,
+    expectedModel: expectedModel,
   );
   setUp(() async {
     calls = 0;
+    receivedMaxTokens = [];
     dir = await Directory.systemTemp.createTemp('model-runtime-');
     db = await SqliteDatabase.open(
       '${dir.path}/db.sqlite',
@@ -220,6 +229,37 @@ void main() {
       expect(calls, 2);
     },
   );
+
+  test('runtime forwards expected binding and token cap', () async {
+    await configure(480);
+    expect(
+      (await chat(
+        'runtime-bound',
+        maxTokens: 37,
+        expectedProviderId: providerId,
+        expectedModel: 'chat-model',
+      )).isOk,
+      isTrue,
+    );
+    expect(receivedMaxTokens, [37]);
+  });
+
+  test('runtime rejects incomplete expected binding before outbound', () async {
+    await configure(480);
+    final result = await chat(
+      'runtime-incomplete-binding',
+      expectedProviderId: providerId,
+    );
+    expect(result.failureOrNull?.code, FailureCode.invalidArgument);
+    expect(calls, 0);
+    expect(await db.query('SELECT * FROM usage_ledger'), isEmpty);
+  });
+
+  test('runtime forwards explicit maxTokens to its adapter', () async {
+    await configure(480);
+    expect((await chat('max-tokens', maxTokens: 37)).isOk, isTrue);
+    expect(receivedMaxTokens, [37]);
+  });
 
   test(
     'one runtime scopes each call to owner without leaking owner configuration',
