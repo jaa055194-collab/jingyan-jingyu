@@ -1,0 +1,7 @@
+.dart_tool/
+build/
+pubspec.lock
+data/
+*.db
+*.db-wal
+*.db-shm
