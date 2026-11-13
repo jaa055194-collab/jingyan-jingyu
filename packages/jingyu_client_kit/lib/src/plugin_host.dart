@@ -29,16 +29,23 @@ class PluginEnvironment {
 typedef SendText = Future<void> Function(String conversationId, String text);
 
 class _Context implements PluginContext {
-  _Context(this.pluginId, this._caps, this._send);
+  _Context(this.pluginId, Set<PluginCapability> caps, this._send)
+      : _caps = Set.unmodifiable(caps);
 
   @override
   final String pluginId;
   final Set<PluginCapability> _caps;
   final SendText _send;
   final Map<String, String> _storage = {};
+  bool _active = true;
+
+  void invalidate() {
+    _active = false;
+    _storage.clear();
+  }
 
   @override
-  bool has(PluginCapability capability) => _caps.contains(capability);
+  bool has(PluginCapability capability) => _active && _caps.contains(capability);
 
   void _require(PluginCapability capability) {
     if (!has(capability)) {
@@ -106,6 +113,7 @@ class PluginHost {
   final SendText _sendText;
 
   final Map<String, ClientPlugin> _active = {};
+  final Map<String, _Context> _contexts = {};
   final List<PluginLoadError> errors = [];
 
   final Map<String, SlashCommand> _commands = {};
@@ -135,15 +143,18 @@ class PluginHost {
     }
 
     final snapshot = _snapshot();
-    final registrar = _Registrar(this, _Context(m.id, m.capabilities, _sendText));
+    final context = _Context(m.id, m.capabilities, _sendText);
+    final registrar = _Registrar(this, context);
     try {
       await plugin.activate(registrar);
     } catch (error) {
+      context.invalidate();
       _restore(snapshot);
       errors.add(PluginLoadError(m.id, '激活失败：$error'));
       return false;
     }
     _active[m.id] = plugin;
+    _contexts[m.id] = context;
     return true;
   }
 
@@ -155,6 +166,10 @@ class PluginHost {
       } catch (_) {}
     }
     _active.clear();
+    for (final context in _contexts.values) {
+      context.invalidate();
+    }
+    _contexts.clear();
     _commands.clear();
     _commandOwners.clear();
     _roomGenerators.clear();
@@ -180,8 +195,7 @@ class PluginHost {
     final command = _commands[name];
     if (command == null) return null;
     final owner = _commandOwners[name]!;
-    final plugin = _active[owner]!;
-    return command.run(args, _Context(owner, plugin.manifest.capabilities, _sendText));
+    return command.run(args, _contexts[owner]!);
   }
 
   List<RoomGenerator> get roomGenerators => List.unmodifiable(_roomGenerators);
