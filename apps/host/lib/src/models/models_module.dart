@@ -3,6 +3,11 @@ import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../audit/audit_log.dart';
+import '../accounts/db_authenticator.dart';
+import 'ai_routes.dart';
+import 'config_routes.dart';
+import 'budget_routes.dart';
+import 'model_runtime.dart';
 import '../security/url_guard.dart';
 import '../storage/cipher.dart';
 import '../storage/database.dart';
@@ -16,13 +21,16 @@ class ModelsModule extends HostModule {
     required this.cipher,
     required this.urlGuard,
     required this.clock,
+    this.runtime,
   });
 
   final Database db;
   final ColumnCipher cipher;
   final UrlGuard urlGuard;
   final Clock clock;
+  final ModelRuntime? runtime;
   late AuditLog _audit;
+  AccountsDomain? _accounts;
 
   @override
   String get name => 'models';
@@ -33,6 +41,11 @@ class ModelsModule extends HostModule {
   @override
   Future<void> configure(HostServices services) async {
     _audit = services.get<AuditLog>();
+    _accounts = services.maybeGet<AccountsDomain>();
+    final modelRuntime = runtime;
+    if (modelRuntime != null) {
+      services.provide<ModelRuntime>(modelRuntime, owner: name);
+    }
   }
 
   @override
@@ -42,6 +55,24 @@ class ModelsModule extends HostModule {
     router.get(Routes.modelProvider, _get);
     router.put(Routes.modelProvider, _update);
     router.delete(Routes.modelProvider, _delete);
+    final accounts = _accounts;
+    if (accounts != null) {
+      mountAiRoutes(router, accounts: accounts, db: db);
+      mountBudgetRoutes(
+        router,
+        db: db,
+        clock: clock,
+        accounts: accounts,
+        audit: _audit,
+      );
+      mountModelConfigRoutes(
+        router,
+        db: db,
+        clock: clock,
+        accounts: accounts,
+        audit: _audit,
+      );
+    }
   }
 
   ProviderRegistry _registry(HostRequest request) => ProviderRegistry.forOwner(

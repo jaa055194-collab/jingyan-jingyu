@@ -228,19 +228,30 @@ final class ProviderRegistry {
     return get(id);
   }
 
-  /// Disabling only changes enabled: future bindings must remain attached and
-  /// surface modelUnavailable rather than silently rebinding or falling back.
-  /// Before wiring deletion to routes, the future binding service must check
-  /// references and obtain confirmation (FR-58); no binding tables exist here.
-  Future<Result<void>> delete(String id) async {
-    final count = await _db.execute(
-      'DELETE FROM providers WHERE owner_id = ? AND id = ?',
+  /// Bound providers cannot be deleted until the caller explicitly unbinds.
+  /// Check and deletion share one transaction so binding creation cannot race.
+  Future<Result<void>> delete(String id) => _db.transaction((tx) async {
+    final present = await tx.query(
+      'SELECT id FROM providers WHERE owner_id = ? AND id = ?',
       [_ownerId, id],
     );
-    return count == 0
-        ? err(FailureCode.notFound, 'Provider not found')
-        : const Ok(null);
-  }
+    if (present.isEmpty) return err(FailureCode.notFound, 'Provider not found');
+    final hasBindings = await tx.query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'model_bindings'",
+    );
+    if (hasBindings.isNotEmpty &&
+        (await tx.query(
+          'SELECT 1 FROM model_bindings WHERE owner_id = ? AND provider_id = ? LIMIT 1',
+          [_ownerId, id],
+        )).isNotEmpty) {
+      return err(FailureCode.conflict, 'Provider has active bindings');
+    }
+    await tx.execute('DELETE FROM providers WHERE owner_id = ? AND id = ?', [
+      _ownerId,
+      id,
+    ]);
+    return const Ok(null);
+  });
 
   /// Internal owner/provider-limited credential retrieval for a trusted gateway.
   /// No HTTP endpoint exposes this method or its secret-bearing return value.

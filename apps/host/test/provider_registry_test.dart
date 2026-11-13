@@ -301,6 +301,31 @@ void main() {
   );
 
   test(
+    'provider deletion reports a safe conflict while model bindings reference it',
+    () async {
+      final view = (await create(a)).value;
+      await db.execute(
+        'CREATE TABLE model_bindings (owner_id TEXT NOT NULL, provider_id TEXT NOT NULL, FOREIGN KEY(owner_id, provider_id) REFERENCES providers(owner_id, id) ON DELETE RESTRICT)',
+      );
+      await db.execute('INSERT INTO model_bindings VALUES (?, ?)', [
+        'owner-a',
+        view.id,
+      ]);
+      final result = await a.delete(view.id);
+      expect(result.failureOrNull?.code, FailureCode.conflict);
+      expect((await a.get(view.id)).isOk, isTrue);
+      expect(
+        (await b.delete(view.id)).failureOrNull?.code,
+        FailureCode.notFound,
+      );
+      await db.execute('DELETE FROM model_bindings WHERE owner_id = ?', [
+        'owner-a',
+      ]);
+      expect((await a.delete(view.id)).isOk, isTrue);
+    },
+  );
+
+  test(
     'invalid empty scope and names fail safely and short keys never echo fully',
     () async {
       expect(() => registry(''), throwsFormatException);

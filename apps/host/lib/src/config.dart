@@ -11,6 +11,8 @@ class HostConfig {
     this.port = 8787,
     this.dataDir = 'data',
     this.hostVersion = '0.1.0',
+    this.modelWorkerExecutable,
+    this.modelWorkerPath,
   });
 
   /// 监听地址。部署时改为 LAN/tailnet 地址；不得监听公网（FR-10）。
@@ -23,6 +25,11 @@ class HostConfig {
 
   final String hostVersion;
 
+  /// Trusted absolute launch paths; both are required to enable model calls.
+  /// No SDK or worker path is accepted from HTTP requests.
+  final String? modelWorkerExecutable;
+  final String? modelWorkerPath;
+
   /// 从环境变量读取：`JINGYU_BIND`、`JINGYU_PORT`、`JINGYU_DATA_DIR`。
   factory HostConfig.fromEnvironment(Map<String, String> env) {
     final portRaw = env['JINGYU_PORT'];
@@ -34,6 +41,8 @@ class HostConfig {
       bindAddress: env['JINGYU_BIND'] ?? '127.0.0.1',
       port: port,
       dataDir: env['JINGYU_DATA_DIR'] ?? 'data',
+      modelWorkerExecutable: env['JINGYU_MODEL_WORKER_EXECUTABLE'],
+      modelWorkerPath: env['JINGYU_MODEL_WORKER_PATH'],
     );
   }
 }
