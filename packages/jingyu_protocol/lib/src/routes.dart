@@ -25,13 +25,24 @@ abstract final class Routes {
   static const String authDevices = '$prefix/auth/devices';
 
   /// 远程下线某设备：`/auth/devices/{deviceId}/revoke`。
-  static const String authDeviceRevoke = '$prefix/auth/devices/{deviceId}/revoke';
+  static const String authDeviceRevoke =
+      '$prefix/auth/devices/{deviceId}/revoke';
+
+  /// 兑换邀请码创建账号。
+  static const String authInviteRedeem = '$prefix/auth/invites/redeem';
+
+  /// 管理员账号元数据与账号创建。
+  static const String adminAccounts = '$prefix/admin/accounts';
+
+  /// 管理员邀请码管理。
+  static const String adminInvites = '$prefix/admin/invites';
 
   /// 会话列表。
   static const String conversations = '$prefix/conversations';
 
   /// 会话内消息：`/conversations/{conversationId}/messages`。
-  static const String messages = '$prefix/conversations/{conversationId}/messages';
+  static const String messages =
+      '$prefix/conversations/{conversationId}/messages';
 
   /// 单会话差集同步：`/conversations/{conversationId}/sync`。
   static const String sync = '$prefix/conversations/{conversationId}/sync';
