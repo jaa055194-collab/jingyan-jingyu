@@ -23,6 +23,12 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 - Migration 300 与群成员权限：创建群、列出本人群、owner添加已存在且有效账号；默认历史all，可创建joined历史群。同一事务记录成员及当时消息head+1；服务器同步强制历史下界。
 - 默认宿主装配上述持久消息/成员服务，缺少成员策略时拒绝消息读取和发送，不再默认放行。提供认证群创建、列表及成员添加路由；身份只取principal。
 - `StorageModule`增加可选迁移列表参数，默认保持M01原样；默认宿主统一应用1/100/200/300，M02自身启动检测已存在迁移不重复执行。
+- 收藏专用盲索引：Migration212 `favorite_search_tokens`（只存 token HMAC 与收藏 id，密钥独立行 `favorite-index` 经列加密），`FavoriteBlindIndexService` 与 `FavoritesService` 可选注入；新增/删除维护 token，搜索先取候选解密校验再以全量扫描兜底，保证任意子串召回与既有行为一致（候选满额时可跳过扫描）；消息引用类只索引标题、正文以实时来源为准。
+- 附件上传与内容提取：Migration213 `attachments`/`attachment_uploads`/`attachment_upload_chunks`；`AttachmentService` 分片顺序上传与断点续传、声明大小与 sha256（流式校验）后落 blob 到媒体目录、正文抽取加密存 `extracted_text`、owner 或会话成员可见读取、owner 删除；`AttachmentTextExtractor` 支持文本类（html 去标签/实体、json/xml、1MiB 上限），二进制/PDF/DOCX 等如实标 unsupported；`AttachmentsModule` 提供五条认证路由并加入默认宿主。限制：对外分片 512KiB 适配 1MiB JSON；单附件≤128MiB、正文抽取仅≤4MiB；M12 真实配额/磁盘探测未接线（默认按充足，仅限制每账号 pending 上传数=3）；媒体 blob 按 FR-62 明文落盘，仅抽取文本加密。
+- 客户端本地索引：`jingyu_client_kit` 新增纯 Dart `LocalSearchIndex`（账号隔离正向+倒排、增改删、AND 候选+contains 复核、会话过滤/limit/seq 排序、单 CJK 字与 Latin 子串、清除账号、JSON 快照导入导出）；未接入 M11 Flutter 外壳（PR #8 未合并），落盘加密由外壳负责。
+- 附件消息与文件搜索：`AttachmentService.assertSendable` 校验消息引用的附件属于发送者本人且上传时绑定同一会话（他人附件/跨会话/未知/非法引用拒绝，成员与历史由发送处策略判定）；`GET /search?type=file` 仅在本人自有附件内按已抽取正文做包含匹配并返回片段（他人不可见）。
+- 收藏标签与备注：Migration214 为 `favorites` 增加加密的 `tags`（JSON 数组）与 `note` 列；`FavoritesService` 创建时校验（≤20 标签、每个≤50、备注≤2000字符）并加密落库，列表返回 tags/note，搜索匹配标签/备注；`GET /favorites?tag=` 大小写不敏感按标签过滤；`PATCH /favorites/{id}` 仅本人可整体替换标签/备注（null 清空）并尽力重索引。
+- 群公告：Migration305 为 `social_conversations` 增加加密 `announcement` 列；`ConversationService.setAnnouncement/getAnnouncement` 仅群主可设置/清空（≤2000字符）、成员可读、非成员拒绝；认证 `PUT/GET /conversations/{id}/announcement` 已挂默认宿主。
 
 ## 验证
 
@@ -78,6 +84,6 @@ ContextualChat内部组合已将当前加密人格卡→固定system上下文→
 
 ## 明确未完成
 
-M03/M04仍缺群管理员角色、AI好友预授权/群自动发言接线、朋友圈/话题/共享相册、闪照/搜索/附件、实时WebSocket、客户端读位点同步/跨端未读；消息撤回/编辑/定时仅完成服务端能力，无客户端入口与定时“未发出”通知。
+M03/M04仍缺群管理员角色、AI好友预授权/群自动发言接线、朋友圈/话题/共享相册、闪照、实时WebSocket、客户端读位点同步/跨端未读；消息撤回/编辑/定时仅完成服务端能力，无客户端入口与定时“未发出”通知。本轮已补：收藏专用盲索引、附件上传与文本类内容提取（服务端）、客户端本地索引纯 Dart 能力。仍未完成：真实二进制正文抽取（PDF/DOCX）、附件与消息发送/UI 接线、8MiB 流式上传适配、客户端本地索引接入 M11 外壳。
 
 M05剩余模型调用链、M06人格记忆、M07快慢脑、M08语音通话、M09创造性功能、M10世界、M12其余与M13全量验收尚未交付。M11由独立PR #8推进，不能把该草案视为已通过Android/Windows验收。当前不具备完整AI聊天产品的使用条件。
