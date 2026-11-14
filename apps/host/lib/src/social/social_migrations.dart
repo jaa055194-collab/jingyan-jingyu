@@ -19,4 +19,11 @@ CREATE TABLE social_members (
 );
 CREATE INDEX social_members_account ON social_members(account_id, conversation_id);
 '''),
+  Migration(305, 'group announcement', '''
+CREATE TABLE group_announcements (
+  conversation_id TEXT PRIMARY KEY NOT NULL,
+  sealed TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+'''),
 ];

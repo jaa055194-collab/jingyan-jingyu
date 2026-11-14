@@ -179,7 +179,7 @@ void main() {
       );
       await database.close();
       await open();
-      expect(await database.schemaVersion(), 300);
+      expect(await database.schemaVersion(), 305);
       expect(
         (await database.query(
           'SELECT version FROM schema_migrations WHERE version = ?',

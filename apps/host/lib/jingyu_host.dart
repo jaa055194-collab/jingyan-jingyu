@@ -34,7 +34,10 @@ import 'src/storage/migrations.dart';
 import 'src/storage/storage_module.dart';
 import 'src/config.dart';
 import 'src/messages/blind_index.dart';
+import 'src/messages/favorite_blind_index.dart';
 import 'src/messages/favorites.dart';
+import 'src/messages/attachments.dart';
+import 'src/messages/attachments_module.dart';
 import 'src/messages/messages_module.dart';
 import 'src/messages/pins.dart';
 import 'src/messages/reactions.dart';
@@ -105,14 +108,26 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     blind: blindIndex,
   );
   final pins = PinsService(database: storage.database, clock: clock);
+  final favoriteBlindIndex = FavoriteBlindIndexService(
+    database: storage.database,
+    cipher: storage.cipher,
+  );
   final favorites = FavoritesService(
     database: storage.database,
     cipher: storage.cipher,
+    clock: clock,
+    blind: favoriteBlindIndex,
+  );
+  final attachments = AttachmentService(
+    database: storage.database,
+    cipher: storage.cipher,
+    mediaDir: '${config.dataDir}/media',
     clock: clock,
   );
   final conversations = ConversationService(
     database: storage.database,
     clock: clock,
+    cipher: storage.cipher,
     headSeq: messages.headSeqInTransaction,
     accountExists: (tx, id) async => (await tx.query(
       'SELECT id FROM account WHERE id = ? AND disabled = 0',
@@ -158,8 +173,10 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       pins: pins,
       blind: blindIndex,
       favorites: favorites,
+      attachments: attachments,
       clock: clock,
     ),
+    AttachmentsModule(attachments: attachments),
     SocialModule(
       direct: PrivateConversations(db: storage.database, clock: clock),
       conversations: conversations,

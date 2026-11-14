@@ -173,4 +173,38 @@ void mountGroupManagementRoutes(
     }
     return HostResponse.fromResult(result);
   });
+
+  router.put(Routes.groupAnnouncement, (request) async {
+    final actor = await actorId(request);
+    if (actor == null) return unauthenticated();
+    final conversation = conversationId(request);
+    if (conversation == null) return invalid();
+    final body = request.jsonObject().valueOrNull;
+    if (body == null ||
+        body.keys.any((key) => key != 'text') ||
+        (body['text'] != null && body['text'] is! String)) {
+      return invalid();
+    }
+    final result = await conversations.setAnnouncement(
+      actorId: actor,
+      conversationId: conversation,
+      text: body['text'] as String?,
+    );
+    if (result.isOk) {
+      await record(actor, conversation, 'group.announcement.set');
+    }
+    return HostResponse.fromResult(result);
+  });
+
+  router.get(Routes.groupAnnouncement, (request) async {
+    final actor = await actorId(request);
+    if (actor == null) return unauthenticated();
+    final conversation = conversationId(request);
+    if (conversation == null) return invalid();
+    final result = await conversations.getAnnouncement(
+      accountId: actor,
+      conversationId: conversation,
+    );
+    return HostResponse.fromResult(result, (text) => {'announcement': text});
+  });
 }
