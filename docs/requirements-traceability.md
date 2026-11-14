@@ -31,6 +31,8 @@
 | REQ-025 | FR-25 / C1 | 话题引用元数据与父群历史权限 | 已授权局部 | root不可见即404、逐source历史边界、关联仅sender/owner、scope使用profile ID、认证元数据HTTP | TopicService/topic_routes、304默认装配 | service17/HTTP8、父33集成测试与host分析通过；scope混用先RED后修，独立review | 元数据子集通过；话题回复、AI上下文、撤权未完成 |
 | REQ-026 | FR-04 / M02 | 人类管理自己的独立AI账户 | 已授权局部 | 非管理员可创建自身AI、管理员无跨owner覆盖；列表当前归属、allowlist字段；创建无凭据/好友/私聊副作用 | AccountsModule ownAiAccounts / live AccountSession.ownAiMetadata | 9项真实SQLite+重启/撤销/越权测试，父17项集成回归，独立静态review | 账号接口已验证；profile/persona/好友与完整创建向导仍单独处理 |
 
+| REQ-027 | FR-38/39/60 / plugin lifecycle contract | 并发安全的插件隔离与卸载 | 已授权 | pending ID唯一、贡献按实例原子发布、失败隔离、卸载立即撤销并清理取消激活、清理重入无死锁 | PluginHost / PluginRegistrar / PluginContext | 14个Completer/Stream订阅回归先RED后GREEN，最新clientkit32、全仓检查及独立复审通过 | 激活永不settle时资源清理不能强制完成；不构成恶意原生Dart插件沙箱 |
+
 ## 验证口径
 
 2026-11-13在当前增量上，31项新持久消息/群权限/HTTP/迁移测试主代理及独立审查均通过；全仓 `tool/check.ps1` 输出 `ALL CHECKS PASSED`：core 20、protocol 9、host_kit 10、client_kit 18、host 144，所有分析无问题。其后仅新增默认host的joined群端到端回归；`host_test.dart` 19项全部通过，最终host分析无问题。该回归验证真实登录后创建群、管理员非成员404、owner添加成员、服务器只返回入群后消息、列表可见。总计当前覆盖的各包测试为202项（全仓201项 + 后加的host回归1项），不是202条产品需求验收。旧工作树结果不作为未来提交通过证据。
@@ -47,6 +49,6 @@
 
 2026-11-14自身AI账户HTTP增量完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit18/host466，总523项，各包分析无问题。父17项profile/账号装配回归与独立静态review通过；producer另跑31项现有账户兼容回归通过。新增账号接口不隐式产生好友、私聊、profile或persona。
 
-代码审查确认：canonical SqlAccountsStore使用差异行UPSERT而非父行REPLACE，不在账户正常认证时删除社交/消息数据。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
+2026-11-14插件生命周期并发修复后完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host466，总527项，各包分析无问题。插件14项新增回归与clientkit全测32项通过；独立review确认同ID串用、跨插件回滚、pending取消清理及卸载重入路径已修复。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
 
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
