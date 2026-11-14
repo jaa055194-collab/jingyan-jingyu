@@ -34,6 +34,8 @@ import 'src/storage/migrations.dart';
 import 'src/storage/storage_module.dart';
 import 'src/config.dart';
 import 'src/messages/messages_module.dart';
+import 'src/messages/reactions.dart';
+import 'src/messages/scheduled.dart';
 import 'src/system/system_module.dart';
 
 export 'src/audit/audit_log.dart';
@@ -82,6 +84,13 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     cipher: storage.cipher,
     clock: clock,
   );
+  final scheduledMessages = ScheduledMessageService(
+    database: storage.database,
+    cipher: storage.cipher,
+    store: messages,
+    clock: clock,
+  );
+  final reactions = ReactionsService(database: storage.database, clock: clock);
   final conversations = ConversationService(
     database: storage.database,
     clock: clock,
@@ -124,6 +133,8 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     MessagesModule(
       store: messages,
       authenticate: DbAuthenticator(accounts).call,
+      scheduled: scheduledMessages,
+      reactions: reactions,
       clock: clock,
     ),
     SocialModule(

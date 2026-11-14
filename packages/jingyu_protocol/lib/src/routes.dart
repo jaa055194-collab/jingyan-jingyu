@@ -80,6 +80,16 @@ abstract final class Routes {
   /// Per-device message acknowledgement for one conversation.
   static const String messageAck = '$prefix/conversations/{conversationId}/ack';
 
+  /// Emoji reactions on one message (POST toggles, GET lists).
+  static const String messageReactions =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/reactions';
+
+  /// Scheduled messages for one conversation (schedule/cancel are explicit routes).
+  static const String scheduledMessages =
+      '$prefix/conversations/{conversationId}/scheduled-messages';
+  static const String scheduledMessage =
+      '$prefix/conversations/{conversationId}/scheduled-messages/{scheduledId}';
+
   /// Edit one of the caller's own messages; keeps encrypted prior versions.
   static const String messageEdit =
       '$prefix/conversations/{conversationId}/messages/{messageId}/edit';
