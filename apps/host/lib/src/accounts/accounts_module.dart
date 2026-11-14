@@ -49,6 +49,8 @@ class AccountsModule extends HostModule {
     router.get(Routes.ownAiAccounts, _ownAi);
     router.post(Routes.ownAiAccounts, _createOwnAi);
     router.post(adminInvitesPath, _invite, access: Access.admin);
+    router.get(adminInvitesPath, _invites, access: Access.admin);
+    router.post(Routes.adminInviteRevoke, _revokeInvite, access: Access.admin);
     router.get(adminAccountsPath, _accounts, access: Access.admin);
     router.post(adminAccountsPath, _create, access: Access.admin);
     router.post(
@@ -225,6 +227,36 @@ class AccountsModule extends HostModule {
       await session.value.invites.issue(expiresAt: at, maxUses: uses),
       (code) => {'code': code},
     );
+  }
+
+  Future<HostResponse> _invites(HostRequest request) async {
+    final scope = await _currentSession(request);
+    if (scope == null) return _unauthenticated();
+    return HostResponse.fromResult(await scope.session.inviteMetadata());
+  }
+
+  Future<HostResponse> _revokeInvite(HostRequest request) async {
+    final scope = await _currentSession(request);
+    if (scope == null) return _unauthenticated();
+    // Parsed JSON null is indistinguishable from an absent body; reject entity
+    // framing too, including chunked input, before reaching the mutation.
+    final length = request.headers['content-length'];
+    if (request.body != null ||
+        (length != null && int.tryParse(length) != 0) ||
+        request.headers.containsKey('transfer-encoding')) {
+      return _bad();
+    }
+    final String inviteId;
+    try {
+      inviteId = validateId(
+        request.pathParams['inviteId'] ?? '',
+        kind: 'invite',
+      );
+    } on FormatException {
+      return _bad();
+    }
+    final result = await scope.session.invites.revoke(inviteId);
+    return HostResponse.fromResult(result, (_) => {'revoked': true});
   }
 
   Future<HostResponse> _accounts(HostRequest request) async {

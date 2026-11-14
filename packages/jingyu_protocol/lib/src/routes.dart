@@ -44,6 +44,10 @@ abstract final class Routes {
   /// 管理员邀请码管理。
   static const String adminInvites = '$prefix/admin/invites';
 
+  /// Revoke an existing invitation by its metadata ID, never its secret code.
+  static const String adminInviteRevoke =
+      '$prefix/admin/invites/{inviteId}/revoke';
+
   /// 会话列表。
   static const String conversations = '$prefix/conversations';
   static const String directConversations = '$prefix/direct-conversations';
