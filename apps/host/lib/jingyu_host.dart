@@ -36,6 +36,7 @@ import 'src/config.dart';
 import 'src/messages/messages_module.dart';
 import 'src/messages/reactions.dart';
 import 'src/messages/scheduled.dart';
+import 'src/messages/search.dart';
 import 'src/system/system_module.dart';
 
 export 'src/audit/audit_log.dart';
@@ -91,6 +92,10 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     clock: clock,
   );
   final reactions = ReactionsService(database: storage.database, clock: clock);
+  final messageSearch = MessageSearchService(
+    database: storage.database,
+    store: messages,
+  );
   final conversations = ConversationService(
     database: storage.database,
     clock: clock,
@@ -135,6 +140,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       authenticate: DbAuthenticator(accounts).call,
       scheduled: scheduledMessages,
       reactions: reactions,
+      search: messageSearch,
       clock: clock,
     ),
     SocialModule(

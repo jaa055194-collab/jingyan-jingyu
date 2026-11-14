@@ -73,6 +73,9 @@ abstract final class Routes {
   static const String topic = '$prefix/topics/{topicId}';
   static const String topicReferences = '$prefix/topics/{topicId}/references';
 
+  /// 全局消息搜索（服务端按可见性过滤）。
+  static const String search = '$prefix/search';
+
   /// 会话内消息：`/conversations/{conversationId}/messages`。
   static const String messages =
       '$prefix/conversations/{conversationId}/messages';
