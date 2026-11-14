@@ -1,7 +1,7 @@
 /// 消息模块：装配 [MessageStore] 并暴露发送与差集路由。
 ///
-/// 框架阶段的权限检查只做"必须登录"。会话成员校验（FR-22）、拉黑（FR-08）
-/// 与可见性由 M04-social 补上，接入点见 [MembershipCheck]。
+/// Membership is required for sending and reading. A missing policy fails closed.
+/// Social services register visibility and optional history boundaries.
 library;
 
 import 'package:jingyu_core/jingyu_core.dart';
@@ -10,22 +10,29 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import 'message_store.dart';
 
-/// 会话成员校验。默认实现放行；社交模块登记真正实现后自动替换。
+/// 会话成员校验。未登记真实策略时拒绝读取和发送。
 abstract class MembershipCheck {
   Future<bool> canPost(String accountId, String conversationId);
   Future<bool> canRead(String accountId, String conversationId);
 }
 
-class _AllowAll implements MembershipCheck {
+/// Optional server-side lower bound for visible message history.
+abstract class HistoryMembershipCheck implements MembershipCheck {
+  /// Null means the conversation is not visible; otherwise the first visible seq.
+  Future<int?> firstVisibleSeq(String accountId, String conversationId);
+}
+
+class _DenyAll implements MembershipCheck {
   @override
-  Future<bool> canPost(String accountId, String conversationId) async => true;
+  Future<bool> canPost(String accountId, String conversationId) async => false;
   @override
-  Future<bool> canRead(String accountId, String conversationId) async => true;
+  Future<bool> canRead(String accountId, String conversationId) async => false;
 }
 
 /// 消息模块。
 class MessagesModule extends HostModule {
-  MessagesModule({MessageStore? store}) : _store = store ?? InMemoryMessageStore();
+  MessagesModule({MessageStore? store})
+    : _store = store ?? InMemoryMessageStore();
 
   final MessageStore _store;
   late HostServices _services;
@@ -39,7 +46,8 @@ class MessagesModule extends HostModule {
     services.provide<MessageStore>(_store, owner: name);
   }
 
-  MembershipCheck get _members => _services.maybeGet<MembershipCheck>() ?? _AllowAll();
+  MembershipCheck get _members =>
+      _services.maybeGet<MembershipCheck>() ?? _DenyAll();
 
   @override
   void mount(Router router) {
@@ -53,21 +61,29 @@ class MessagesModule extends HostModule {
     try {
       validateId(conversationId, kind: 'conversation');
     } on FormatException {
-      return HostResponse.failure(const Failure(FailureCode.invalidArgument, 'bad id'));
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
     }
     if (!await _members.canPost(principal.accountId, conversationId)) {
-      return HostResponse.failure(const Failure(FailureCode.notFound, 'not visible'));
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
     }
 
     final body = request.jsonObject();
-    if (body is Err<Map<String, Object?>>) return HostResponse.failure(body.failure);
+    if (body is Err<Map<String, Object?>>) {
+      return HostResponse.failure(body.failure);
+    }
     final json = body.value;
     final clientMsgId = json['clientMsgId'];
     final kindRaw = json['kind'];
     final content = json['body'];
     final kind = kindRaw is String ? MessageKind.tryParse(kindRaw) : null;
     if (clientMsgId is! String || kind == null || content is! Map) {
-      return HostResponse.failure(const Failure(FailureCode.invalidArgument, 'bad body'));
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad body'),
+      );
     }
 
     final result = await _store.append(
@@ -77,27 +93,57 @@ class MessagesModule extends HostModule {
       kind: kind,
       body: content.cast<String, Object?>(),
     );
-    return HostResponse.fromResult(result, (r) => {
-          'duplicate': r.duplicate,
-          'message': r.message.toPayload(),
-        });
+    return HostResponse.fromResult(
+      result,
+      (r) => {'duplicate': r.duplicate, 'message': r.message.toPayload()},
+    );
   }
 
   Future<HostResponse> _sync(HostRequest request) async {
     final principal = request.principal!;
     final conversationId = request.pathParams['conversationId']!;
     if (!await _members.canRead(principal.accountId, conversationId)) {
-      return HostResponse.failure(const Failure(FailureCode.notFound, 'not visible'));
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
     }
     final afterSeq = int.tryParse(request.query['afterSeq'] ?? '0');
     final limit = int.tryParse(request.query['limit'] ?? '200');
     if (afterSeq == null || limit == null) {
-      return HostResponse.failure(const Failure(FailureCode.invalidArgument, 'bad query'));
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad query'),
+      );
     }
-    final page = await _store.since(conversationId: conversationId, afterSeq: afterSeq, limit: limit);
-    return HostResponse.fromResult(page, (p) => {
-          'messages': [for (final m in p.messages) m.toPayload()],
-          'hasMore': p.hasMore,
-        });
+    if (afterSeq < 0 || limit <= 0 || limit > 1000) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad query'),
+      );
+    }
+    var visibleAfter = afterSeq;
+    final history = _services.maybeGet<HistoryMembershipCheck>();
+    if (history != null) {
+      final first = await history.firstVisibleSeq(
+        principal.accountId,
+        conversationId,
+      );
+      if (first == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.notFound, 'not visible'),
+        );
+      }
+      if (first - 1 > visibleAfter) visibleAfter = first - 1;
+    }
+    final page = await _store.since(
+      conversationId: conversationId,
+      afterSeq: visibleAfter,
+      limit: limit,
+    );
+    return HostResponse.fromResult(
+      page,
+      (p) => {
+        'messages': [for (final m in p.messages) m.toPayload()],
+        'hasMore': p.hasMore,
+      },
+    );
   }
 }

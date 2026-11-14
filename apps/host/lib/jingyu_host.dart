@@ -11,6 +11,25 @@ import 'src/accounts/accounts_module.dart';
 import 'src/accounts/db_authenticator.dart';
 import 'src/accounts/password_hasher.dart';
 import 'src/accounts/accounts_sql_store.dart';
+import 'src/accounts/accounts_migrations.dart';
+import 'src/messages/messages_migrations.dart';
+import 'src/models/models_migrations.dart';
+import 'src/models/ai_identity.dart';
+import 'src/models/binding_migrations.dart';
+import 'src/models/usage_migrations.dart';
+import 'src/models/budget_timezone_migration.dart';
+import 'src/models/model_runtime.dart';
+import 'src/models/models_module.dart';
+import 'src/security/url_guard.dart';
+import 'src/messages/sqlite_message_store.dart';
+import 'src/social/conversation_service.dart';
+import 'src/social/social_migrations.dart';
+import 'src/social/group_ai_migrations.dart';
+import 'src/social/friendship_migrations.dart';
+import 'src/social/private_conversations.dart';
+import 'src/social/private_conversation_migration.dart';
+import 'src/social/social_module.dart';
+import 'src/storage/migrations.dart';
 import 'src/storage/storage_module.dart';
 import 'src/config.dart';
 import 'src/messages/messages_module.dart';
@@ -39,17 +58,81 @@ class Host {
 
 /// 框架阶段默认模块。后续模块按 docs/modules 的编号追加。
 List<HostModule> defaultModules(HostConfig config, Clock clock) {
-  final storage = StorageModule(databasePath: '${config.dataDir}/host.sqlite');
+  final storage = StorageModule(
+    databasePath: '${config.dataDir}/host.sqlite',
+    migrations: [
+      ...allMigrations,
+      ...accountsMigrations,
+      ...messagesMigrations,
+      ...socialMigrations,
+      friendshipMigration,
+      privateConversationMigration,
+      groupAiMigration,
+      ...modelsMigrations,
+      aiIdentityMigration,
+      bindingMigration,
+      ...usageMigrations,
+      budgetTimezoneMigration,
+    ],
+  );
+  final messages = SqliteMessageStore(
+    database: storage.database,
+    cipher: storage.cipher,
+    clock: clock,
+  );
+  final conversations = ConversationService(
+    database: storage.database,
+    clock: clock,
+    headSeq: messages.headSeqInTransaction,
+    accountExists: (tx, id) async => (await tx.query(
+      'SELECT id FROM account WHERE id = ? AND disabled = 0',
+      [id],
+    )).isNotEmpty,
+  );
   final accounts = AccountsDomain(
     store: SqlAccountsStore(storage.database),
     clock: clock,
     hasher: PasswordHasher(),
   );
+  final urlGuard = UrlGuard();
+  final executable = config.modelWorkerExecutable;
+  final workerPath = config.modelWorkerPath;
+  if ((executable == null) != (workerPath == null)) {
+    throw ArgumentError('Both model worker executable and path are required');
+  }
+  final runtime = executable == null
+      ? null
+      : ModelRuntime.withProcess(
+          db: storage.database,
+          cipher: storage.cipher,
+          urlGuard: urlGuard,
+          clock: clock,
+          executable: executable,
+          workerPath: workerPath!,
+        );
   return [
-    SystemModule(config: config, clock: clock, audit: storage.auditLog),
+    SystemModule(
+      config: config,
+      clock: clock,
+      audit: storage.auditLog,
+      urlGuard: urlGuard,
+    ),
     storage,
     AccountsModule(domain: accounts),
-    MessagesModule(),
+    MessagesModule(store: messages),
+    SocialModule(
+      direct: PrivateConversations(db: storage.database, clock: clock),
+      conversations: conversations,
+      database: storage.database,
+      clock: clock,
+    ),
+    ModelsModule(
+      runtime: runtime,
+      db: storage.database,
+      cipher: storage.cipher,
+      urlGuard: urlGuard,
+      clock: clock,
+    ),
   ];
 }
 
