@@ -87,6 +87,12 @@ abstract final class Routes {
   static const String messageReactions =
       '$prefix/conversations/{conversationId}/messages/{messageId}/reactions';
 
+  /// Pinned messages in one conversation (POST/DELETE one message, GET list).
+  static const String messagePin =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/pin';
+  static const String conversationPins =
+      '$prefix/conversations/{conversationId}/pins';
+
   /// Scheduled messages for one conversation (schedule/cancel are explicit routes).
   static const String scheduledMessages =
       '$prefix/conversations/{conversationId}/scheduled-messages';

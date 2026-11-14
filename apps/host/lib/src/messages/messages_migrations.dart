@@ -64,4 +64,27 @@ CREATE TABLE message_reactions (
 );
 CREATE INDEX idx_message_reactions_message ON message_reactions(message_id);
 '''),
+  Migration(209, 'message pins', '''
+CREATE TABLE message_pins (
+  conversation_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  pinned_at TEXT NOT NULL,
+  PRIMARY KEY(conversation_id, message_id)
+);
+CREATE INDEX idx_message_pins_conversation ON message_pins(conversation_id);
+'''),
+  Migration(210, 'encrypted search blind index', '''
+CREATE TABLE message_search_tokens (
+  message_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  token_hmac TEXT NOT NULL,
+  PRIMARY KEY(message_id, token_hmac)
+);
+CREATE INDEX idx_search_tokens_hmac ON message_search_tokens(token_hmac);
+CREATE TABLE search_index_key (
+  id TEXT PRIMARY KEY NOT NULL,
+  sealed TEXT NOT NULL
+);
+'''),
 ];
