@@ -1,6 +1,6 @@
 # 需求追踪与验收
 
-基线：需求v4.2及2026-11-13原始答复；代码主干`0626ae3`（M01 PR #6、M02 PR #9已合并）。本记录仅覆盖已调查要求，不宣称完整需求矩阵或全产品验收。
+基线：需求v4.2及2026-11-13原始答复；代码主干`b4ab568`（M01 PR #6、M02 PR #9及后端增量PR #7已合并）。本记录仅覆盖已调查要求，不宣称完整需求矩阵或全产品验收。
 
 | ID | 来源/章节 | 要求摘要 | 审批 | 可观察验收 | 实现 | 检查/证据 | 状态与缺口 |
 |---|---|---|---|---|---|---|---|
@@ -26,9 +26,10 @@
 | REQ-020 | FR-41 / decisions A1 / 长期人格隔离要求 | 人格分层版本、锁定和撤回 | 已授权 | P0/P1锁生效、P2自主；canonical AI才能迭代；证据/CAS/不可替换历史/加密隔离 | ai/persona/persona_service、可选601 | 21项SQLite/AES，SQL REPLACE回归先RED后修，独立review | 内部服务通过；未装配人格UI/提示词/调度，不能算端到端抗污染已完成 |
 | REQ-021 | FR-48 / 长期上下文要求 | 人格与窗口到模型调用一致 | 已授权局部 | 当前卡固定提示、输出预留max_tokens一致、profile/provider/model精确匹配、换绑不误用tokenizer | ContextualChat、runtime/gateway expected pair | contextual10/gateway-runtime35，父合跑58与review关闭profile错绑Important | 内部组合通过；无自动回复入口/真实tokenizer/记忆ACL默认 |
 | REQ-022 | FR-42/45 / M06 | 60秒规则心跳与恢复gap | 已授权局部 | 不调模型，每60秒至多一条；重启只记一次gap不造活动；当前owner权限 | LifeEngine、可选602 | life13项Clock/SQLite/回滚/枚举SQL/错误脱敏，独立review | 内部规则能力通过；未生产调度/主动行为/静默窗 |
-
 | REQ-023 | FR-22 / AC-32 | 群主转让、成员退出及AI移除 | 已授权 | 有效成员间转让；群主不能孤儿退出；退出立即撤权；operator仅撤回自己的AI | conversation_service、group_management_routes | service17/HTTP5+装配回归，独立review | 后端通过；群管理员角色与UI未完成 |
 | REQ-024 | FR-23 / A3/A4 | 群AI发言限额与配置 | 已授权局部 | 群主控cap/主持/静音，AI owner控间隔，跨午夜轮次限额，自主插话间隔 | group_ai_policy/routes、303 | policy14/HTTP19，review发现跨日/间隔/整数溢出先RED后修，父合跑58 | 策略与配置已验证；admission尚未与实际AI发言事务接线 |
+
+| REQ-025 | FR-25 / C1 | 话题引用元数据与父群历史权限 | 已授权局部 | root不可见即404、逐source历史边界、关联仅sender/owner、scope使用profile ID、认证元数据HTTP | TopicService/topic_routes、304默认装配 | service17/HTTP8、父33集成测试与host分析通过；scope混用先RED后修，独立review | 元数据子集通过；话题回复、AI上下文、撤权未完成 |
 
 ## 验证口径
 
@@ -41,6 +42,8 @@
 2026-11-14 ContextualChat与规则心跳增量全仓 `tool/check.ps1` 再次ALL CHECKS PASSED：core20/protocol9/host_kit10/client_kit18/host383，总440项，所有分析无问题。之后只校正迁移号说明注释及本文档，不改可执行逻辑。profile换绑回归验证错误profile在pending前拒绝、preflight中换绑仍固定原已匹配dispatch。此为内部组合验证，不等于真实公网或长期产品使用验收。
 
 2026-11-14群管理及AI设置增量修后 `tool/check.ps1` 完整执行 ALL CHECKS PASSED：core20/protocol9/host_kit10/client_kit18/host432，共489项，各包分析无问题。独立review复验跨午夜轮次、自主插话间隔和Duration溢出回归；AI admission未接实际消息发送事务，不能算自动群聊验收。
+
+2026-11-14话题引用元数据与认证HTTP增量完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit18/host457，总514项，各包分析无问题；父33项装配/私聊回归与独立review通过。这不包含话题回复或AI上下文跟随验收。
 
 代码审查确认：canonical SqlAccountsStore使用差异行UPSERT而非父行REPLACE，不在账户正常认证时删除社交/消息数据。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
 

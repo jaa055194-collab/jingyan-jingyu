@@ -59,7 +59,7 @@ void main() {
         (await db.query(
           'SELECT version FROM schema_migrations ORDER BY version',
         )).map((row) => row['version']),
-        [1, 100, 200, 300, 301, 302, 303, 500, 501, 502, 503, 504],
+        [1, 100, 200, 300, 301, 302, 303, 304, 500, 501, 502, 503, 504],
       );
       expect(
         await db.query(
@@ -72,6 +72,24 @@ void main() {
         HostRequest(method: 'GET', path: Routes.modelProviders),
       );
       expect(result.status, 401);
+      expect(
+        (await host.pipeline.handle(
+          HostRequest(
+            method: 'GET',
+            path: Routes.groupTopics.replaceFirst('{conversationId}', 'group'),
+          ),
+        )).status,
+        401,
+      );
+      expect(
+        (await host.pipeline.handle(
+          HostRequest(
+            method: 'GET',
+            path: Routes.topicReferences.replaceFirst('{topicId}', 'topic'),
+          ),
+        )).status,
+        401,
+      );
       expect(
         host.registry.router.describe().any(
           (route) => route.contains(Routes.modelProvider),
