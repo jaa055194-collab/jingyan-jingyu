@@ -53,4 +53,15 @@ CREATE TABLE scheduled_messages (
 );
 CREATE INDEX idx_scheduled_due ON scheduled_messages(status, deliver_at);
 '''),
+  Migration(208, 'message reactions', '''
+CREATE TABLE message_reactions (
+  message_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  emoji TEXT NOT NULL CHECK(length(emoji) BETWEEN 1 AND 32),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(message_id, account_id, emoji)
+);
+CREATE INDEX idx_message_reactions_message ON message_reactions(message_id);
+'''),
 ];
