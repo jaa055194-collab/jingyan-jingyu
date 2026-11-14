@@ -46,6 +46,8 @@ class AccountsModule extends HostModule {
     router.post(Routes.authRefresh, _refresh, access: Access.public);
     router.get(Routes.authDevices, _devices);
     router.post(Routes.authDeviceRevoke, _revoke);
+    router.get(Routes.ownAiAccounts, _ownAi);
+    router.post(Routes.ownAiAccounts, _createOwnAi);
     router.post(adminInvitesPath, _invite, access: Access.admin);
     router.get(adminAccountsPath, _accounts, access: Access.admin);
     router.post(adminAccountsPath, _create, access: Access.admin);
@@ -61,6 +63,51 @@ class AccountsModule extends HostModule {
     final header = request.headers['authorization'] ?? '';
     return domain.scope(
       header.startsWith('Bearer ') ? header.substring(7).trim() : '',
+    );
+  }
+
+  Future<({AccountSession session, AccountId actor})?> _ownAiSession(
+    HostRequest request,
+  ) async {
+    final principal = request.principal;
+    if (principal == null) return null;
+    final scoped = await _session(request);
+    if (scoped.isErr) return null;
+    final header = request.headers['authorization'] ?? '';
+    final current = await domain.authenticate(
+      header.startsWith('Bearer ') ? header.substring(7).trim() : '',
+    );
+    if (current == null ||
+        current.accountId != principal.accountId ||
+        current.deviceId != principal.deviceId) {
+      return null;
+    }
+    return (session: scoped.value, actor: AccountId.parse(current.accountId));
+  }
+
+  HostResponse _unauthenticated() => HostResponse.failure(
+    const Failure(FailureCode.unauthenticated, 'Invalid credentials'),
+  );
+
+  Future<HostResponse> _ownAi(HostRequest request) async {
+    final scope = await _ownAiSession(request);
+    if (scope == null) return _unauthenticated();
+    return HostResponse.fromResult(await scope.session.ownAiMetadata());
+  }
+
+  Future<HostResponse> _createOwnAi(HostRequest request) async {
+    final scope = await _ownAiSession(request);
+    if (scope == null) return _unauthenticated();
+    final body = request.jsonObject().valueOrNull;
+    if (body == null || body.length != 1 || body['displayName'] is! String) {
+      return _bad();
+    }
+    return HostResponse.fromResult(
+      await scope.session.accounts.createAi(
+        operator: scope.actor,
+        displayName: body['displayName'] as String,
+      ),
+      (id) => {'accountId': id.value},
     );
   }
 
@@ -93,7 +140,8 @@ class AccountsModule extends HostModule {
     if (code is! String || name is! String || password is! String) {
       return _bad();
     }
-    if (code.length > 128 || !limiter.allow(ip: peerIp(request), invite: code)) {
+    if (code.length > 128 ||
+        !limiter.allow(ip: peerIp(request), invite: code)) {
       return _limited();
     }
     return HostResponse.fromResult(

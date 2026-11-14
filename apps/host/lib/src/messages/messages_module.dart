@@ -8,6 +8,7 @@ import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
+import '../audit/audit_log.dart';
 import 'message_store.dart';
 
 /// 会话成员校验。未登记真实策略时拒绝读取和发送。
@@ -31,10 +32,16 @@ class _DenyAll implements MembershipCheck {
 
 /// 消息模块。
 class MessagesModule extends HostModule {
-  MessagesModule({MessageStore? store})
-    : _store = store ?? InMemoryMessageStore();
+  MessagesModule({
+    MessageStore? store,
+    Authenticator? authenticate,
+    this.clock = const SystemClock(),
+  }) : _store = store ?? InMemoryMessageStore(),
+       _authenticate = authenticate;
 
   final MessageStore _store;
+  final Authenticator? _authenticate;
+  final Clock clock;
   late HostServices _services;
 
   @override
@@ -52,6 +59,10 @@ class MessagesModule extends HostModule {
   @override
   void mount(Router router) {
     router.post(Routes.messages, _send);
+    router.post(Routes.messageRecall, _recall);
+    router.post(Routes.messageEdit, _edit);
+    router.get(Routes.messageEdits, _editHistory, access: Access.admin);
+    router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
   }
 
@@ -97,6 +108,185 @@ class MessagesModule extends HostModule {
       result,
       (r) => {'duplicate': r.duplicate, 'message': r.message.toPayload()},
     );
+  }
+
+  Future<HostResponse> _edit(HostRequest request) async {
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (!await _members.canPost(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final body = request.jsonObject();
+    if (body is Err<Map<String, Object?>> ||
+        body.value.length != 1 ||
+        body.value['body'] is! Map) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad body'),
+      );
+    }
+    final result = await _store.edit(
+      conversationId: conversationId,
+      messageId: messageId,
+      senderId: principal.accountId,
+      body: (body.value['body']! as Map).cast<String, Object?>(),
+    );
+    if (result.isErr) return HostResponse.failure(result.failureOrNull!);
+    final edited = result.value;
+    final audit = _services.maybeGet<AuditLog>();
+    if (audit != null) {
+      try {
+        await audit.record(
+          AuditEntry(
+            at: clock.now(),
+            actorId: principal.accountId,
+            action: 'message.edit',
+            targetKind: 'message',
+            targetId: messageId,
+            meta: {'editId': edited.editId},
+          ),
+        );
+      } catch (_) {}
+    }
+    return HostResponse.ok(edited.message.toPayload());
+  }
+
+  Future<HostResponse> _editHistory(HostRequest request) async {
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    final result = await _store.editHistory(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+    return HostResponse.fromResult(
+      result,
+      (versions) => {
+        'edits': [
+          for (final v in versions)
+            {
+              'editId': v.editId,
+              'editorId': v.editorId,
+              'body': v.body,
+              'editedAt': v.editedAt.toIso8601String(),
+            },
+        ],
+      },
+    );
+  }
+
+  Future<HostResponse> _recall(HostRequest request) async {
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (!await _members.canPost(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final result = await _store.recall(
+      conversationId: conversationId,
+      messageId: messageId,
+      senderId: principal.accountId,
+    );
+    if (result.isErr) return HostResponse.failure(result.failureOrNull!);
+    final audit = _services.maybeGet<AuditLog>();
+    if (audit != null) {
+      // The tombstone commit already happened inside the store transaction.
+      // Audit is a separate insert sharing the same database; if it fails the
+      // recall stays applied, so treat audit failure as non-fatal rather than
+      // returning 500 for a mutation that already took effect.
+      try {
+        await audit.record(
+          AuditEntry(
+            at: clock.now(),
+            actorId: principal.accountId,
+            action: 'message.recall',
+            targetKind: 'message',
+            targetId: messageId,
+            meta: {'conversationId': conversationId},
+          ),
+        );
+      } catch (_) {}
+    }
+    return HostResponse.ok({'recalled': true});
+  }
+
+  Future<HostResponse> _ack(HostRequest request) async {
+    final authenticate = _authenticate;
+    final principal = request.principal;
+    if (authenticate == null || principal == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.unauthenticated, 'Invalid credentials'),
+      );
+    }
+    final current = await authenticate(request);
+    if (current == null ||
+        current.accountId != principal.accountId ||
+        current.deviceId != principal.deviceId) {
+      return HostResponse.failure(
+        const Failure(FailureCode.unauthenticated, 'Invalid credentials'),
+      );
+    }
+    final conversationId = request.pathParams['conversationId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad conversation id'),
+      );
+    }
+    final body = request.jsonObject();
+    if (body is Err<Map<String, Object?>> ||
+        body.value.length != 1 ||
+        body.value['seq'] is! int ||
+        (body.value['seq'] as int) < 0) {
+      return HostResponse.failure(
+        const Failure(
+          FailureCode.invalidArgument,
+          'seq must be a nonnegative integer',
+        ),
+      );
+    }
+    final history = _services.maybeGet<HistoryMembershipCheck>();
+    if (history == null ||
+        await history.firstVisibleSeq(current.accountId, conversationId) ==
+            null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final seq = await _store.ack(
+      conversationId: conversationId,
+      deviceId: current.deviceId,
+      seq: body.value['seq'] as int,
+    );
+    return HostResponse.ok({'acknowledgedSeq': seq});
   }
 
   Future<HostResponse> _sync(HostRequest request) async {

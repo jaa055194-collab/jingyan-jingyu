@@ -228,6 +228,111 @@ void main() {
       );
     });
 
+    test(
+      'authenticated per-device ack is monotonic, head-clamped and membership-scoped',
+      () async {
+        final ackConversation =
+            (await host.registry.services
+                    .get<ConversationService>()
+                    .createGroup(
+                      ownerAccountId: userId.value,
+                      name: 'ACK group',
+                    ))
+                .value
+                .id;
+        Future<HostResponse> send(String bearer, Object? body) =>
+            host.pipeline.handle(
+              HostRequest(
+                method: 'POST',
+                path: path(Routes.messageAck, ackConversation),
+                headers: {'authorization': 'Bearer $bearer'},
+                body: body,
+              ),
+            );
+        final anonymousAck = await host.pipeline.handle(
+          HostRequest(
+            method: 'POST',
+            path: path(Routes.messageAck, ackConversation),
+            body: {'seq': 0},
+          ),
+        );
+        expect(anonymousAck.status, 401);
+
+        final otherDevice = (await host.auth.login(
+          userId,
+          password,
+          deviceName: 'second device',
+        )).value;
+        Future<HostResponse> post(String id) => host.pipeline.handle(
+          HostRequest(
+            method: 'POST',
+            path: path(Routes.messages, ackConversation),
+            headers: authed(),
+            body: {
+              'clientMsgId': id,
+              'kind': 'text',
+              'body': {'text': id},
+            },
+          ),
+        );
+        await post('ack-one');
+        await post('ack-two');
+
+        expect((await send(token, {'seq': 2})).status, 200);
+        expect((await send(otherDevice.accessToken, {'seq': 1})).json, {
+          'acknowledgedSeq': 1,
+        });
+        expect((await send(token, {'seq': 1})).json, {'acknowledgedSeq': 2});
+        expect((await send(token, {'seq': 999})).json, {'acknowledgedSeq': 2});
+
+        for (final body in [
+          null,
+          [],
+          {},
+          {'seq': '2'},
+          {'seq': 1.5},
+          {'seq': -1},
+          {'seq': 1, 'deviceId': 'spoof'},
+        ]) {
+          expect((await send(token, body)).status, 400, reason: '$body');
+        }
+        expect((await send('revoked', {'seq': 1})).status, 401);
+
+        final group =
+            (await host.registry.services
+                    .get<ConversationService>()
+                    .createGroup(
+                      ownerAccountId: adminId.value,
+                      name: 'Other group',
+                    ))
+                .value
+                .id;
+        final denied = await host.pipeline.handle(
+          HostRequest(
+            method: 'POST',
+            path: path(Routes.messageAck, group),
+            headers: authed(),
+            body: {'seq': 1},
+          ),
+        );
+        expect(denied.status, 404);
+      },
+    );
+
+    test(
+      'message ack requires an authenticated session',
+      () async {
+        final anonymous = await host.pipeline.handle(
+          HostRequest(
+            method: 'POST',
+            path: path(Routes.messageAck, conversation),
+            body: {'seq': 0},
+          ),
+        );
+        expect(anonymous.status, 401);
+      },
+    );
+
     test('发送 → 幂等重发 → 差集同步', () async {
       Future<HostResponse> post(String cmid) => host.pipeline.handle(
         HostRequest(

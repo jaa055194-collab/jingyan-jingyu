@@ -1,6 +1,6 @@
 # 需求追踪与验收
 
-基线：需求v4.2及2026-11-13原始答复；代码主干`0626ae3`（M01 PR #6、M02 PR #9已合并）。本记录仅覆盖已调查要求，不宣称完整需求矩阵或全产品验收。
+基线：需求v4.2及2026-11-13原始答复；代码主干`b4ab568`（M01 PR #6、M02 PR #9及后端增量PR #7已合并）。本记录仅覆盖已调查要求，不宣称完整需求矩阵或全产品验收。
 
 | ID | 来源/章节 | 要求摘要 | 审批 | 可观察验收 | 实现 | 检查/证据 | 状态与缺口 |
 |---|---|---|---|---|---|---|---|
@@ -9,7 +9,7 @@
 | REQ-003 | decisions B-6 | 8MB分片、每账号并发≤3 | 已授权 | 第4个许可拒绝，账号隔离、重复/跨gate释放不增名额 | UploadGate | quota_test | 纯策略通过；未执行真实上传 |
 | REQ-004 | FR-04～07 / M02 | 持久账号、邀请、设备与鉴权 | 已授权 | 主干M02契约/HTTP/持久化验收 | 主干PR #9 | 沿用canonical主干tests，不维护第二套账号 | 已合并；本票最终全仓须重验 |
 | REQ-005 | FR-09 / M11 | Android与Windows客户端 | 已授权 | 双端构建/设备行为/真实Before–After | 独立PR #8 | 本票未运行客户端验收 | 未完成，不声明草案可用 |
-| REQ-006 | FR-14 / M03 | 单调seq、幂等、差集、持久ack | 已授权 | 并发重放不重复，重启保持，加密落盘不出现正文 | messages/sqlite_message_store.dart；Migration200 | sqlite_message_store_test：15项含原契约/并发/扫描/AAD/重启/失败回滚 | 局部通过；transport ack/WebSocket与跨端未读未接入 |
+| REQ-006 | FR-14 / M03 | 单调seq、幂等、差集、持久ack | 已授权 | 并发重放不重复，重启保持，加密落盘不出现正文 | messages/服务端认证ack路由`Routes.messageAck`、MessagesModule；sqlite_message_store.dart既有head clamp | sqlite_message_store_test15、host_test默认装配回归、message_ack_boundary_test真实撤销/轮转/身份错配/缺策略/无写入/持久化4项；host472项及全仓543项与各包analysis通过 | 服务端ack路由局部已验证；撤权在途遵C-5，WebSocket、客户端last_ack持久化和跨端未读UI未接入，AC-18未全验收 |
 | REQ-007 | FR-22 / M04 | 群成员服务器权限 | 已授权 | 非成员不可列出/读取/发送；仅owner加成员；有效账号检查 | social/conversation_service.dart、social_routes.dart、Migration300 | conversation_membership_test 6项、social_routes_test 7项 | 局部通过；好友/私聊/拉黑/群角色/退出未完成 |
 | REQ-008 | decisions C-1 | 房主可选择仅入群后历史 | 已授权 | 同Tx取head+1，服务器忽略越界afterSeq，分页不泄露旧内容 | HistoryMembershipCheck、MessagesModule._sync | message_membership_boundary_test 2项；默认host端到端补充验证 | 局部通过；不把客户端过滤当权限 |
 | REQ-009 | M01/M03/M04工程约束 | 统一迁移装配 | 已授权 | 默认单库顺序1/100/200/300、旧M01默认不变 | StorageModule optional migrations、defaultModules | storage_extra_migrations_test 1项，先缺参数RED后GREEN | 局部通过，最终全仓重验 |
@@ -26,9 +26,15 @@
 | REQ-020 | FR-41 / decisions A1 / 长期人格隔离要求 | 人格分层版本、锁定和撤回 | 已授权 | P0/P1锁生效、P2自主；canonical AI才能迭代；证据/CAS/不可替换历史/加密隔离 | ai/persona/persona_service、可选601 | 21项SQLite/AES，SQL REPLACE回归先RED后修，独立review | 内部服务通过；未装配人格UI/提示词/调度，不能算端到端抗污染已完成 |
 | REQ-021 | FR-48 / 长期上下文要求 | 人格与窗口到模型调用一致 | 已授权局部 | 当前卡固定提示、输出预留max_tokens一致、profile/provider/model精确匹配、换绑不误用tokenizer | ContextualChat、runtime/gateway expected pair | contextual10/gateway-runtime35，父合跑58与review关闭profile错绑Important | 内部组合通过；无自动回复入口/真实tokenizer/记忆ACL默认 |
 | REQ-022 | FR-42/45 / M06 | 60秒规则心跳与恢复gap | 已授权局部 | 不调模型，每60秒至多一条；重启只记一次gap不造活动；当前owner权限 | LifeEngine、可选602 | life13项Clock/SQLite/回滚/枚举SQL/错误脱敏，独立review | 内部规则能力通过；未生产调度/主动行为/静默窗 |
-
 | REQ-023 | FR-22 / AC-32 | 群主转让、成员退出及AI移除 | 已授权 | 有效成员间转让；群主不能孤儿退出；退出立即撤权；operator仅撤回自己的AI | conversation_service、group_management_routes | service17/HTTP5+装配回归，独立review | 后端通过；群管理员角色与UI未完成 |
 | REQ-024 | FR-23 / A3/A4 | 群AI发言限额与配置 | 已授权局部 | 群主控cap/主持/静音，AI owner控间隔，跨午夜轮次限额，自主插话间隔 | group_ai_policy/routes、303 | policy14/HTTP19，review发现跨日/间隔/整数溢出先RED后修，父合跑58 | 策略与配置已验证；admission尚未与实际AI发言事务接线 |
+| REQ-025 | FR-25 / C1 | 话题引用元数据与父群历史权限 | 已授权局部 | root不可见即404、逐source历史边界、关联仅sender/owner、scope使用profile ID、认证元数据HTTP | TopicService/topic_routes、304默认装配 | service17/HTTP8、父33集成测试与host分析通过；scope混用先RED后修，独立review | 元数据子集通过；话题回复、AI上下文、撤权未完成 |
+| REQ-026 | FR-04 / M02 | 人类管理自己的独立AI账户 | 已授权局部 | 非管理员可创建自身AI、管理员无跨owner覆盖；列表当前归属、allowlist字段；创建无凭据/好友/私聊副作用 | AccountsModule ownAiAccounts / live AccountSession.ownAiMetadata | 9项真实SQLite+重启/撤销/越权测试，父17项集成回归，独立静态review | 账号接口已验证；profile/persona/好友与完整创建向导仍单独处理 |
+
+| REQ-027 | FR-38/39/60 / plugin lifecycle contract | 并发安全的插件隔离与卸载 | 已授权 | pending ID唯一、贡献按实例原子发布、失败隔离、卸载立即撤销并清理取消激活、清理重入无死锁 | PluginHost / PluginRegistrar / PluginContext | 14个Completer/Stream订阅回归先RED后GREEN，最新clientkit32、全仓检查及独立复审通过 | 激活永不settle时资源清理不能强制完成；不构成恶意原生Dart插件沙箱 |
+
+| REQ-029 | FR-15 / M03 / AC-19(编辑留痕) | 消息编辑与旧版本留痕 | 已授权局部 | 仅发送者编辑未撤回消息；旧正文加密入message_edits；当前正文更新；审计只记edit_id；旧版仅管理员路由可读，普通成员403 | messages/edit、迁移206、MessagesModule._edit(admin _editHistory)、Routes.messageEdit(s) | 契约(内存+SQLite)编辑历史一致性与message_edit_test真实SQLite/Audit 3项，先RED后GREEN；host488/全仓559通过 | 服务端编辑子能力；无客户端标记"已编辑"UI，无重新生成 |
+| REQ-028 | FR-15 / M03 / AC-19(撤回) | 消息撤回：24h、留审计、无正文 | 已授权局部 | 仅发送者24h内可撤回；成功后同步只回占位、seq不变；审计无正文；他人/非成员/未知/超时/重复拒绝且数据不变 | messages/message_store.recall、sqlite迁移205、MessagesModule._recall、Routes.messageRecall | 契约(内存+SQLite，含正文为撤回占位的两实现一致性)与message_recall_test真实SQLite/Audit/FakeClock 7项；全仓待最终复跑 | 服务端撤回子能力；定时/闪照/搜索/附件与客户端入口未完成 |
 
 ## 验证口径
 
@@ -42,6 +48,16 @@
 
 2026-11-14群管理及AI设置增量修后 `tool/check.ps1` 完整执行 ALL CHECKS PASSED：core20/protocol9/host_kit10/client_kit18/host432，共489项，各包分析无问题。独立review复验跨午夜轮次、自主插话间隔和Duration溢出回归；AI admission未接实际消息发送事务，不能算自动群聊验收。
 
-代码审查确认：canonical SqlAccountsStore使用差异行UPSERT而非父行REPLACE，不在账户正常认证时删除社交/消息数据。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
+2026-11-14话题引用元数据与认证HTTP增量完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit18/host457，总514项，各包分析无问题；父33项装配/私聊回归与独立review通过。这不包含话题回复或AI上下文跟随验收。
+
+2026-11-14自身AI账户HTTP增量完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit18/host466，总523项，各包分析无问题。父17项profile/账号装配回归与独立静态review通过；producer另跑31项现有账户兼容回归通过。新增账号接口不隐式产生好友、私聊、profile或persona。
+
+2026-11-14插件生命周期并发修复后完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host466，总537项，各包分析无问题。插件14项新增回归与clientkit全测32项通过；独立review确认同ID串用、跨插件回滚、pending取消清理及卸载重入路径已修复。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
+
+2026-11-14设备ACK认证路由最终callback版本完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host472，共543项，各包分析无问题。默认宿主与依赖重排24项通过，新增SQLite边界4项验证真实轮转/撤销、principal错配、拒绝无写入、缺策略及重开持久化；独立review未确认剩余Important。此为服务端游标传输子集，不是双端未读UI或完整AC-18验收。
+
+2026-11-14消息撤回切片最终版完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host483，共554项，各包分析无问题。撤回契约覆盖内存/SQLite（含正文恰为撤回占位的两实现一致性）；HTTP真实SQLite覆盖他人403、非成员/未知404、匿名401、恰好24h成功、24h+1s失败、内存Clock边界、审计失败不返回500。独立review确认的Important（内存按正文判定撤回状态）先RED后修。撤回与审计为两次写入，审计失败不回滚，是已知限制；编辑/定时/闪照/搜索/附件及客户端入口未完成。
+
+2026-11-14消息编辑留痕切片完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host488，共559项，各包分析无问题。覆盖仅发送者编辑、撤回后拒绝、越权403/非成员未知404/匿名401/畸形400、旧正文AAD加密不含明文、审计仅editId、管理员读旧版与成员403。无客户端"已编辑"UI与重新生成。
 
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
