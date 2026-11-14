@@ -12,6 +12,7 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../audit/audit_log.dart';
 import 'message_store.dart';
+import 'reactions.dart';
 import 'scheduled.dart';
 
 /// 会话成员校验。未登记真实策略时拒绝读取和发送。
@@ -39,14 +40,17 @@ class MessagesModule extends HostModule {
     MessageStore? store,
     Authenticator? authenticate,
     ScheduledMessageService? scheduled,
+    ReactionsService? reactions,
     this.clock = const SystemClock(),
   }) : _store = store ?? InMemoryMessageStore(),
        _authenticate = authenticate,
-       _scheduled = scheduled;
+       _scheduled = scheduled,
+       _reactions = reactions;
 
   final MessageStore _store;
   final Authenticator? _authenticate;
   final ScheduledMessageService? _scheduled;
+  final ReactionsService? _reactions;
   final Clock clock;
   late HostServices _services;
   Timer? _deliveryTimer;
@@ -90,8 +94,86 @@ class MessagesModule extends HostModule {
     router.get(Routes.messageEdits, _editHistory, access: Access.admin);
     router.post(Routes.scheduledMessages, _schedule);
     router.delete(Routes.scheduledMessage, _cancelScheduled);
+    router.post(Routes.messageReactions, _react);
+    router.get(Routes.messageReactions, _reactionsList);
     router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
+  }
+
+  Future<HostResponse> _react(HostRequest request) async {
+    final reactions = _reactions;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (reactions == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'reactions unavailable'),
+      );
+    }
+    if (!await _members.canPost(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final body = request.jsonObject();
+    if (body is Err<Map<String, Object?>> || body.value['emoji'] is! String) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad body'),
+      );
+    }
+    final result = await reactions.toggle(
+      conversationId: conversationId,
+      messageId: messageId,
+      accountId: principal.accountId,
+      emoji: body.value['emoji']! as String,
+    );
+    return HostResponse.fromResult(result);
+  }
+
+  Future<HostResponse> _reactionsList(HostRequest request) async {
+    final reactions = _reactions;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (reactions == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'reactions unavailable'),
+      );
+    }
+    if (!await _members.canRead(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final result = await reactions.list(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+    return HostResponse.fromResult(
+      result,
+      (items) => {
+        'reactions': [
+          for (final item in items)
+            {'accountId': item['accountId'], 'emoji': item['emoji']},
+        ],
+      },
+    );
   }
 
   Future<HostResponse> _schedule(HostRequest request) async {
