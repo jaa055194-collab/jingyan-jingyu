@@ -64,4 +64,14 @@ CREATE TABLE message_reactions (
 );
 CREATE INDEX idx_message_reactions_message ON message_reactions(message_id);
 '''),
+  Migration(209, 'message pins', '''
+CREATE TABLE message_pins (
+  conversation_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  pinned_at TEXT NOT NULL,
+  PRIMARY KEY(conversation_id, message_id)
+);
+CREATE INDEX idx_message_pins_conversation ON message_pins(conversation_id);
+'''),
 ];

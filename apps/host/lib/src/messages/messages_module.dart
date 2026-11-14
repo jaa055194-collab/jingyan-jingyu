@@ -12,6 +12,7 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../audit/audit_log.dart';
 import 'message_store.dart';
+import 'pins.dart';
 import 'reactions.dart';
 import 'scheduled.dart';
 import 'search.dart';
@@ -43,18 +44,21 @@ class MessagesModule extends HostModule {
     ScheduledMessageService? scheduled,
     ReactionsService? reactions,
     MessageSearchService? search,
+    PinsService? pins,
     this.clock = const SystemClock(),
   }) : _store = store ?? InMemoryMessageStore(),
        _authenticate = authenticate,
        _scheduled = scheduled,
        _reactions = reactions,
-       _searchService = search;
+       _searchService = search,
+       _pins = pins;
 
   final MessageStore _store;
   final Authenticator? _authenticate;
   final ScheduledMessageService? _scheduled;
   final ReactionsService? _reactions;
   final MessageSearchService? _searchService;
+  final PinsService? _pins;
   final Clock clock;
   late HostServices _services;
   Timer? _deliveryTimer;
@@ -101,8 +105,97 @@ class MessagesModule extends HostModule {
     router.post(Routes.messageReactions, _react);
     router.get(Routes.messageReactions, _reactionsList);
     router.get(Routes.search, _search);
+    router.post(Routes.messagePin, _pin);
+    router.delete(Routes.messagePin, _unpin);
+    router.get(Routes.conversationPins, _pinsList);
     router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
+  }
+
+  Future<HostResponse> _pin(HostRequest request) async {
+    final pins = _pins;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (pins == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'pins unavailable'),
+      );
+    }
+    if (!await _members.canPost(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final result = await pins.pin(
+      conversationId: conversationId,
+      messageId: messageId,
+      accountId: principal.accountId,
+    );
+    return HostResponse.fromResult(result);
+  }
+
+  Future<HostResponse> _unpin(HostRequest request) async {
+    final pins = _pins;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (pins == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'pins unavailable'),
+      );
+    }
+    if (!await _members.canPost(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final result = await pins.unpin(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+    return HostResponse.fromResult(result, (_) => {'pinned': false});
+  }
+
+  Future<HostResponse> _pinsList(HostRequest request) async {
+    final pins = _pins;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (pins == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'pins unavailable'),
+      );
+    }
+    if (!await _members.canRead(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final result = await pins.list(conversationId: conversationId);
+    return HostResponse.fromResult(result, (items) => {'pins': items});
   }
 
   Future<HostResponse> _search(HostRequest request) async {
