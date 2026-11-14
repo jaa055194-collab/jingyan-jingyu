@@ -64,6 +64,12 @@ abstract final class Routes {
   static const String groupAiMute =
       '$prefix/conversations/{conversationId}/ai/{accountId}/mute';
 
+  /// Topic metadata references existing group messages; these are not send routes.
+  static const String groupTopics =
+      '$prefix/conversations/{conversationId}/topics';
+  static const String topic = '$prefix/topics/{topicId}';
+  static const String topicReferences = '$prefix/topics/{topicId}/references';
+
   /// 会话内消息：`/conversations/{conversationId}/messages`。
   static const String messages =
       '$prefix/conversations/{conversationId}/messages';
