@@ -41,6 +41,8 @@
 | REQ-032 | FR-17 / M03 / AC-20 | 全局消息搜索按可见范围过滤 | 已授权局部 | 仅返回调用者可读会话且不早于入群历史的命中；支持senderId/kind/from/to/limit；匿名401、缺q/坏limit/kind/from 400 | messages/search.dart、MessagesModule._search、Routes.search | message_search_test真实SQLite 3项（跨会话隔离/joined历史/参数拒绝），先RED后GREEN；全仓571项与各包analysis通过 | 服务端有界扫描；非FTS5性能实现，无收藏/文件/动态搜索与客户端 |
 | REQ-028 | FR-15 / M03 / AC-19(撤回) | 消息撤回：24h、留审计、无正文 | 已授权局部 | 仅发送者24h内可撤回；成功后同步只回占位、seq不变；审计无正文；他人/非成员/未知/超时/重复拒绝且数据不变 | messages/message_store.recall、sqlite迁移205、MessagesModule._recall、Routes.messageRecall | 契约(内存+SQLite，含正文为撤回占位的两实现一致性)与message_recall_test真实SQLite/Audit/FakeClock 7项 | 服务端撤回子能力；闪照/搜索/附件与客户端入口未完成 |
 
+| REQ-035 | FR-16/17 / AC-20 / 收藏与文件等搜索授权 | 本人收藏基础与收藏搜索 | 已授权局部 | 收藏仅本人可列/搜/删；消息引用按当前成员/历史/撤回状态决定可见性；无正文快照；标题内容加密；type=favorite独立分流；坏输入400/密文损坏500 | FavoritesService、Migration211、MessagesModule收藏与搜索路由 | favorites_test 9项真实SQLite回归；search/assembly合跑14项；最终全仓585项（host514）与所有包analysis通过，独立复审无剩余Important | 自填文本/链接/文件元数据及消息引用子集；未实现真实附件内容、A客户端FTS、收藏盲索引与十分钟物理清理 |
+
 ## 验证口径
 
 2026-11-13在当前增量上，31项新持久消息/群权限/HTTP/迁移测试主代理及独立审查均通过；全仓 `tool/check.ps1` 输出 `ALL CHECKS PASSED`：core 20、protocol 9、host_kit 10、client_kit 18、host 144，所有分析无问题。其后仅新增默认host的joined群端到端回归；`host_test.dart` 19项全部通过，最终host分析无问题。该回归验证真实登录后创建群、管理员非成员404、owner添加成员、服务器只返回入群后消息、列表可见。总计当前覆盖的各包测试为202项（全仓201项 + 后加的host回归1项），不是202条产品需求验收。旧工作树结果不作为未来提交通过证据。
@@ -74,5 +76,7 @@
 2026-11-14消息搜索切片完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host500，共571项，各包分析无问题。覆盖跨会话可见性隔离、joined历史不下发、发送者/类型过滤、匿名与畸形参数拒绝；实现为加密正文的有界扫描，不是FTS5。
 
 2026-11-14消息置顶与搜索加密盲索引切片完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host505，共576项，各包分析无问题。盲索引Token仅HMAC、密钥列加密；搜索命中mode=blind并可退化为scan；置顶上限50且幂等。
+
+收藏与收藏搜索最终工作树完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host514，共585项，所有包分析无问题。9项收藏SQLite回归验证搜索分流、owner隔离、当前来源权限/历史边界、来源编辑/撤回/退群、标题与内容加密、缺策略零解密、坏输入零写入、损坏密文安全错误与空标题误命中；独立只读复审无剩余Important。本证据仅覆盖收藏基础及type=favorite搜索，不计文件内容提取、本地FTS或完整AC-20验收。
 
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
