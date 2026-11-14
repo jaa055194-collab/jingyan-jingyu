@@ -263,4 +263,123 @@ WHERE conversation_id = ? AND message_id = ?
     );
     return const Ok(null);
   });
+
+  @override
+  Future<Result<EditResult>> edit({
+    required String conversationId,
+    required String messageId,
+    required String senderId,
+    required Map<String, Object?> body,
+  }) => _database.transaction((tx) async {
+    final rows = await tx.query(
+      'SELECT * FROM messages WHERE conversation_id = ? AND message_id = ?',
+      [conversationId, messageId],
+    );
+    if (rows.isEmpty) return err(FailureCode.notFound, 'message not found');
+    final row = rows.single;
+    if (row['sender_id'] != senderId) {
+      return err(FailureCode.forbidden, 'only the sender can edit');
+    }
+    if (row['recalled_at'] != null) {
+      return err(
+        FailureCode.invalidArgument,
+        'recalled message cannot be edited',
+      );
+    }
+    final String encoded;
+    try {
+      encoded = jsonEncode(body);
+    } on JsonUnsupportedObjectError {
+      return err<EditResult>(
+        FailureCode.invalidArgument,
+        'Body must be a JSON object',
+      );
+    }
+    final previous = _read(row);
+    if (previous.isErr) return Err<EditResult>(previous.failureOrNull!);
+    final editId = _newId();
+    final editedAt = clock.now().toUtc();
+    await tx.execute(
+      '''
+INSERT INTO message_edits(edit_id, message_id, conversation_id, editor_id, body, edited_at)
+VALUES (?, ?, ?, ?, ?, ?)
+''',
+      [
+        editId,
+        messageId,
+        conversationId,
+        senderId,
+        _cipher.encrypt(
+          jsonEncode(previous.value.body),
+          aad: 'message_edits:body:$editId',
+        ),
+        editedAt.toIso8601String(),
+      ],
+    );
+    await tx.execute(
+      'UPDATE messages SET body = ? WHERE conversation_id = ? AND message_id = ?',
+      [
+        _cipher.encrypt(encoded, aad: 'messages:body:$messageId'),
+        conversationId,
+        messageId,
+      ],
+    );
+    final updated = StoredMessage(
+      conversationId: previous.value.conversationId,
+      seq: previous.value.seq,
+      messageId: previous.value.messageId,
+      senderId: previous.value.senderId,
+      clientMsgId: previous.value.clientMsgId,
+      kind: previous.value.kind,
+      body: Map<String, Object?>.unmodifiable(
+        jsonDecode(encoded) as Map<String, dynamic>,
+      ),
+      sentAt: previous.value.sentAt,
+    );
+    return Ok(EditResult(updated, editId));
+  });
+
+  @override
+  Future<Result<List<EditVersion>>> editHistory({
+    required String conversationId,
+    required String messageId,
+  }) async {
+    final rows = await _database.query(
+      '''
+SELECT edit_id, message_id, editor_id, body, edited_at FROM message_edits
+WHERE conversation_id = ? AND message_id = ?
+ORDER BY edited_at, edit_id
+''',
+      [conversationId, messageId],
+    );
+    final versions = <EditVersion>[];
+    for (final row in rows) {
+      final editId = row['edit_id'] as String;
+      final decoded = _cipher.decrypt(
+        row['body'] as String,
+        aad: 'message_edits:body:$editId',
+      );
+      if (decoded.isErr) {
+        return err(FailureCode.internal, 'Stored edit body cannot be decoded');
+      }
+      try {
+        final body = jsonDecode(decoded.value);
+        if (body is! Map<String, dynamic>) {
+          return err(FailureCode.internal, 'Stored edit body is not an object');
+        }
+        versions.add(
+          EditVersion(
+            editId: editId,
+            messageId: row['message_id'] as String,
+            editorId: row['editor_id'] as String,
+            body: Map<String, Object?>.unmodifiable(body),
+            editedAt: DateTime.parse(row['edited_at'] as String).toUtc(),
+          ),
+        );
+      } on FormatException {
+        return err(FailureCode.internal, 'Stored edit encoding is invalid');
+      }
+    }
+    return Ok(List<EditVersion>.unmodifiable(versions));
+  }
 }

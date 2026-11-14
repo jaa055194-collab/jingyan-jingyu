@@ -162,5 +162,46 @@ void messageStoreContract(String label, MessageStore Function() create) {
         reason: '正文内容不能被当作撤回状态',
       );
     });
+
+    test('编辑自己的消息：旧版本进入历史且可读，非发送者与撤回后编辑失败', () async {
+      final sent = await send('c1', 'u1', 'edit-1', '原正文');
+      final id = sent.message.messageId;
+      final edited = await store.edit(
+        conversationId: 'c1',
+        messageId: id,
+        senderId: 'u1',
+        body: {'text': '新正文'},
+      );
+      expect(edited.isOk, isTrue);
+      final current = (await store.since(
+        conversationId: 'c1',
+        afterSeq: 0,
+      )).value.messages.singleWhere((m) => m.messageId == id);
+      expect(current.body['text'], '新正文');
+      final history = (await store.editHistory(
+        conversationId: 'c1',
+        messageId: id,
+      )).value;
+      expect(history.single.body['text'], '原正文');
+      expect(
+        (await store.edit(
+          conversationId: 'c1',
+          messageId: id,
+          senderId: 'u2',
+          body: {'text': '越权'},
+        )).isErr,
+        isTrue,
+      );
+      await store.recall(conversationId: 'c1', messageId: id, senderId: 'u1');
+      expect(
+        (await store.edit(
+          conversationId: 'c1',
+          messageId: id,
+          senderId: 'u1',
+          body: {'text': '撤回后编辑'},
+        )).isErr,
+        isTrue,
+      );
+    });
   });
 }

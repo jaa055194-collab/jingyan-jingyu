@@ -4,6 +4,8 @@
 /// `test/message_store_contract.dart`，见 docs/modules/M03-messages.md。
 library;
 
+import 'dart:convert';
+
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
@@ -57,6 +59,31 @@ class SyncPage {
   final bool hasMore;
 }
 
+/// 一条编辑历史版本（旧正文加密存储）。
+class EditVersion {
+  const EditVersion({
+    required this.editId,
+    required this.messageId,
+    required this.editorId,
+    required this.body,
+    required this.editedAt,
+  });
+
+  final String editId;
+  final String messageId;
+  final String editorId;
+  final Map<String, Object?> body;
+  final DateTime editedAt;
+}
+
+/// 编辑结果：新消息与本次产生的旧版本 id（审计只存该 id）。
+class EditResult {
+  const EditResult(this.message, this.editId);
+
+  final StoredMessage message;
+  final String editId;
+}
+
 /// 消息存储契约。
 abstract class MessageStore {
   /// 追加消息。同一 (conversationId, senderId, clientMsgId) 只写一次。
@@ -92,6 +119,20 @@ abstract class MessageStore {
     required String messageId,
     required String senderId,
   });
+
+  /// 编辑自己的未撤回消息：旧正文写入加密编辑历史，返回新消息与旧版本 id。
+  Future<Result<EditResult>> edit({
+    required String conversationId,
+    required String messageId,
+    required String senderId,
+    required Map<String, Object?> body,
+  });
+
+  /// 读取某消息的编辑历史（仅供管理员路由使用）。
+  Future<Result<List<EditVersion>>> editHistory({
+    required String conversationId,
+    required String messageId,
+  });
 }
 
 /// 内存实现。
@@ -108,6 +149,7 @@ class InMemoryMessageStore implements MessageStore {
   final Map<String, StoredMessage> _byIdempotencyKey = {};
   final Map<String, int> _acks = {};
   final Set<String> _recalled = {};
+  final Map<String, List<EditVersion>> _edits = {};
 
   static String Function() _counterIds() {
     var n = 0;
@@ -219,4 +261,69 @@ class InMemoryMessageStore implements MessageStore {
         tombstone;
     return const Ok(null);
   }
+
+  @override
+  Future<Result<EditResult>> edit({
+    required String conversationId,
+    required String messageId,
+    required String senderId,
+    required Map<String, Object?> body,
+  }) async {
+    final list = _byConversation[conversationId];
+    final index = list == null
+        ? -1
+        : list.indexWhere((m) => m.messageId == messageId);
+    if (index < 0) return err(FailureCode.notFound, 'message not found');
+    final message = list![index];
+    if (message.senderId != senderId) {
+      return err(FailureCode.forbidden, 'only the sender can edit');
+    }
+    if (_recalled.contains(messageId)) {
+      return err(
+        FailureCode.invalidArgument,
+        'recalled message cannot be edited',
+      );
+    }
+    final String encoded;
+    try {
+      encoded = jsonEncode(body);
+    } on JsonUnsupportedObjectError {
+      return err(FailureCode.invalidArgument, 'Body must be a JSON object');
+    }
+    final editId = _newId();
+    final editedAt = clock.now().toUtc();
+    _edits
+        .putIfAbsent(messageId, () => [])
+        .add(
+          EditVersion(
+            editId: editId,
+            messageId: messageId,
+            editorId: senderId,
+            body: message.body,
+            editedAt: editedAt,
+          ),
+        );
+    final updated = StoredMessage(
+      conversationId: message.conversationId,
+      seq: message.seq,
+      messageId: message.messageId,
+      senderId: message.senderId,
+      clientMsgId: message.clientMsgId,
+      kind: message.kind,
+      body: Map<String, Object?>.unmodifiable(
+        jsonDecode(encoded) as Map<String, dynamic>,
+      ),
+      sentAt: message.sentAt,
+    );
+    list[index] = updated;
+    _byIdempotencyKey['$conversationId|$senderId|${message.clientMsgId}'] =
+        updated;
+    return Ok(EditResult(updated, editId));
+  }
+
+  @override
+  Future<Result<List<EditVersion>>> editHistory({
+    required String conversationId,
+    required String messageId,
+  }) async => Ok(List<EditVersion>.unmodifiable(_edits[messageId] ?? const []));
 }

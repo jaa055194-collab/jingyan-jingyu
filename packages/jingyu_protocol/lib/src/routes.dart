@@ -80,6 +80,14 @@ abstract final class Routes {
   /// Per-device message acknowledgement for one conversation.
   static const String messageAck = '$prefix/conversations/{conversationId}/ack';
 
+  /// Edit one of the caller's own messages; keeps encrypted prior versions.
+  static const String messageEdit =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/edit';
+
+  /// Admin-only read of encrypted prior versions.
+  static const String messageEdits =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/edits';
+
   /// Recall one of the caller's own recent messages.
   static const String messageRecall =
       '$prefix/conversations/{conversationId}/messages/{messageId}/recall';
