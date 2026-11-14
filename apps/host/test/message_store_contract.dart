@@ -203,5 +203,30 @@ void messageStoreContract(String label, MessageStore Function() create) {
         isTrue,
       );
     });
+
+    test('编辑历史按插入顺序返回且受会话过滤（两实现一致）', () async {
+      final sent = await send('c1', 'u1', 'hist-1', 'v1');
+      final id = sent.message.messageId;
+      for (final text in ['v2', 'v3']) {
+        expect(
+          (await store.edit(
+            conversationId: 'c1',
+            messageId: id,
+            senderId: 'u1',
+            body: {'text': text},
+          )).isOk,
+          isTrue,
+        );
+      }
+      final history = (await store.editHistory(
+        conversationId: 'c1',
+        messageId: id,
+      )).value;
+      expect(history.map((v) => v.body['text']), ['v1', 'v2']);
+      expect(
+        (await store.editHistory(conversationId: 'c2', messageId: id)).value,
+        isEmpty,
+      );
+    });
   });
 }
