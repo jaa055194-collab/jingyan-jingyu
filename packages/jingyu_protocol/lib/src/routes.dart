@@ -76,6 +76,10 @@ abstract final class Routes {
   /// 全局消息搜索（服务端按可见性过滤）。
   static const String search = '$prefix/search';
 
+  /// 收藏夹（本人私有）。
+  static const String favorites = '$prefix/favorites';
+  static const String favorite = '$prefix/favorites/{favoriteId}';
+
   /// 会话内消息：`/conversations/{conversationId}/messages`。
   static const String messages =
       '$prefix/conversations/{conversationId}/messages';
