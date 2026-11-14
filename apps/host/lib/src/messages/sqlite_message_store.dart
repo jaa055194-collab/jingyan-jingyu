@@ -219,4 +219,48 @@ SELECT seq FROM message_acks WHERE conversation_id = ? AND device_id = ?
   @override
   Future<int> headSeq(String conversationId) =>
       _database.transaction((tx) => headSeqInTransaction(tx, conversationId));
+
+  @override
+  Future<Result<void>> recall({
+    required String conversationId,
+    required String messageId,
+    required String senderId,
+  }) => _database.transaction((tx) async {
+    final rows = await tx.query(
+      '''
+SELECT sender_id, sent_at, recalled_at FROM messages
+WHERE conversation_id = ? AND message_id = ?
+''',
+      [conversationId, messageId],
+    );
+    if (rows.isEmpty) return err(FailureCode.notFound, 'message not found');
+    final row = rows.single;
+    if (row['sender_id'] != senderId) {
+      return err(FailureCode.forbidden, 'only the sender can recall');
+    }
+    if (row['recalled_at'] != null) {
+      return err(FailureCode.invalidArgument, 'already recalled');
+    }
+    final sentAt = DateTime.parse(row['sent_at'] as String).toUtc();
+    if (clock.now().toUtc().difference(sentAt) > const Duration(hours: 24)) {
+      return err(FailureCode.forbidden, 'recall window expired');
+    }
+    final sealed = _cipher.encrypt(
+      jsonEncode({'recalled': true}),
+      aad: 'messages:body:$messageId',
+    );
+    await tx.execute(
+      '''
+UPDATE messages SET body = ?, recalled_at = ?
+WHERE conversation_id = ? AND message_id = ?
+''',
+      [
+        sealed,
+        clock.now().toUtc().toIso8601String(),
+        conversationId,
+        messageId,
+      ],
+    );
+    return const Ok(null);
+  });
 }

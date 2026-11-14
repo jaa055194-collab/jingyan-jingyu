@@ -31,14 +31,14 @@ class StoredMessage {
 
   /// 下发给客户端的载荷（与 MessageEventFrame.payload 同构）。
   Map<String, Object?> toPayload() => {
-        'conversationId': conversationId,
-        'seq': seq,
-        'messageId': messageId,
-        'senderId': senderId,
-        'kind': kind.wire,
-        'body': body,
-        'sentAt': sentAt.toUtc().toIso8601String(),
-      };
+    'conversationId': conversationId,
+    'seq': seq,
+    'messageId': messageId,
+    'senderId': senderId,
+    'kind': kind.wire,
+    'body': body,
+    'sentAt': sentAt.toUtc().toIso8601String(),
+  };
 }
 
 /// 追加结果：[duplicate] 为 true 表示命中幂等，返回的是首次写入的那条。
@@ -84,12 +84,22 @@ abstract class MessageStore {
 
   /// 会话当前最大 seq。
   Future<int> headSeq(String conversationId);
+
+  /// 撤回自己的消息：仅发送者、24 小时内、未撤回时成功。
+  /// 成功后正文替换为 `{"recalled": true}` 占位，seq 保持不变（留痕与分页稳定）。
+  Future<Result<void>> recall({
+    required String conversationId,
+    required String messageId,
+    required String senderId,
+  });
 }
 
 /// 内存实现。
 class InMemoryMessageStore implements MessageStore {
-  InMemoryMessageStore({this.clock = const SystemClock(), String Function()? newId})
-      : _newId = newId ?? _counterIds();
+  InMemoryMessageStore({
+    this.clock = const SystemClock(),
+    String Function()? newId,
+  }) : _newId = newId ?? _counterIds();
 
   final Clock clock;
   final String Function() _newId;
@@ -97,6 +107,7 @@ class InMemoryMessageStore implements MessageStore {
   final Map<String, List<StoredMessage>> _byConversation = {};
   final Map<String, StoredMessage> _byIdempotencyKey = {};
   final Map<String, int> _acks = {};
+  final Set<String> _recalled = {};
 
   static String Function() _counterIds() {
     var n = 0;
@@ -141,10 +152,14 @@ class InMemoryMessageStore implements MessageStore {
     int limit = 200,
   }) async {
     if (afterSeq < 0) return err(FailureCode.invalidArgument, 'afterSeq 不能为负');
-    if (limit <= 0 || limit > 1000) return err(FailureCode.invalidArgument, 'limit 必须在 1–1000');
+    if (limit <= 0 || limit > 1000) {
+      return err(FailureCode.invalidArgument, 'limit 必须在 1–1000');
+    }
     final list = _byConversation[conversationId] ?? const <StoredMessage>[];
     final tail = list.where((m) => m.seq > afterSeq).toList();
-    return Ok(SyncPage(tail.take(limit).toList(), hasMore: tail.length > limit));
+    return Ok(
+      SyncPage(tail.take(limit).toList(), hasMore: tail.length > limit),
+    );
   }
 
   @override
@@ -165,4 +180,43 @@ class InMemoryMessageStore implements MessageStore {
   @override
   Future<int> headSeq(String conversationId) async =>
       _byConversation[conversationId]?.length ?? 0;
+
+  @override
+  Future<Result<void>> recall({
+    required String conversationId,
+    required String messageId,
+    required String senderId,
+  }) async {
+    final list = _byConversation[conversationId];
+    final index = list == null
+        ? -1
+        : list.indexWhere((m) => m.messageId == messageId);
+    if (index < 0) return err(FailureCode.notFound, 'message not found');
+    final message = list![index];
+    if (message.senderId != senderId) {
+      return err(FailureCode.forbidden, 'only the sender can recall');
+    }
+    if (clock.now().toUtc().difference(message.sentAt) >
+        const Duration(hours: 24)) {
+      return err(FailureCode.forbidden, 'recall window expired');
+    }
+    if (_recalled.contains(messageId)) {
+      return err(FailureCode.invalidArgument, 'already recalled');
+    }
+    final tombstone = StoredMessage(
+      conversationId: message.conversationId,
+      seq: message.seq,
+      messageId: message.messageId,
+      senderId: message.senderId,
+      clientMsgId: message.clientMsgId,
+      kind: message.kind,
+      body: Map<String, Object?>.unmodifiable({'recalled': true}),
+      sentAt: message.sentAt,
+    );
+    list[index] = tombstone;
+    _recalled.add(messageId);
+    _byIdempotencyKey['$conversationId|$senderId|${message.clientMsgId}'] =
+        tombstone;
+    return const Ok(null);
+  }
 }

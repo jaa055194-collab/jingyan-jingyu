@@ -33,6 +33,8 @@
 
 | REQ-027 | FR-38/39/60 / plugin lifecycle contract | 并发安全的插件隔离与卸载 | 已授权 | pending ID唯一、贡献按实例原子发布、失败隔离、卸载立即撤销并清理取消激活、清理重入无死锁 | PluginHost / PluginRegistrar / PluginContext | 14个Completer/Stream订阅回归先RED后GREEN，最新clientkit32、全仓检查及独立复审通过 | 激活永不settle时资源清理不能强制完成；不构成恶意原生Dart插件沙箱 |
 
+| REQ-028 | FR-15 / M03 / AC-19(撤回) | 消息撤回：24h、留审计、无正文 | 已授权局部 | 仅发送者24h内可撤回；成功后同步只回占位、seq不变；审计无正文；他人/非成员/未知/超时/重复拒绝且数据不变 | messages/message_store.recall、sqlite迁移205、MessagesModule._recall、Routes.messageRecall | 契约(内存+SQLite，含正文为撤回占位的两实现一致性)与message_recall_test真实SQLite/Audit/FakeClock 7项；全仓554项与各包analysis通过 | 服务端撤回子能力；编辑/定时/闪照/搜索/附件与客户端入口未完成 |
+
 ## 验证口径
 
 2026-11-13在当前增量上，31项新持久消息/群权限/HTTP/迁移测试主代理及独立审查均通过；全仓 `tool/check.ps1` 输出 `ALL CHECKS PASSED`：core 20、protocol 9、host_kit 10、client_kit 18、host 144，所有分析无问题。其后仅新增默认host的joined群端到端回归；`host_test.dart` 19项全部通过，最终host分析无问题。该回归验证真实登录后创建群、管理员非成员404、owner添加成员、服务器只返回入群后消息、列表可见。总计当前覆盖的各包测试为202项（全仓201项 + 后加的host回归1项），不是202条产品需求验收。旧工作树结果不作为未来提交通过证据。
@@ -52,5 +54,7 @@
 2026-11-14插件生命周期并发修复后完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host466，总537项，各包分析无问题。插件14项新增回归与clientkit全测32项通过；独立review确认同ID串用、跨插件回滚、pending取消清理及卸载重入路径已修复。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
 
 2026-11-14设备ACK认证路由最终callback版本完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host472，共543项，各包分析无问题。默认宿主与依赖重排24项通过，新增SQLite边界4项验证真实轮转/撤销、principal错配、拒绝无写入、缺策略及重开持久化；独立review未确认剩余Important。此为服务端游标传输子集，不是双端未读UI或完整AC-18验收。
+
+2026-11-14消息撤回切片最终版完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host483，共554项，各包分析无问题。撤回契约覆盖内存/SQLite（含正文恰为撤回占位的两实现一致性）；HTTP真实SQLite覆盖他人403、非成员/未知404、匿名401、恰好24h成功、24h+1s失败、内存Clock边界、审计失败不返回500。独立review确认的Important（内存按正文判定撤回状态）先RED后修。撤回与审计为两次写入，审计失败不回滚，是已知限制；编辑/定时/闪照/搜索/附件及客户端入口未完成。
 
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
