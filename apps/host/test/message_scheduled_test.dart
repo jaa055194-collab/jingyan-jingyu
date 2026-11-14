@@ -340,4 +340,25 @@ void main() {
       expect(await syncMessages(group, refreshed.accessToken), isEmpty);
     },
   );
+
+  test(
+    'sub-second deliverAt is not delivered early (no ISO text ordering)',
+    () async {
+      final group = await createGroup();
+      final base = clock.now();
+      final deliverAt = base.add(
+        const Duration(milliseconds: 500, microseconds: 123),
+      );
+      final created = await scheduleText(group, '亚秒', deliverAt);
+      expect(created.status, 200);
+
+      expect(await scheduled.deliverDue(now: base), 0);
+      expect(
+        await scheduled.deliverDue(
+          now: base.add(const Duration(milliseconds: 600)),
+        ),
+        1,
+      );
+    },
+  );
 }
