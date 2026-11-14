@@ -34,7 +34,8 @@
 | REQ-027 | FR-38/39/60 / plugin lifecycle contract | 并发安全的插件隔离与卸载 | 已授权 | pending ID唯一、贡献按实例原子发布、失败隔离、卸载立即撤销并清理取消激活、清理重入无死锁 | PluginHost / PluginRegistrar / PluginContext | 14个Completer/Stream订阅回归先RED后GREEN，最新clientkit32、全仓检查及独立复审通过 | 激活永不settle时资源清理不能强制完成；不构成恶意原生Dart插件沙箱 |
 
 | REQ-029 | FR-15 / M03 / AC-19(编辑留痕) | 消息编辑与旧版本留痕 | 已授权局部 | 仅发送者编辑未撤回消息；旧正文加密入message_edits；当前正文更新；审计只记edit_id；旧版仅管理员路由可读，普通成员403 | messages/edit、迁移206、MessagesModule._edit(admin _editHistory)、Routes.messageEdit(s) | 契约(内存+SQLite)编辑历史一致性与message_edit_test真实SQLite/Audit 3项，先RED后GREEN；复审修复会话作用域与插入顺序后host490/全仓561通过 | 服务端编辑子能力；无客户端标记"已编辑"UI，无重新生成 |
-| REQ-028 | FR-15 / M03 / AC-19(撤回) | 消息撤回：24h、留审计、无正文 | 已授权局部 | 仅发送者24h内可撤回；成功后同步只回占位、seq不变；审计无正文；他人/非成员/未知/超时/重复拒绝且数据不变 | messages/message_store.recall、sqlite迁移205、MessagesModule._recall、Routes.messageRecall | 契约(内存+SQLite，含正文为撤回占位的两实现一致性)与message_recall_test真实SQLite/Audit/FakeClock 7项；全仓待最终复跑 | 服务端撤回子能力；定时/闪照/搜索/附件与客户端入口未完成 |
+| REQ-030 | FR-20 / M03 / AC-19(定时) / B-4 | 定时消息入库、到点投递、取消 | 已授权局部 | deliverAt必须未来；仅成员可建；仅发送者可取消；到点追加一次；>24h未投标记expired不补发 | messages/scheduled.dart、迁移207、MessagesModule 调度路由+30s timer | message_scheduled_test真实SQLite/FakeClock 4项（投递一次/取消/拒绝/过期），先RED后GREEN；全仓565项与各包analysis通过 | 服务端定时能力；无客户端入口、无“未发出”通知通道 |
+| REQ-028 | FR-15 / M03 / AC-19(撤回) | 消息撤回：24h、留审计、无正文 | 已授权局部 | 仅发送者24h内可撤回；成功后同步只回占位、seq不变；审计无正文；他人/非成员/未知/超时/重复拒绝且数据不变 | messages/message_store.recall、sqlite迁移205、MessagesModule._recall、Routes.messageRecall | 契约(内存+SQLite，含正文为撤回占位的两实现一致性)与message_recall_test真实SQLite/Audit/FakeClock 7项 | 服务端撤回子能力；闪照/搜索/附件与客户端入口未完成 |
 
 ## 验证口径
 
@@ -61,5 +62,7 @@
 2026-11-14消息编辑留痕切片完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host488，共559项，各包分析无问题。覆盖仅发送者编辑、撤回后拒绝、越权403/非成员未知404/匿名401/畸形400、旧正文AAD加密不含明文、审计仅editId、管理员读旧版与成员403。无客户端"已编辑"UI与重新生成。
 
 2026-11-14编辑历史复审修复后完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host490，共561项，各包分析无问题。修复点：内存`editHistory`按会话过滤、SQLite按`rowid`插入顺序返回；契约新增多次编辑顺序与错误会话空结果用例。
+
+2026-11-14定时消息切片完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host494，共565项，各包分析无问题。覆盖未来时间校验、成员/发送者权限、到点投递一次、取消、>24h过期不投递。前一次全仓出现guarded_http真实TLS时序flake，单独复跑13/13通过、重跑全仓通过。无客户端入口与“未发出”通知。
 
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
