@@ -58,6 +58,8 @@ abstract final class Routes {
       '$prefix/conversations/{conversationId}/leave';
   static const String groupMember =
       '$prefix/conversations/{conversationId}/members/{accountId}';
+  static const String groupAnnouncement =
+      '$prefix/conversations/{conversationId}/announcement';
   static const String groupAiWithdraw =
       '$prefix/conversations/{conversationId}/ai/{accountId}/withdraw';
   static const String groupAiSettings =
@@ -120,6 +122,20 @@ abstract final class Routes {
 
   /// 附件上传。
   static const String attachments = '$prefix/attachments';
+
+  /// 分片上传：初始化一次上传会话。
+  static const String attachmentUploads = '$prefix/attachments/uploads';
+
+  /// 上传一个分片；[index] 从 0 起按序递增，支持断点续传。
+  static const String attachmentUploadChunk =
+      '$prefix/attachments/uploads/{uploadId}/chunks/{index}';
+
+  /// 完成上传：校验大小与 sha256，落库并抽取正文。
+  static const String attachmentUploadComplete =
+      '$prefix/attachments/uploads/{uploadId}/complete';
+
+  /// 单个附件元数据（含可选解密正文）。
+  static const String attachment = '$prefix/attachments/{attachmentId}';
 
   /// 记忆管理。
   static const String memories = '$prefix/memories';

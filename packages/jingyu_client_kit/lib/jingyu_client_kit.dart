@@ -5,6 +5,7 @@
 /// 依赖本包，把插件声明的扩展点渲染成界面。
 library;
 
+export 'src/local_search_index.dart';
 export 'src/outbox.dart';
 export 'src/plugin.dart';
 export 'src/plugin_host.dart';

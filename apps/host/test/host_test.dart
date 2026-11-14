@@ -211,6 +211,7 @@ void main() {
         'storage',
         'accounts',
         'messages',
+        'attachments',
         'social',
         'models',
       ]);
