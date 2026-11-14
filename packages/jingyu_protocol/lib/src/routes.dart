@@ -68,6 +68,7 @@ abstract final class Routes {
   /// Group owner adds an existing account after approving membership.
   static const String conversationMembers =
       '$prefix/conversations/{conversationId}/members';
+  static const String groupName = '$prefix/conversations/{conversationId}/name';
   static const String groupOwner =
       '$prefix/conversations/{conversationId}/owner';
   static const String groupLeave =
