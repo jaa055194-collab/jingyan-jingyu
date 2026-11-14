@@ -12,6 +12,7 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../audit/audit_log.dart';
 import 'blind_index.dart';
+import 'favorites.dart';
 import 'message_store.dart';
 import 'pins.dart';
 import 'reactions.dart';
@@ -47,6 +48,7 @@ class MessagesModule extends HostModule {
     MessageSearchService? search,
     PinsService? pins,
     BlindIndexService? blind,
+    FavoritesService? favorites,
     this.clock = const SystemClock(),
   }) : _store = store ?? InMemoryMessageStore(),
        _authenticate = authenticate,
@@ -54,7 +56,8 @@ class MessagesModule extends HostModule {
        _reactions = reactions,
        _searchService = search,
        _pins = pins,
-       _blind = blind;
+       _blind = blind,
+       _favorites = favorites;
 
   final MessageStore _store;
   final Authenticator? _authenticate;
@@ -63,6 +66,7 @@ class MessagesModule extends HostModule {
   final MessageSearchService? _searchService;
   final PinsService? _pins;
   final BlindIndexService? _blind;
+  final FavoritesService? _favorites;
   final Clock clock;
   late HostServices _services;
   Timer? _deliveryTimer;
@@ -109,11 +113,103 @@ class MessagesModule extends HostModule {
     router.post(Routes.messageReactions, _react);
     router.get(Routes.messageReactions, _reactionsList);
     router.get(Routes.search, _search);
+    router.post(Routes.favorites, _addFavorite);
+    router.get(Routes.favorites, _listFavorites);
+    router.delete(Routes.favorite, _removeFavorite);
     router.post(Routes.messagePin, _pin);
     router.delete(Routes.messagePin, _unpin);
     router.get(Routes.conversationPins, _pinsList);
     router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
+  }
+
+  Future<int?> _favoriteVisibility(String owner, String conversationId) async {
+    if (!await _members.canRead(owner, conversationId)) return null;
+    return _services.maybeGet<HistoryMembershipCheck>()?.firstVisibleSeq(
+      owner,
+      conversationId,
+    );
+  }
+
+  Future<HostResponse> _addFavorite(HostRequest request) async {
+    final favorites = _favorites;
+    final principal = request.principal!;
+    if (favorites == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'favorites unavailable'),
+      );
+    }
+    final body = request.jsonObject();
+    if (body is Err<Map<String, Object?>>) {
+      return HostResponse.failure(body.failure);
+    }
+    final json = body.value;
+    final kind = json['kind'];
+    const fields = {'kind', 'messageId', 'conversationId', 'title', 'content'};
+    if (kind is! String ||
+        json.keys.any((key) => !fields.contains(key)) ||
+        json.entries.any(
+          (entry) =>
+              entry.key != 'kind' &&
+              entry.value != null &&
+              entry.value is! String,
+        )) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad kind'),
+      );
+    }
+    final result = await favorites.add(
+      ownerAccountId: principal.accountId,
+      kind: kind,
+      messageId: json['messageId'] is String
+          ? json['messageId'] as String
+          : null,
+      conversationId: json['conversationId'] is String
+          ? json['conversationId'] as String
+          : null,
+      title: json['title'] is String ? json['title'] as String : null,
+      content: json['content'] is String ? json['content'] as String : null,
+      firstVisibleSeq: _favoriteVisibility,
+    );
+    return HostResponse.fromResult(result);
+  }
+
+  Future<HostResponse> _listFavorites(HostRequest request) async {
+    final favorites = _favorites;
+    final principal = request.principal!;
+    if (favorites == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'favorites unavailable'),
+      );
+    }
+    final result = await favorites.list(
+      ownerAccountId: principal.accountId,
+      firstVisibleSeq: _favoriteVisibility,
+    );
+    return HostResponse.fromResult(result, (items) => {'favorites': items});
+  }
+
+  Future<HostResponse> _removeFavorite(HostRequest request) async {
+    final favorites = _favorites;
+    final principal = request.principal!;
+    final favoriteId = request.pathParams['favoriteId']!;
+    try {
+      validateId(favoriteId, kind: 'favorite');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (favorites == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'favorites unavailable'),
+      );
+    }
+    final result = await favorites.remove(
+      ownerAccountId: principal.accountId,
+      favoriteId: favoriteId,
+    );
+    return HostResponse.fromResult(result, (_) => {'removed': true});
   }
 
   Future<HostResponse> _pin(HostRequest request) async {
@@ -203,12 +299,6 @@ class MessagesModule extends HostModule {
   }
 
   Future<HostResponse> _search(HostRequest request) async {
-    final search = _searchService;
-    if (search == null) {
-      return HostResponse.failure(
-        const Failure(FailureCode.internal, 'search unavailable'),
-      );
-    }
     final principal = request.principal!;
     final query = request.query['q'];
     if (query == null || query.trim().isEmpty || query.length > 200) {
@@ -220,6 +310,36 @@ class MessagesModule extends HostModule {
     if (limit == null || limit < 1 || limit > 100) {
       return HostResponse.failure(
         const Failure(FailureCode.invalidArgument, 'bad limit'),
+      );
+    }
+    final type = request.query['type'] ?? 'message';
+    if (type != 'message' && type != 'favorite') {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad type'),
+      );
+    }
+    if (type == 'favorite') {
+      final favorites = _favorites;
+      if (favorites == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.internal, 'favorites unavailable'),
+        );
+      }
+      final result = await favorites.search(
+        ownerAccountId: principal.accountId,
+        query: query,
+        limit: limit,
+        firstVisibleSeq: _favoriteVisibility,
+      );
+      return HostResponse.fromResult(
+        result,
+        (items) => {'type': 'favorite', 'hits': items},
+      );
+    }
+    final search = _searchService;
+    if (search == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'search unavailable'),
       );
     }
     MessageKind? kind;

@@ -87,4 +87,21 @@ CREATE TABLE search_index_key (
   sealed TEXT NOT NULL
 );
 '''),
+  Migration(211, 'favorites', '''
+CREATE TABLE favorites (
+  id TEXT PRIMARY KEY NOT NULL,
+  owner_account_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('text','message','link','file')),
+  message_id TEXT,
+  conversation_id TEXT,
+  title TEXT,
+  content TEXT,
+  created_at TEXT NOT NULL,
+  CHECK(
+    (kind = 'message' AND message_id IS NOT NULL AND conversation_id IS NOT NULL AND content IS NULL)
+    OR (kind != 'message' AND message_id IS NULL AND conversation_id IS NULL AND content IS NOT NULL)
+  )
+);
+CREATE INDEX idx_favorites_owner ON favorites(owner_account_id);
+'''),
 ];
