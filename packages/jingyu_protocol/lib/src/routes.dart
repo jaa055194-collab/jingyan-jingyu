@@ -39,6 +39,30 @@ abstract final class Routes {
 
   /// 会话列表。
   static const String conversations = '$prefix/conversations';
+  static const String directConversations = '$prefix/direct-conversations';
+  static const String friendState = '$prefix/friends/{accountId}';
+  static const String friendRequest = '$prefix/friends/{accountId}/requests';
+  static const String friendAccept = '$prefix/friends/{accountId}/accept';
+  static const String friendDeny = '$prefix/friends/{accountId}/deny';
+  static const String friendBlock = '$prefix/friends/{accountId}/block';
+
+  /// Group owner adds an existing account after approving membership.
+  static const String conversationMembers =
+      '$prefix/conversations/{conversationId}/members';
+  static const String groupOwner =
+      '$prefix/conversations/{conversationId}/owner';
+  static const String groupLeave =
+      '$prefix/conversations/{conversationId}/leave';
+  static const String groupMember =
+      '$prefix/conversations/{conversationId}/members/{accountId}';
+  static const String groupAiWithdraw =
+      '$prefix/conversations/{conversationId}/ai/{accountId}/withdraw';
+  static const String groupAiSettings =
+      '$prefix/conversations/{conversationId}/ai-settings';
+  static const String groupAiInterval =
+      '$prefix/conversations/{conversationId}/ai/{accountId}/interval';
+  static const String groupAiMute =
+      '$prefix/conversations/{conversationId}/ai/{accountId}/mute';
 
   /// 会话内消息：`/conversations/{conversationId}/messages`。
   static const String messages =
@@ -55,6 +79,13 @@ abstract final class Routes {
 
   /// 模型接入配置。
   static const String modelProviders = '$prefix/model-providers';
+  static const String modelProvider = '$prefix/model-providers/{providerId}';
+  static const String aiProfileRegister = '$prefix/ai-profiles/register';
+  static const String aiProfile = '$prefix/ai-profiles/{aiId}';
+  static const String aiBindings = '$prefix/ai-profiles/{aiId}/bindings';
+  static const String aiBinding =
+      '$prefix/ai-profiles/{aiId}/bindings/{capability}';
+  static const String aiBudget = '$prefix/ai-profiles/{aiId}/budget';
 
   /// WebSocket 长连接（通知与实时事件）。
   static const String stream = '$prefix/stream';
