@@ -31,6 +31,9 @@ abstract final class Routes {
   /// 兑换邀请码创建账号。
   static const String authInviteRedeem = '$prefix/auth/invites/redeem';
 
+  /// Current human operator's AI accounts; no implicit friendship or profile.
+  static const String ownAiAccounts = '$prefix/accounts/me/ai';
+
   /// 管理员账号元数据与账号创建。
   static const String adminAccounts = '$prefix/admin/accounts';
 
@@ -64,9 +67,30 @@ abstract final class Routes {
   static const String groupAiMute =
       '$prefix/conversations/{conversationId}/ai/{accountId}/mute';
 
+  /// Topic metadata references existing group messages; these are not send routes.
+  static const String groupTopics =
+      '$prefix/conversations/{conversationId}/topics';
+  static const String topic = '$prefix/topics/{topicId}';
+  static const String topicReferences = '$prefix/topics/{topicId}/references';
+
   /// 会话内消息：`/conversations/{conversationId}/messages`。
   static const String messages =
       '$prefix/conversations/{conversationId}/messages';
+
+  /// Per-device message acknowledgement for one conversation.
+  static const String messageAck = '$prefix/conversations/{conversationId}/ack';
+
+  /// Edit one of the caller's own messages; keeps encrypted prior versions.
+  static const String messageEdit =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/edit';
+
+  /// Admin-only read of encrypted prior versions.
+  static const String messageEdits =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/edits';
+
+  /// Recall one of the caller's own recent messages.
+  static const String messageRecall =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/recall';
 
   /// 单会话差集同步：`/conversations/{conversationId}/sync`。
   static const String sync = '$prefix/conversations/{conversationId}/sync';

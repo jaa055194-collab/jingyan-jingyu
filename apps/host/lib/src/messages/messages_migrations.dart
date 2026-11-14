@@ -26,4 +26,18 @@ CREATE TABLE message_acks (
   PRIMARY KEY(conversation_id, device_id)
 );
 '''),
+  Migration(205, 'message recall state', '''
+ALTER TABLE messages ADD COLUMN recalled_at TEXT;
+'''),
+  Migration(206, 'message edit history', '''
+CREATE TABLE message_edits (
+  edit_id TEXT PRIMARY KEY NOT NULL,
+  message_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  editor_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  edited_at TEXT NOT NULL
+);
+CREATE INDEX idx_message_edits_message ON message_edits(message_id);
+'''),
 ];

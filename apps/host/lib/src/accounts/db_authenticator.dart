@@ -266,6 +266,29 @@ class AccountSession {
         return action(s, s.accounts[d['account']]!);
       });
   bool _admin(_Row a) => a['isAdmin'] == true;
+
+  /// Current operator's canonical AI metadata, including disabled AI for management.
+  Future<Result<List<Map<String, Object?>>>> ownAiMetadata() => _run((s, a) {
+    if (a['kind'] != 'human') return _domain._missing();
+    final rows =
+        s.accounts.values
+            .where((row) => row['kind'] == 'ai' && row['operator'] == a['id'])
+            .map(
+              (row) => <String, Object?>{
+                'accountId': row['id'],
+                'displayName': row['displayName'],
+                'disabled': row['disabled'],
+              },
+            )
+            .toList()
+          ..sort(
+            (left, right) => (left['accountId'] as String).compareTo(
+              right['accountId'] as String,
+            ),
+          );
+    return Ok(rows);
+  });
+
   Future<Result<List<Map<String, Object?>>>> accountMetadata() => _run((s, a) {
     if (!_admin(a)) return _domain._missing();
     return Ok(

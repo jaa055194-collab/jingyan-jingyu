@@ -9,6 +9,8 @@ import 'combined_membership.dart';
 import 'private_routes.dart';
 import 'group_management_routes.dart';
 import 'group_ai_routes.dart';
+import 'topic_routes.dart';
+import 'topic_service.dart';
 
 import '../messages/messages_module.dart';
 import 'conversation_service.dart';
@@ -75,6 +77,13 @@ class SocialModule extends HostModule {
           direct: private,
         );
       }
+      mountTopicRoutes(
+        router,
+        topics: TopicService(database: db, clock: hostClock),
+        accounts: accounts,
+        clock: hostClock,
+        audit: audit,
+      );
       mountGroupAiRoutes(
         router,
         db: db,

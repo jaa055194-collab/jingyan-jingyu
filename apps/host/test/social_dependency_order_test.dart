@@ -58,6 +58,9 @@ void main() {
         Routes.groupAiSettings,
         Routes.groupAiInterval,
         Routes.groupAiMute,
+        Routes.groupTopics,
+        Routes.topic,
+        Routes.topicReferences,
       ]) {
         expect(
           host.registry.router.describe().any((entry) => entry.contains(route)),

@@ -154,7 +154,8 @@ VALUES (?,?,?,0,0,?,0,0)''',
       ]);
     }
     await db.execute(
-      "INSERT INTO messages VALUES ('m1','room',1,'source','c1','text','encrypted-fixture','2026-11-13')",
+      "INSERT INTO messages(message_id, conversation_id, seq, sender_id, client_msg_id, kind, body, sent_at) "
+      "VALUES ('m1','room',1,'source','c1','text','encrypted-fixture','2026-11-13')",
     );
     store = makeStore();
   });
