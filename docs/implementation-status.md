@@ -1,6 +1,6 @@
 # 实现状态与接续边界
 
-当前主干基线：`b4ab568`，包含 M01（PR #6）、M02（PR #9）与后端基础增量（PR #7）。本分支按用户授权继续实现；这是完整交付中的增量，不能当作全产品已完成。
+当前主干基线：`b4ab568`，包含 M01（PR #6）、M02（PR #9）与后端基础增量（PR #7）。本分支按用户授权继续实现；这是完整交付中的增量，不能当作全产品已完成。本轮技术审核范围与重点见review-handoff.md；完整产品验收仍未完成。
 
 ## 已合并前置
 
@@ -29,7 +29,7 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 
 独立review检出的层降级inspect→begin竞态已由同Tx策略重检修复；模型空白/legacy脏值在pending前拒绝；binding配置bearer必须匹配principal账户与device。定向证据与最终全仓结果记录于需求追踪和PR。
 
-尚无有序fallback、流式、模型发现/连接测试、生图、自动对账、完整AI创建HTTP与自动AI回复链，不宣称整个M05/AC10已完成。
+认证GET/POST `/api/v1/accounts/me/ai`现可列出/创建当前人类operator自己的AI账户，POST仅接受displayName，GET只返回ID/名称/disabled并实时查询当前归属；管理员也不能替别人创建。创建不产生AI登录凭据、profile、persona、好友或私聊；随后仍须显式注册profile/配置模型。这不是完整AI创建向导或自动AI回复链。尚无有序fallback、流式、模型发现/连接测试、生图和自动对账，不宣称整个M05/AC10已完成。
 
 ## M06 内部记忆仓储（未生产装配）
 

@@ -28,8 +28,8 @@
 | REQ-022 | FR-42/45 / M06 | 60秒规则心跳与恢复gap | 已授权局部 | 不调模型，每60秒至多一条；重启只记一次gap不造活动；当前owner权限 | LifeEngine、可选602 | life13项Clock/SQLite/回滚/枚举SQL/错误脱敏，独立review | 内部规则能力通过；未生产调度/主动行为/静默窗 |
 | REQ-023 | FR-22 / AC-32 | 群主转让、成员退出及AI移除 | 已授权 | 有效成员间转让；群主不能孤儿退出；退出立即撤权；operator仅撤回自己的AI | conversation_service、group_management_routes | service17/HTTP5+装配回归，独立review | 后端通过；群管理员角色与UI未完成 |
 | REQ-024 | FR-23 / A3/A4 | 群AI发言限额与配置 | 已授权局部 | 群主控cap/主持/静音，AI owner控间隔，跨午夜轮次限额，自主插话间隔 | group_ai_policy/routes、303 | policy14/HTTP19，review发现跨日/间隔/整数溢出先RED后修，父合跑58 | 策略与配置已验证；admission尚未与实际AI发言事务接线 |
-
 | REQ-025 | FR-25 / C1 | 话题引用元数据与父群历史权限 | 已授权局部 | root不可见即404、逐source历史边界、关联仅sender/owner、scope使用profile ID、认证元数据HTTP | TopicService/topic_routes、304默认装配 | service17/HTTP8、父33集成测试与host分析通过；scope混用先RED后修，独立review | 元数据子集通过；话题回复、AI上下文、撤权未完成 |
+| REQ-026 | FR-04 / M02 | 人类管理自己的独立AI账户 | 已授权局部 | 非管理员可创建自身AI、管理员无跨owner覆盖；列表当前归属、allowlist字段；创建无凭据/好友/私聊副作用 | AccountsModule ownAiAccounts / live AccountSession.ownAiMetadata | 9项真实SQLite+重启/撤销/越权测试，父17项集成回归，独立静态review | 账号接口已验证；profile/persona/好友与完整创建向导仍单独处理 |
 
 ## 验证口径
 
@@ -44,6 +44,8 @@
 2026-11-14群管理及AI设置增量修后 `tool/check.ps1` 完整执行 ALL CHECKS PASSED：core20/protocol9/host_kit10/client_kit18/host432，共489项，各包分析无问题。独立review复验跨午夜轮次、自主插话间隔和Duration溢出回归；AI admission未接实际消息发送事务，不能算自动群聊验收。
 
 2026-11-14话题引用元数据与认证HTTP增量完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit18/host457，总514项，各包分析无问题；父33项装配/私聊回归与独立review通过。这不包含话题回复或AI上下文跟随验收。
+
+2026-11-14自身AI账户HTTP增量完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit18/host466，总523项，各包分析无问题。父17项profile/账号装配回归与独立静态review通过；producer另跑31项现有账户兼容回归通过。新增账号接口不隐式产生好友、私聊、profile或persona。
 
 代码审查确认：canonical SqlAccountsStore使用差异行UPSERT而非父行REPLACE，不在账户正常认证时删除社交/消息数据。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
 
