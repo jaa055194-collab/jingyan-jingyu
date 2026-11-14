@@ -18,6 +18,8 @@ import 'src/accounts/accounts_sql_store.dart';
 import 'src/accounts/accounts_migrations.dart';
 import 'src/messages/messages_migrations.dart';
 import 'src/models/models_migrations.dart';
+import 'src/models/admin_usage_module.dart';
+import 'src/models/admin_usage_reader.dart';
 import 'src/models/ai_identity.dart';
 import 'src/models/binding_migrations.dart';
 import 'src/models/usage_migrations.dart';
@@ -172,6 +174,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     storage,
     AccountsModule(domain: accounts),
     AdminAuditModule(reader: AdminAuditReader(database: storage.database, clock: clock)),
+    AdminUsageModule(reader: AdminUsageReader(database: storage.database, clock: clock)),
     MessagesModule(
       store: messages,
       authenticate: DbAuthenticator(accounts).call,
