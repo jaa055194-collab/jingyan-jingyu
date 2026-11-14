@@ -31,6 +31,9 @@ abstract final class Routes {
   /// 兑换邀请码创建账号。
   static const String authInviteRedeem = '$prefix/auth/invites/redeem';
 
+  /// Current human operator's AI accounts; no implicit friendship or profile.
+  static const String ownAiAccounts = '$prefix/accounts/me/ai';
+
   /// 管理员账号元数据与账号创建。
   static const String adminAccounts = '$prefix/admin/accounts';
 
