@@ -58,6 +58,11 @@ class AccountsModule extends HostModule {
       _resetPassword,
       access: Access.admin,
     );
+    router.post(
+      Routes.adminAccountDisable,
+      _disableAccount,
+      access: Access.admin,
+    );
   }
 
   HostResponse _bad() => HostResponse.failure(
@@ -136,6 +141,28 @@ class AccountsModule extends HostModule {
       body['newPassword'] as String,
     );
     return HostResponse.fromResult(result, (_) => {'reset': true});
+  }
+
+  Future<HostResponse> _disableAccount(HostRequest request) async {
+    final scope = await _currentSession(request);
+    if (scope == null) return _unauthenticated();
+    // JSON `null` decodes to the same value as an absent body. The HTTP
+    // adapter preserves framing headers, so reject nonempty/chunked entities
+    // as well without changing the shared HostRequest interface.
+    final length = request.headers['content-length'];
+    if (request.body != null ||
+        (length != null && int.tryParse(length) != 0) ||
+        request.headers.containsKey('transfer-encoding')) {
+      return _bad();
+    }
+    final AccountId target;
+    try {
+      target = AccountId.parse(request.pathParams['accountId'] ?? '');
+    } on FormatException {
+      return _bad();
+    }
+    final result = await scope.session.accounts.disable(target);
+    return HostResponse.fromResult(result, (_) => {'disabled': true});
   }
 
   Future<HostResponse> _login(HostRequest request) async {

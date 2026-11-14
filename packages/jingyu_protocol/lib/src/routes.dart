@@ -41,6 +41,10 @@ abstract final class Routes {
   static const String adminAccountPasswordReset =
       '$prefix/admin/accounts/{accountId}/reset-password';
 
+  /// Administrator disables an account; the sole administrator is protected.
+  static const String adminAccountDisable =
+      '$prefix/admin/accounts/{accountId}/disable';
+
   /// 管理员邀请码管理。
   static const String adminInvites = '$prefix/admin/invites';
 
