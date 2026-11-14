@@ -9,6 +9,8 @@ import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
 import 'src/ai/persona/persona_migrations.dart';
 import 'src/ai/persona/persona_module.dart';
+import 'src/audit/admin_audit_module.dart';
+import 'src/audit/admin_audit_reader.dart';
 import 'src/accounts/accounts_module.dart';
 import 'src/accounts/db_authenticator.dart';
 import 'src/accounts/password_hasher.dart';
@@ -167,6 +169,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     ),
     storage,
     AccountsModule(domain: accounts),
+    AdminAuditModule(reader: AdminAuditReader(database: storage.database, clock: clock)),
     MessagesModule(
       store: messages,
       authenticate: DbAuthenticator(accounts).call,
