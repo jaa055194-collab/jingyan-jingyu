@@ -7,6 +7,8 @@ library;
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
+import 'src/ai/persona/persona_migrations.dart';
+import 'src/ai/persona/persona_module.dart';
 import 'src/accounts/accounts_module.dart';
 import 'src/accounts/db_authenticator.dart';
 import 'src/accounts/password_hasher.dart';
@@ -84,6 +86,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       bindingMigration,
       ...usageMigrations,
       budgetTimezoneMigration,
+      ...personaMigrations,
     ],
   );
   final messages = SqliteMessageStore(
@@ -189,6 +192,12 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       cipher: storage.cipher,
       urlGuard: urlGuard,
       clock: clock,
+    ),
+    PersonaModule(
+      database: storage.database,
+      cipher: storage.cipher,
+      clock: clock,
+      authenticate: DbAuthenticator(accounts).call,
     ),
   ];
 }

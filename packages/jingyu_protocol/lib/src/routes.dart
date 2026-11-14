@@ -158,6 +158,12 @@ abstract final class Routes {
       '$prefix/ai-profiles/{aiId}/bindings/{capability}';
   static const String aiBudget = '$prefix/ai-profiles/{aiId}/budget';
 
+  /// Explicit owner persona initialization and CAS-based configuration.
+  static const String aiPersona = '$prefix/ai-profiles/{aiId}/persona';
+  static const String aiPersonaInitialize =
+      '$prefix/ai-profiles/{aiId}/persona/initialize';
+  static const String aiPersonaLock = '$prefix/ai-profiles/{aiId}/persona/lock';
+
   /// WebSocket 长连接（通知与实时事件）。
   static const String stream = '$prefix/stream';
 }
