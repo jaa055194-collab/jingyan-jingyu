@@ -52,6 +52,7 @@
 | REQ-042 | FR-22 / M04 群成员列表 | 群成员列表接口 | 已授权局部 | 当前成员可 `GET /conversations/{id}/members` 获取 accountId/isOwner/joinedAt；非成员 404、匿名 401 | social/conversation_service.dart(listMembers)、social_routes GET、Routes.conversationMembers | group_members_test 真实SQLite 2项（成员可见含群主标记/非成员拒绝/匿名401）；social_routes 与 conversation_membership 回归 | 服务端只读列表；群名片、群管理员角色与客户端UI未做 |
 
 | REQ-044 | v4.2 FR-48:393 / FR-58:468 | 当前operator读取AI今日已记录token按层/能力汇总 | 已授权局部 | 当前active canonical owner/profile同Tx核验，服务端时钟+持久显式offset取日；已结算计数精确decimal-string BigInt聚合、超额/零可见；所有日期pending按能力单独标记；旧owner数据不泄漏，无admin绕过；无账本写入/网络调用 | UsageSummary、usage_routes、ModelsModule、Routes.aiUsage | usage_summary_test 15真实SQLite/HTTP，缺路由404 RED；usage/budget/assembly合跑40通过、analysis清洁；独立复跑38通过无Critical/Important | 后端部分能力，非双端面板/周趋势/费用/provider归因；未完成全FR-48/58验收 |
+| REQ-043 | FR-14 / M11 客户端本地数据 | 客户端本地消息缓存 | 已授权局部 | 按账号/会话/seq 有序保存；同身份同 seq 覆盖(编辑)，冲突身份拒绝；深不可变正文；撤回终态拒绝旧同步页与旧快照复活；afterSeq/limit 分页；账号与会话隔离；版本化快照整体验证后原子导入；纯内存不落盘 | jingyu_client_kit/local_message_cache.dart | local_message_cache_test 17项 + client_kit整包49项，analyze无问题；8个初始回归先RED，旧快照复活回归追加RED→GREEN | 纯 Dart 能力；未接入 M11 Flutter 外壳，加密持久化由外壳负责；不含网络同步 |
 
 ## 验证口径
 2026-11-13在当前增量上，31项新持久消息/群权限/HTTP/迁移测试主代理及独立审查均通过；全仓 `tool/check.ps1` 输出 `ALL CHECKS PASSED`：core 20、protocol 9、host_kit 10、client_kit 18、host 144，所有分析无问题。其后仅新增默认host的joined群端到端回归；`host_test.dart` 19项全部通过，最终host分析无问题。该回归验证真实登录后创建群、管理员非成员404、owner添加成员、服务器只返回入群后消息、列表可见。总计当前覆盖的各包测试为202项（全仓201项 + 后加的host回归1项），不是202条产品需求验收。旧工作树结果不作为未来提交通过证据。
