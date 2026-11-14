@@ -121,7 +121,10 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     ),
     storage,
     AccountsModule(domain: accounts),
-    MessagesModule(store: messages),
+    MessagesModule(
+      store: messages,
+      authenticate: DbAuthenticator(accounts).call,
+    ),
     SocialModule(
       direct: PrivateConversations(db: storage.database, clock: clock),
       conversations: conversations,

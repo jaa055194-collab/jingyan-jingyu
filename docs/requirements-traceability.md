@@ -9,7 +9,7 @@
 | REQ-003 | decisions B-6 | 8MB分片、每账号并发≤3 | 已授权 | 第4个许可拒绝，账号隔离、重复/跨gate释放不增名额 | UploadGate | quota_test | 纯策略通过；未执行真实上传 |
 | REQ-004 | FR-04～07 / M02 | 持久账号、邀请、设备与鉴权 | 已授权 | 主干M02契约/HTTP/持久化验收 | 主干PR #9 | 沿用canonical主干tests，不维护第二套账号 | 已合并；本票最终全仓须重验 |
 | REQ-005 | FR-09 / M11 | Android与Windows客户端 | 已授权 | 双端构建/设备行为/真实Before–After | 独立PR #8 | 本票未运行客户端验收 | 未完成，不声明草案可用 |
-| REQ-006 | FR-14 / M03 | 单调seq、幂等、差集、持久ack | 已授权 | 并发重放不重复，重启保持，加密落盘不出现正文 | messages/sqlite_message_store.dart；Migration200 | sqlite_message_store_test：15项含原契约/并发/扫描/AAD/重启/失败回滚 | 局部通过；transport ack/WebSocket与跨端未读未接入 |
+| REQ-006 | FR-14 / M03 | 单调seq、幂等、差集、持久ack | 已授权 | 并发重放不重复，重启保持，加密落盘不出现正文 | messages/服务端认证ack路由`Routes.messageAck`、MessagesModule；sqlite_message_store.dart既有head clamp | sqlite_message_store_test15、host_test默认装配回归、message_ack_boundary_test真实撤销/轮转/身份错配/缺策略/无写入/持久化4项；host472项及全仓543项与各包analysis通过 | 服务端ack路由局部已验证；撤权在途遵C-5，WebSocket、客户端last_ack持久化和跨端未读UI未接入，AC-18未全验收 |
 | REQ-007 | FR-22 / M04 | 群成员服务器权限 | 已授权 | 非成员不可列出/读取/发送；仅owner加成员；有效账号检查 | social/conversation_service.dart、social_routes.dart、Migration300 | conversation_membership_test 6项、social_routes_test 7项 | 局部通过；好友/私聊/拉黑/群角色/退出未完成 |
 | REQ-008 | decisions C-1 | 房主可选择仅入群后历史 | 已授权 | 同Tx取head+1，服务器忽略越界afterSeq，分页不泄露旧内容 | HistoryMembershipCheck、MessagesModule._sync | message_membership_boundary_test 2项；默认host端到端补充验证 | 局部通过；不把客户端过滤当权限 |
 | REQ-009 | M01/M03/M04工程约束 | 统一迁移装配 | 已授权 | 默认单库顺序1/100/200/300、旧M01默认不变 | StorageModule optional migrations、defaultModules | storage_extra_migrations_test 1项，先缺参数RED后GREEN | 局部通过，最终全仓重验 |
@@ -49,6 +49,8 @@
 
 2026-11-14自身AI账户HTTP增量完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit18/host466，总523项，各包分析无问题。父17项profile/账号装配回归与独立静态review通过；producer另跑31项现有账户兼容回归通过。新增账号接口不隐式产生好友、私聊、profile或persona。
 
-2026-11-14插件生命周期并发修复后完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host466，总527项，各包分析无问题。插件14项新增回归与clientkit全测32项通过；独立review确认同ID串用、跨插件回滚、pending取消清理及卸载重入路径已修复。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
+2026-11-14插件生命周期并发修复后完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host466，总537项，各包分析无问题。插件14项新增回归与clientkit全测32项通过；独立review确认同ID串用、跨插件回滚、pending取消清理及卸载重入路径已修复。新增群history边界和加入写入同一BEGIN IMMEDIATE事务，服务器同步强制最低seq。
+
+2026-11-14设备ACK认证路由最终callback版本完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host472，共543项，各包分析无问题。默认宿主与依赖重排24项通过，新增SQLite边界4项验证真实轮转/撤销、principal错配、拒绝无写入、缺策略及重开持久化；独立review未确认剩余Important。此为服务端游标传输子集，不是双端未读UI或完整AC-18验收。
 
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
