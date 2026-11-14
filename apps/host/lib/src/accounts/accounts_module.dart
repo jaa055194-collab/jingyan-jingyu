@@ -51,6 +51,11 @@ class AccountsModule extends HostModule {
     router.post(adminInvitesPath, _invite, access: Access.admin);
     router.get(adminAccountsPath, _accounts, access: Access.admin);
     router.post(adminAccountsPath, _create, access: Access.admin);
+    router.post(
+      Routes.adminAccountPasswordReset,
+      _resetPassword,
+      access: Access.admin,
+    );
   }
 
   HostResponse _bad() => HostResponse.failure(
@@ -66,7 +71,7 @@ class AccountsModule extends HostModule {
     );
   }
 
-  Future<({AccountSession session, AccountId actor})?> _ownAiSession(
+  Future<({AccountSession session, AccountId actor})?> _currentSession(
     HostRequest request,
   ) async {
     final principal = request.principal;
@@ -90,13 +95,13 @@ class AccountsModule extends HostModule {
   );
 
   Future<HostResponse> _ownAi(HostRequest request) async {
-    final scope = await _ownAiSession(request);
+    final scope = await _currentSession(request);
     if (scope == null) return _unauthenticated();
     return HostResponse.fromResult(await scope.session.ownAiMetadata());
   }
 
   Future<HostResponse> _createOwnAi(HostRequest request) async {
-    final scope = await _ownAiSession(request);
+    final scope = await _currentSession(request);
     if (scope == null) return _unauthenticated();
     final body = request.jsonObject().valueOrNull;
     if (body == null || body.length != 1 || body['displayName'] is! String) {
@@ -109,6 +114,26 @@ class AccountsModule extends HostModule {
       ),
       (id) => {'accountId': id.value},
     );
+  }
+
+  Future<HostResponse> _resetPassword(HostRequest request) async {
+    final scope = await _currentSession(request);
+    if (scope == null) return _unauthenticated();
+    final body = request.jsonObject().valueOrNull;
+    if (body == null || body.length != 1 || body['newPassword'] is! String) {
+      return _bad();
+    }
+    final AccountId target;
+    try {
+      target = AccountId.parse(request.pathParams['accountId'] ?? '');
+    } on FormatException {
+      return _bad();
+    }
+    final result = await scope.session.accounts.resetPassword(
+      target,
+      body['newPassword'] as String,
+    );
+    return HostResponse.fromResult(result, (_) => {'reset': true});
   }
 
   Future<HostResponse> _login(HostRequest request) async {
