@@ -31,10 +31,12 @@ class _DenyAll implements MembershipCheck {
 
 /// 消息模块。
 class MessagesModule extends HostModule {
-  MessagesModule({MessageStore? store})
-    : _store = store ?? InMemoryMessageStore();
+  MessagesModule({MessageStore? store, Authenticator? authenticate})
+    : _store = store ?? InMemoryMessageStore(),
+      _authenticate = authenticate;
 
   final MessageStore _store;
+  final Authenticator? _authenticate;
   late HostServices _services;
 
   @override
@@ -52,6 +54,7 @@ class MessagesModule extends HostModule {
   @override
   void mount(Router router) {
     router.post(Routes.messages, _send);
+    router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
   }
 
@@ -97,6 +100,58 @@ class MessagesModule extends HostModule {
       result,
       (r) => {'duplicate': r.duplicate, 'message': r.message.toPayload()},
     );
+  }
+
+  Future<HostResponse> _ack(HostRequest request) async {
+    final authenticate = _authenticate;
+    final principal = request.principal;
+    if (authenticate == null || principal == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.unauthenticated, 'Invalid credentials'),
+      );
+    }
+    final current = await authenticate(request);
+    if (current == null ||
+        current.accountId != principal.accountId ||
+        current.deviceId != principal.deviceId) {
+      return HostResponse.failure(
+        const Failure(FailureCode.unauthenticated, 'Invalid credentials'),
+      );
+    }
+    final conversationId = request.pathParams['conversationId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad conversation id'),
+      );
+    }
+    final body = request.jsonObject();
+    if (body is Err<Map<String, Object?>> ||
+        body.value.length != 1 ||
+        body.value['seq'] is! int ||
+        (body.value['seq'] as int) < 0) {
+      return HostResponse.failure(
+        const Failure(
+          FailureCode.invalidArgument,
+          'seq must be a nonnegative integer',
+        ),
+      );
+    }
+    final history = _services.maybeGet<HistoryMembershipCheck>();
+    if (history == null ||
+        await history.firstVisibleSeq(current.accountId, conversationId) ==
+            null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final seq = await _store.ack(
+      conversationId: conversationId,
+      deviceId: current.deviceId,
+      seq: body.value['seq'] as int,
+    );
+    return HostResponse.ok({'acknowledgedSeq': seq});
   }
 
   Future<HostResponse> _sync(HostRequest request) async {

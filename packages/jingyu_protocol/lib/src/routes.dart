@@ -77,6 +77,9 @@ abstract final class Routes {
   static const String messages =
       '$prefix/conversations/{conversationId}/messages';
 
+  /// Per-device message acknowledgement for one conversation.
+  static const String messageAck = '$prefix/conversations/{conversationId}/ack';
+
   /// 单会话差集同步：`/conversations/{conversationId}/sync`。
   static const String sync = '$prefix/conversations/{conversationId}/sync';
 
