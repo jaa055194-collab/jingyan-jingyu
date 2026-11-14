@@ -50,6 +50,8 @@
 | REQ-040 | FR-16 / AC-20 收藏标签与备注 | 收藏标签与备注及按标签过滤 | 已授权局部 | 收藏可带≤20个标签（每个≤50字符）与备注（≤2000字符），标签/备注加密存储；列表返回 tags/note；`GET /favorites?tag=` 大小写不敏感按标签过滤；搜索匹配标签与备注文本；`PATCH /favorites/{id}` 整体替换标签/备注（null 清空）并重索引；旧收藏 tags/note 为空 | messages/favorites.dart、Migration214、MessagesModule._addFavorite/_listFavorites/_updateFavorite | favorite_tags_test 真实SQLite 8项（加密落库/返回/搜索标签备注/非法拒绝/无标签为空/标签过滤/更新替换与重索引/仅本人可改）；favorites_test 9项仍通过 | 服务端局部；AI“她的收藏”与客户端UI未做 |
 | REQ-041 | FR-22 / M04 群公告 | 群公告设置与读取 | 已授权局部 | 仅群主可设置/清空（≤2000字符），公告加密落库（AAD 绑定会话 id）；成员可读、非成员404、匿名401；空串清空；非群主设置404 | social/conversation_service.dart(setAnnouncement/getAnnouncement)、Migration305、group_management_routes PUT/GET、Routes.groupAnnouncement、默认宿主装配 | group_announcement_test 真实SQLite/AES 2项（设置/成员读/非成员拒绝/非群主拒绝/加密落库/清空/超长与坏字段400） | 服务端能力；群公告为纯文本；群管理员角色与客户端UI未做 |
 
+| REQ-044 | v4.2 FR-48:393 / FR-58:468 | 当前operator读取AI今日已记录token按层/能力汇总 | 已授权局部 | 当前active canonical owner/profile同Tx核验，服务端时钟+持久显式offset取日；已结算计数精确decimal-string BigInt聚合、超额/零可见；所有日期pending按能力单独标记；旧owner数据不泄漏，无admin绕过；无账本写入/网络调用 | UsageSummary、usage_routes、ModelsModule、Routes.aiUsage | usage_summary_test 15真实SQLite/HTTP，缺路由404 RED；usage/budget/assembly合跑40通过、analysis清洁；独立复跑38通过无Critical/Important | 后端部分能力，非双端面板/周趋势/费用/provider归因；未完成全FR-48/58验收 |
+
 ## 验证口径
 2026-11-13在当前增量上，31项新持久消息/群权限/HTTP/迁移测试主代理及独立审查均通过；全仓 `tool/check.ps1` 输出 `ALL CHECKS PASSED`：core 20、protocol 9、host_kit 10、client_kit 18、host 144，所有分析无问题。其后仅新增默认host的joined群端到端回归；`host_test.dart` 19项全部通过，最终host分析无问题。该回归验证真实登录后创建群、管理员非成员404、owner添加成员、服务器只返回入群后消息、列表可见。总计当前覆盖的各包测试为202项（全仓201项 + 后加的host回归1项），不是202条产品需求验收。旧工作树结果不作为未来提交通过证据。
 
