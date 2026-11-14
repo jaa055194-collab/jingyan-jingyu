@@ -43,8 +43,14 @@
 
 | REQ-035 | FR-16/17 / AC-20 / 收藏与文件等搜索授权 | 本人收藏基础与收藏搜索 | 已授权局部 | 收藏仅本人可列/搜/删；消息引用按当前成员/历史/撤回状态决定可见性；无正文快照；标题内容加密；type=favorite独立分流；坏输入400/密文损坏500 | FavoritesService、Migration211、MessagesModule收藏与搜索路由 | favorites_test 9项真实SQLite回归；search/assembly合跑14项；最终全仓585项（host514）与所有包analysis通过，独立复审无剩余Important | 自填文本/链接/文件元数据及消息引用子集；未实现真实附件内容、A客户端FTS、收藏盲索引与十分钟物理清理 |
 
-## 验证口径
+| REQ-036 | FR-16/17 / AC-20 / 收藏专用盲索引授权 | 收藏专用加密盲索引 | 已授权局部 | 只存 token HMAC 与收藏 id；密钥独立行 `favorite-index` 列加密；新增/删除维护 token；搜索候选解密校验 + 全量扫描兜底（任意子串召回与无索引扫描一致）；消息引用只索引标题、正文以实时来源为准 | messages/favorite_blind_index.dart、Migration212、FavoritesService(可选blind) | favorite_blind_index_test 真实SQLite 9项（HMAC不含明文/密钥加密/盲命中与候选范围/盲与扫描结果一致/消息来源编辑与撤回/owner隔离/损坏失败关闭/候选满额跳过扫描） | 服务端收藏搜索候选加速（命中满额时提速；常见小结果集仍会扫描）；token 等值/频率泄露，非明文FTS；不替代附件/动态搜索 |
+| REQ-037 | FR-62/63 / M03 附件与配额 | 附件上传与内容提取 | 已授权局部 | 分片顺序上传与断点续传幂等；声明大小与 sha256 校验后落 blob；文本类正文抽取（html去标签/实体、json/xml、utf8容忍非法字节、1MiB上限）加密存；owner或会话成员可见、owner删除；配额/磁盘<10% 闸门 | messages/attachments.dart、attachment_extraction.dart、attachments_module.dart、Migration213、Routes 附件路由、默认宿主装配 AttachmentsModule | attachments_test 真实SQLite/AES/临时mediaDir 17项（抽取各类型/分片往返复原/续传/大小-sha拒绝/可见性/删除/配额/磁盘<10%/HTTP 401与400/往返/恶意id拒绝/会话成员校验） | 服务端能力；对外分片 512KiB 以适配 1MiB JSON 传输；单附件≤128MiB、正文抽取仅≤4MiB；M12 真实配额/磁盘探测未接线（默认按充足，仅限 pending 上传数=3）；PDF/DOCX/图片/音视频正文未抽取（如实标 unsupported） |
+| REQ-038 | FR-17 / M11 客户端搜索 | 客户端本地索引（A） | 已授权局部 | 按账号隔离正向+倒排；增/改/删；AND缩候选+contains复核；会话过滤/limit/seq升序；单CJK字与Latin子串可命中；清除账号；JSON快照导入导出 | jingyu_client_kit/local_search_index.dart | local_search_index_test 15项 + client_kit整包47项，analyze无问题 | 纯 Dart 能力；未接入 M11 Flutter 外壳（PR#8 未合并），落盘加密由外壳负责 |
+| REQ-039 | FR-17/FR-62 / M03 附件消息与文件搜索 | 附件消息引用与附件正文搜索 | 已授权局部 | 消息可引用发送者本人且上传即绑定该会话的附件；他人附件/跨会话/未知/非法引用拒绝；`GET /search?type=file` 仅在本人自有附件内按已抽取正文包含匹配并返回片段，隔离他人 | messages/attachments.dart(assertSendable/searchOwn)、messages_module._send/_search、Routes.search type=file、默认宿主装配 | attachment_message_test 真实SQLite/AES 6项（引用成功/他人404/跨会话400/未知404/非字符串400/文本发送不受影响/file搜索自有一致与他人隔离）；attachments_test 17项仍通过 | 服务端能力；文件搜索仅本人私有、基于已抽取正文（≤4MiB），非跨用户/动态搜索；二进制正文未抽取 |
+| REQ-040 | FR-16 / AC-20 收藏标签与备注 | 收藏标签与备注及按标签过滤 | 已授权局部 | 收藏可带≤20个标签（每个≤50字符）与备注（≤2000字符），标签/备注加密存储；列表返回 tags/note；`GET /favorites?tag=` 大小写不敏感按标签过滤；搜索匹配标签与备注文本；`PATCH /favorites/{id}` 整体替换标签/备注（null 清空）并重索引；旧收藏 tags/note 为空 | messages/favorites.dart、Migration214、MessagesModule._addFavorite/_listFavorites/_updateFavorite | favorite_tags_test 真实SQLite 8项（加密落库/返回/搜索标签备注/非法拒绝/无标签为空/标签过滤/更新替换与重索引/仅本人可改）；favorites_test 9项仍通过 | 服务端局部；AI“她的收藏”与客户端UI未做 |
+| REQ-041 | FR-22 / M04 群公告 | 群公告设置与读取 | 已授权局部 | 仅群主可设置/清空（≤2000字符），公告加密落库（AAD 绑定会话 id）；成员可读、非成员404、匿名401；空串清空；非群主设置404 | social/conversation_service.dart(setAnnouncement/getAnnouncement)、Migration305、group_management_routes PUT/GET、Routes.groupAnnouncement、默认宿主装配 | group_announcement_test 真实SQLite/AES 2项（设置/成员读/非成员拒绝/非群主拒绝/加密落库/清空/超长与坏字段400） | 服务端能力；群公告为纯文本；群管理员角色与客户端UI未做 |
 
+## 验证口径
 2026-11-13在当前增量上，31项新持久消息/群权限/HTTP/迁移测试主代理及独立审查均通过；全仓 `tool/check.ps1` 输出 `ALL CHECKS PASSED`：core 20、protocol 9、host_kit 10、client_kit 18、host 144，所有分析无问题。其后仅新增默认host的joined群端到端回归；`host_test.dart` 19项全部通过，最终host分析无问题。该回归验证真实登录后创建群、管理员非成员404、owner添加成员、服务器只返回入群后消息、列表可见。总计当前覆盖的各包测试为202项（全仓201项 + 后加的host回归1项），不是202条产品需求验收。旧工作树结果不作为未来提交通过证据。
 
 最新子进程与预算runtime工作树完整执行 `tool/check.ps1`：`ALL CHECKS PASSED`，core20/protocol9/host_kit10/client_kit18/host272（总329），各包分析无问题。随后仅新增trusted worker配置装配1项，assembly2项通过、最终host analyze无问题，共覆盖330项，不代表330条需求验收。独立review发现的层降级竞态和legacy model生成pending两Important均先RED回归后修复并复验关闭；config路由account/device与bearer匹配也已回归通过。
@@ -78,5 +84,9 @@
 2026-11-14消息置顶与搜索加密盲索引切片完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host505，共576项，各包分析无问题。盲索引Token仅HMAC、密钥列加密；搜索命中mode=blind并可退化为scan；置顶上限50且幂等。
 
 收藏与收藏搜索最终工作树完整执行 `tool/check.ps1`：ALL CHECKS PASSED，core20/protocol9/host_kit10/client_kit32/host514，共585项，所有包分析无问题。9项收藏SQLite回归验证搜索分流、owner隔离、当前来源权限/历史边界、来源编辑/撤回/退群、标题与内容加密、缺策略零解密、坏输入零写入、损坏密文安全错误与空标题误命中；独立只读复审无剩余Important。本证据仅覆盖收藏基础及type=favorite搜索，不计文件内容提取、本地FTS或完整AC-20验收。
+
+2026-11-14 附件上传/内容提取、收藏专用盲索引、客户端本地索引增量（PR #16）：各包 `dart analyze --fatal-infos` 无问题；`jingyu_core` 20、`jingyu_protocol` 9、`jingyu_host_kit` 10、`jingyu_client_kit` 47（含 local_search_index_test 15）通过；新增 `favorite_blind_index_test` 9 与 `attachments_test` 17 通过；`apps/host` 定向 93 项（新能力 + 收藏/搜索/盲索引/配额/迁移/社交装配/撤回/默认宿主装配与HTTP/真实端口冒烟）通过，`guarded_http_test`+`process_http_test` 真实网络/TLS 19 项单独跑通过。因新增 attachments 模块与迁移 212/213，同步更新了默认宿主模块列表与迁移版本列表两处既有装配测试期望。全仓 `tool/check.ps1` 由 CI（windows-latest）执行。
+
+2026-11-15 附件消息与文件搜索增量（PR #16 续）：新增 `AttachmentService.assertSendable` 与 `GET /search?type=file`（仅本人自有附件、按已抽取正文包含匹配并返回片段）。`attachment_message_test` 6 项真实 SQLite/AES 通过；`attachments_test` 17、`favorites_test` 9、`message_search_test` 3、`host_models_assembly_test` 2 合跑 37 项通过；`apps/host` analyze 无问题；全仓 `tool/check.ps1` 由 CI 执行。
 
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。

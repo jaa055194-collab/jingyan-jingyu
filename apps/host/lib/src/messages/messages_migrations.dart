@@ -104,4 +104,56 @@ CREATE TABLE favorites (
 );
 CREATE INDEX idx_favorites_owner ON favorites(owner_account_id);
 '''),
+  Migration(212, 'favorite search blind index', '''
+CREATE TABLE favorite_search_tokens (
+  favorite_id TEXT NOT NULL,
+  owner_account_id TEXT NOT NULL,
+  token_hmac TEXT NOT NULL,
+  PRIMARY KEY(favorite_id, token_hmac)
+);
+CREATE INDEX idx_favorite_search_tokens_owner
+  ON favorite_search_tokens(owner_account_id, token_hmac);
+'''),
+  Migration(213, 'attachments index and chunked upload', '''
+CREATE TABLE attachments (
+  id TEXT PRIMARY KEY NOT NULL,
+  owner_account_id TEXT NOT NULL,
+  conversation_id TEXT,
+  kind TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK(size >= 0),
+  sha256 TEXT NOT NULL,
+  rel_path TEXT NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  duration_ms INTEGER,
+  extracted_text TEXT,
+  extraction_status TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_attachments_owner ON attachments(owner_account_id);
+CREATE TABLE attachment_uploads (
+  id TEXT PRIMARY KEY NOT NULL,
+  owner_account_id TEXT NOT NULL,
+  conversation_id TEXT,
+  kind TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  declared_size INTEGER NOT NULL CHECK(declared_size >= 0),
+  received_bytes INTEGER NOT NULL DEFAULT 0,
+  next_chunk INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK(status IN ('pending','completed','aborted')),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_attachment_uploads_owner ON attachment_uploads(owner_account_id);
+CREATE TABLE attachment_upload_chunks (
+  upload_id TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  size INTEGER NOT NULL CHECK(size >= 0),
+  PRIMARY KEY(upload_id, chunk_index)
+);
+'''),
+  Migration(214, 'favorite tags and note', '''
+ALTER TABLE favorites ADD COLUMN tags TEXT;
+ALTER TABLE favorites ADD COLUMN note TEXT;
+'''),
 ];

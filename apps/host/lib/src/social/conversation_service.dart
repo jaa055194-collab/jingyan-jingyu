@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:jingyu_core/jingyu_core.dart';
 
 import '../messages/messages_module.dart';
+import '../storage/cipher.dart';
 import '../storage/database.dart';
 
 enum HistoryVisibility { all, joined }
@@ -57,10 +58,12 @@ class ConversationService implements HistoryMembershipCheck {
     required this.clock,
     required Future<int> Function(Tx, String) headSeq,
     required Future<bool> Function(Tx, String) accountExists,
+    ColumnCipher? cipher,
     String Function()? newId,
   }) : _database = database,
        _headSeq = headSeq,
        _accountExists = accountExists,
+       _cipher = cipher,
        _newId = newId ?? _randomId;
 
   final Database _database;
@@ -68,6 +71,7 @@ class ConversationService implements HistoryMembershipCheck {
   // These capabilities must use the supplied Tx, never open nested transactions.
   final Future<int> Function(Tx, String) _headSeq;
   final Future<bool> Function(Tx, String) _accountExists;
+  final ColumnCipher? _cipher;
   final String Function() _newId;
   static final Random _random = Random.secure();
   static String _randomId() => base64Url
@@ -309,6 +313,87 @@ WHERE operator.id = ? AND operator.kind = 'human' AND operator.disabled = 0
         [conversationId, aiAccountId],
       );
       return const Ok(null);
+    });
+  }
+
+  /// 群主设置群公告（空/null 清空）。正文加密落库（AAD 绑定会话 id）。
+  Future<Result<void>> setAnnouncement({
+    required String actorId,
+    required String conversationId,
+    String? text,
+  }) async {
+    if (!_validId(actorId) || !_validId(conversationId)) return _invalid();
+    final trimmed = text?.trim();
+    if (trimmed != null && trimmed.length > 2000) return _invalid();
+    final cipher = _cipher;
+    if (cipher == null) {
+      return err(FailureCode.internal, 'announcement storage unavailable');
+    }
+    return _database.transaction((tx) async {
+      final rows = await tx.query(
+        'SELECT owner_account_id FROM social_conversations WHERE id = ?',
+        [conversationId],
+      );
+      if (rows.isEmpty ||
+          rows.single['owner_account_id'] != actorId ||
+          await _activeKind(tx, actorId) == null ||
+          !(await _isMember(tx, conversationId, actorId))) {
+        return _missing();
+      }
+      final sealed = (trimmed == null || trimmed.isEmpty)
+          ? null
+          : cipher.encrypt(
+              trimmed,
+              aad: 'conversation:announcement:$conversationId',
+            );
+      if (sealed == null) {
+        await tx.execute(
+          'DELETE FROM group_announcements WHERE conversation_id = ?',
+          [conversationId],
+        );
+      } else {
+        await tx.execute(
+          'INSERT OR REPLACE INTO group_announcements(conversation_id, sealed, updated_at) VALUES (?, ?, ?)',
+          [
+            conversationId,
+            sealed,
+            clock.now().toUtc().millisecondsSinceEpoch,
+          ],
+        );
+      }
+      return const Ok<void>(null);
+    });
+  }
+
+  /// 读取群公告；仅当前成员可见，未设置返回 null。
+  Future<Result<String?>> getAnnouncement({
+    required String accountId,
+    required String conversationId,
+  }) async {
+    if (!_validId(accountId) || !_validId(conversationId)) return _invalid();
+    final cipher = _cipher;
+    if (cipher == null) {
+      return err(FailureCode.internal, 'announcement storage unavailable');
+    }
+    return _database.transaction((tx) async {
+      if (await _activeKind(tx, accountId) == null ||
+          !(await _isMember(tx, conversationId, accountId))) {
+        return _missing();
+      }
+      final rows = await tx.query(
+        'SELECT sealed FROM group_announcements WHERE conversation_id = ?',
+        [conversationId],
+      );
+      if (rows.isEmpty) return const Ok<String?>(null);
+      final sealed = rows.single['sealed'] as String;
+      final decoded = cipher.decrypt(
+        sealed,
+        aad: 'conversation:announcement:$conversationId',
+      );
+      if (decoded.isErr) {
+        return err(FailureCode.internal, 'stored announcement cannot be decoded');
+      }
+      return Ok<String?>(decoded.value);
     });
   }
 

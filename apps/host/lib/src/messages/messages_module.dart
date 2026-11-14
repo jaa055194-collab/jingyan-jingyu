@@ -11,6 +11,7 @@ import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../audit/audit_log.dart';
+import 'attachments.dart';
 import 'blind_index.dart';
 import 'favorites.dart';
 import 'message_store.dart';
@@ -49,6 +50,7 @@ class MessagesModule extends HostModule {
     PinsService? pins,
     BlindIndexService? blind,
     FavoritesService? favorites,
+    AttachmentService? attachments,
     this.clock = const SystemClock(),
   }) : _store = store ?? InMemoryMessageStore(),
        _authenticate = authenticate,
@@ -57,7 +59,8 @@ class MessagesModule extends HostModule {
        _searchService = search,
        _pins = pins,
        _blind = blind,
-       _favorites = favorites;
+       _favorites = favorites,
+       _attachments = attachments;
 
   final MessageStore _store;
   final Authenticator? _authenticate;
@@ -67,6 +70,7 @@ class MessagesModule extends HostModule {
   final PinsService? _pins;
   final BlindIndexService? _blind;
   final FavoritesService? _favorites;
+  final AttachmentService? _attachments;
   final Clock clock;
   late HostServices _services;
   Timer? _deliveryTimer;
@@ -116,6 +120,7 @@ class MessagesModule extends HostModule {
     router.post(Routes.favorites, _addFavorite);
     router.get(Routes.favorites, _listFavorites);
     router.delete(Routes.favorite, _removeFavorite);
+    router.add('PATCH', Routes.favorite, _updateFavorite);
     router.post(Routes.messagePin, _pin);
     router.delete(Routes.messagePin, _unpin);
     router.get(Routes.conversationPins, _pinsList);
@@ -145,19 +150,33 @@ class MessagesModule extends HostModule {
     }
     final json = body.value;
     final kind = json['kind'];
-    const fields = {'kind', 'messageId', 'conversationId', 'title', 'content'};
+    final tagsRaw = json['tags'];
+    const fields = {
+      'kind',
+      'messageId',
+      'conversationId',
+      'title',
+      'content',
+      'tags',
+      'note',
+    };
     if (kind is! String ||
         json.keys.any((key) => !fields.contains(key)) ||
         json.entries.any(
           (entry) =>
-              entry.key != 'kind' &&
+              entry.key != 'tags' &&
               entry.value != null &&
               entry.value is! String,
-        )) {
+        ) ||
+        (tagsRaw != null &&
+            (tagsRaw is! List || tagsRaw.any((tag) => tag is! String)))) {
       return HostResponse.failure(
         const Failure(FailureCode.invalidArgument, 'bad kind'),
       );
     }
+    final List<String>? tags = tagsRaw == null
+        ? null
+        : (tagsRaw as List).cast<String>();
     final result = await favorites.add(
       ownerAccountId: principal.accountId,
       kind: kind,
@@ -169,6 +188,8 @@ class MessagesModule extends HostModule {
           : null,
       title: json['title'] is String ? json['title'] as String : null,
       content: json['content'] is String ? json['content'] as String : null,
+      tags: tags,
+      note: json['note'] is String ? json['note'] as String : null,
       firstVisibleSeq: _favoriteVisibility,
     );
     return HostResponse.fromResult(result);
@@ -186,7 +207,23 @@ class MessagesModule extends HostModule {
       ownerAccountId: principal.accountId,
       firstVisibleSeq: _favoriteVisibility,
     );
-    return HostResponse.fromResult(result, (items) => {'favorites': items});
+    final tag = request.query['tag'];
+    if (tag == null) {
+      return HostResponse.fromResult(result, (items) => {'favorites': items});
+    }
+    if (result.isErr) return HostResponse.fromResult(result);
+    final needle = tag.toLowerCase();
+    final filtered = <Map<String, Object?>>[
+      for (final item in result.value)
+        if (_favoriteHasTag(item, needle)) item,
+    ];
+    return HostResponse.ok({'favorites': filtered});
+  }
+
+  bool _favoriteHasTag(Map<String, Object?> item, String tag) {
+    final tags = item['tags'];
+    if (tags is! List) return false;
+    return tags.any((value) => value is String && value.toLowerCase() == tag);
   }
 
   Future<HostResponse> _removeFavorite(HostRequest request) async {
@@ -210,6 +247,49 @@ class MessagesModule extends HostModule {
       favoriteId: favoriteId,
     );
     return HostResponse.fromResult(result, (_) => {'removed': true});
+  }
+
+  Future<HostResponse> _updateFavorite(HostRequest request) async {
+    final favorites = _favorites;
+    final principal = request.principal!;
+    final favoriteId = request.pathParams['favoriteId']!;
+    try {
+      validateId(favoriteId, kind: 'favorite');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (favorites == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'favorites unavailable'),
+      );
+    }
+    final body = request.jsonObject();
+    if (body is Err<Map<String, Object?>>) {
+      return HostResponse.failure(body.failure);
+    }
+    final json = body.value;
+    final tagsRaw = json['tags'];
+    const fields = {'tags', 'note'};
+    if (json.keys.any((key) => !fields.contains(key)) ||
+        (tagsRaw != null &&
+            (tagsRaw is! List || tagsRaw.any((tag) => tag is! String))) ||
+        (json['note'] != null && json['note'] is! String)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad body'),
+      );
+    }
+    final List<String>? tags = tagsRaw == null
+        ? null
+        : (tagsRaw as List).cast<String>();
+    final result = await favorites.updateMeta(
+      ownerAccountId: principal.accountId,
+      favoriteId: favoriteId,
+      tags: tags,
+      note: json['note'] is String ? json['note'] as String : null,
+    );
+    return HostResponse.fromResult(result);
   }
 
   Future<HostResponse> _pin(HostRequest request) async {
@@ -313,9 +393,26 @@ class MessagesModule extends HostModule {
       );
     }
     final type = request.query['type'] ?? 'message';
-    if (type != 'message' && type != 'favorite') {
+    if (type != 'message' && type != 'favorite' && type != 'file') {
       return HostResponse.failure(
         const Failure(FailureCode.invalidArgument, 'bad type'),
+      );
+    }
+    if (type == 'file') {
+      final attachments = _attachments;
+      if (attachments == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.internal, 'attachments unavailable'),
+        );
+      }
+      final result = await attachments.searchOwn(
+        ownerAccountId: principal.accountId,
+        query: query,
+        limit: limit,
+      );
+      return HostResponse.fromResult(
+        result,
+        (items) => {'type': 'file', 'hits': items},
       );
     }
     if (type == 'favorite') {
@@ -572,6 +669,32 @@ class MessagesModule extends HostModule {
       return HostResponse.failure(
         const Failure(FailureCode.invalidArgument, 'bad body'),
       );
+    }
+
+    // A message may reference an attachment (image/file/audio/…). The reference
+    // is accepted only for the sender's own attachment uploaded to this same
+    // conversation; membership for posting was already checked above.
+    final attachmentRef = content['attachmentId'];
+    if (attachmentRef != null) {
+      if (attachmentRef is! String) {
+        return HostResponse.failure(
+          const Failure(FailureCode.invalidArgument, 'bad attachmentId'),
+        );
+      }
+      final attachments = _attachments;
+      if (attachments == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.internal, 'attachments unavailable'),
+        );
+      }
+      final check = await attachments.assertSendable(
+        ownerAccountId: principal.accountId,
+        attachmentId: attachmentRef,
+        conversationId: conversationId,
+      );
+      if (check.isErr) {
+        return HostResponse.failure(check.failureOrNull!);
+      }
     }
 
     final result = await _store.append(
