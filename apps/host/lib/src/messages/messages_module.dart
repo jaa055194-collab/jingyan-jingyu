@@ -60,6 +60,8 @@ class MessagesModule extends HostModule {
   void mount(Router router) {
     router.post(Routes.messages, _send);
     router.post(Routes.messageRecall, _recall);
+    router.post(Routes.messageEdit, _edit);
+    router.get(Routes.messageEdits, _editHistory, access: Access.admin);
     router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
   }
@@ -105,6 +107,88 @@ class MessagesModule extends HostModule {
     return HostResponse.fromResult(
       result,
       (r) => {'duplicate': r.duplicate, 'message': r.message.toPayload()},
+    );
+  }
+
+  Future<HostResponse> _edit(HostRequest request) async {
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (!await _members.canPost(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final body = request.jsonObject();
+    if (body is Err<Map<String, Object?>> ||
+        body.value.length != 1 ||
+        body.value['body'] is! Map) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad body'),
+      );
+    }
+    final result = await _store.edit(
+      conversationId: conversationId,
+      messageId: messageId,
+      senderId: principal.accountId,
+      body: (body.value['body']! as Map).cast<String, Object?>(),
+    );
+    if (result.isErr) return HostResponse.failure(result.failureOrNull!);
+    final edited = result.value;
+    final audit = _services.maybeGet<AuditLog>();
+    if (audit != null) {
+      try {
+        await audit.record(
+          AuditEntry(
+            at: clock.now(),
+            actorId: principal.accountId,
+            action: 'message.edit',
+            targetKind: 'message',
+            targetId: messageId,
+            meta: {'editId': edited.editId},
+          ),
+        );
+      } catch (_) {}
+    }
+    return HostResponse.ok(edited.message.toPayload());
+  }
+
+  Future<HostResponse> _editHistory(HostRequest request) async {
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    final result = await _store.editHistory(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+    return HostResponse.fromResult(
+      result,
+      (versions) => {
+        'edits': [
+          for (final v in versions)
+            {
+              'editId': v.editId,
+              'editorId': v.editorId,
+              'body': v.body,
+              'editedAt': v.editedAt.toIso8601String(),
+            },
+        ],
+      },
     );
   }
 
