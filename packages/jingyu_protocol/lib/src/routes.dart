@@ -56,6 +56,8 @@ abstract final class Routes {
 
   /// 会话列表。
   static const String conversations = '$prefix/conversations';
+  static const String conversationPreferences =
+      '$prefix/conversations/{conversationId}/preferences';
   static const String directConversations = '$prefix/direct-conversations';
   static const String friendState = '$prefix/friends/{accountId}';
   static const String friendRequest = '$prefix/friends/{accountId}/requests';

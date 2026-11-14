@@ -4,6 +4,7 @@ import '../accounts/db_authenticator.dart';
 import '../audit/audit_log.dart';
 import '../storage/database.dart';
 import 'friendship_routes.dart';
+import 'conversation_preferences_routes.dart';
 import 'private_conversations.dart';
 import 'combined_membership.dart';
 import 'private_routes.dart';
@@ -66,6 +67,7 @@ class SocialModule extends HostModule {
     final accounts = _accounts;
     final audit = _audit;
     if (db != null && hostClock != null && accounts != null && audit != null) {
+      mountConversationPreferenceRoutes(router, db: db, accounts: accounts);
       final private = direct;
       if (private != null) {
         mountPrivateRoutes(
