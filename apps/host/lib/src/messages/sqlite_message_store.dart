@@ -348,7 +348,7 @@ VALUES (?, ?, ?, ?, ?, ?)
       '''
 SELECT edit_id, message_id, editor_id, body, edited_at FROM message_edits
 WHERE conversation_id = ? AND message_id = ?
-ORDER BY edited_at, edit_id
+ORDER BY rowid
 ''',
       [conversationId, messageId],
     );
