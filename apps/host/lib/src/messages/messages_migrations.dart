@@ -26,4 +26,7 @@ CREATE TABLE message_acks (
   PRIMARY KEY(conversation_id, device_id)
 );
 '''),
+  Migration(205, 'message recall state', '''
+ALTER TABLE messages ADD COLUMN recalled_at TEXT;
+'''),
 ];

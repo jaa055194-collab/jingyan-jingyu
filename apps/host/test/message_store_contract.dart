@@ -12,15 +12,18 @@ void messageStoreContract(String label, MessageStore Function() create) {
     late MessageStore store;
     setUp(() => store = create());
 
-    Future<AppendResult> send(String conv, String sender, String cmid, [String text = 'x']) async =>
-        (await store.append(
-          conversationId: conv,
-          senderId: sender,
-          clientMsgId: cmid,
-          kind: MessageKind.text,
-          body: {'text': text},
-        ))
-            .value;
+    Future<AppendResult> send(
+      String conv,
+      String sender,
+      String cmid, [
+      String text = 'x',
+    ]) async => (await store.append(
+      conversationId: conv,
+      senderId: sender,
+      clientMsgId: cmid,
+      kind: MessageKind.text,
+      body: {'text': text},
+    )).value;
 
     test('seq 在会话内从 1 单调递增，会话间独立', () async {
       expect((await send('c1', 'u1', 'a')).message.seq, 1);
@@ -49,7 +52,11 @@ void messageStoreContract(String label, MessageStore Function() create) {
       for (var i = 0; i < 5; i++) {
         await send('c1', 'u1', 'm$i');
       }
-      final page = (await store.since(conversationId: 'c1', afterSeq: 1, limit: 2)).value;
+      final page = (await store.since(
+        conversationId: 'c1',
+        afterSeq: 1,
+        limit: 2,
+      )).value;
       expect(page.messages.map((m) => m.seq), [2, 3]);
       expect(page.hasMore, isTrue);
       final rest = (await store.since(conversationId: 'c1', afterSeq: 3)).value;
@@ -75,8 +82,85 @@ void messageStoreContract(String label, MessageStore Function() create) {
         body: const {},
       );
       expect(bad.isErr, isTrue);
-      expect((await store.since(conversationId: 'c1', afterSeq: -1)).isErr, isTrue);
-      expect((await store.since(conversationId: 'c1', afterSeq: 0, limit: 0)).isErr, isTrue);
+      expect(
+        (await store.since(conversationId: 'c1', afterSeq: -1)).isErr,
+        isTrue,
+      );
+      expect(
+        (await store.since(conversationId: 'c1', afterSeq: 0, limit: 0)).isErr,
+        isTrue,
+      );
+    });
+
+    test('撤回自己的近期消息：正文变占位，他人/未知/重复撤回失败', () async {
+      final mine = await send('c1', 'u1', 'r1', '秘密');
+      final id = mine.message.messageId;
+      final ok = await store.recall(
+        conversationId: 'c1',
+        messageId: id,
+        senderId: 'u1',
+      );
+      expect(ok.isOk, isTrue);
+      final page = (await store.since(conversationId: 'c1', afterSeq: 0)).value;
+      expect(page.messages.single.body, {'recalled': true});
+      expect(page.messages.single.seq, 1);
+
+      final other = await send('c1', 'u1', 'r2', '仍然可见');
+      final otherId = other.message.messageId;
+      expect(
+        (await store.recall(
+          conversationId: 'c1',
+          messageId: otherId,
+          senderId: 'u2',
+        )).isErr,
+        isTrue,
+      );
+      expect(
+        (await store.recall(
+          conversationId: 'c1',
+          messageId: 'missing',
+          senderId: 'u1',
+        )).isErr,
+        isTrue,
+      );
+      expect(
+        (await store.recall(
+          conversationId: 'c1',
+          messageId: id,
+          senderId: 'u1',
+        )).isErr,
+        isTrue,
+      );
+      final after = (await store.since(
+        conversationId: 'c1',
+        afterSeq: 1,
+      )).value;
+      expect(after.messages.single.body['text'], '仍然可见');
+    });
+
+    test('正文恰好是撤回占位的普通消息也能被撤回（两实现一致）', () async {
+      final sent = await store.append(
+        conversationId: 'c1',
+        senderId: 'u1',
+        clientMsgId: 'meta-body',
+        kind: MessageKind.text,
+        body: {'recalled': true},
+      );
+      final id = sent.value.message.messageId;
+      final before = (await store.since(
+        conversationId: 'c1',
+        afterSeq: 0,
+      )).value.messages.singleWhere((m) => m.messageId == id);
+      expect(before.body, {'recalled': true});
+      expect(
+        (await store.recall(
+          conversationId: 'c1',
+          messageId: id,
+          senderId: 'u1',
+        )).isOk,
+        isTrue,
+        reason: '正文内容不能被当作撤回状态',
+      );
     });
   });
 }

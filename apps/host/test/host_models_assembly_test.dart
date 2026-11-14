@@ -59,7 +59,7 @@ void main() {
         (await db.query(
           'SELECT version FROM schema_migrations ORDER BY version',
         )).map((row) => row['version']),
-        [1, 100, 200, 300, 301, 302, 303, 304, 500, 501, 502, 503, 504],
+        [1, 100, 200, 205, 300, 301, 302, 303, 304, 500, 501, 502, 503, 504],
       );
       expect(
         await db.query(

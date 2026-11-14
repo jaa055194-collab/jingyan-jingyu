@@ -80,6 +80,10 @@ abstract final class Routes {
   /// Per-device message acknowledgement for one conversation.
   static const String messageAck = '$prefix/conversations/{conversationId}/ack';
 
+  /// Recall one of the caller's own recent messages.
+  static const String messageRecall =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/recall';
+
   /// 单会话差集同步：`/conversations/{conversationId}/sync`。
   static const String sync = '$prefix/conversations/{conversationId}/sync';
 
