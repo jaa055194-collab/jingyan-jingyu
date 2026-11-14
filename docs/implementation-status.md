@@ -74,7 +74,7 @@ Migration303及认证配置路由保存群AI策略：群主设置群共享每日
 
 ContextAssembler要求真实模型的完整输入token计数器及显式窗口/输出/安全预留，不默认估算；固定系统/人格和当前用户输入装不下则报错，不截断人格；只选近期完整轮次、授权同scope摘要及过阈值topK记忆。召回文本为带来源的user-role数据，不能提升为system。21项测试与独立review通过，包括万轮历史。调用方仍须分页检索、消化省略ID并保全重要事实；精确tokenizer、摘要生成和自动回复装配未完成，不宣称不会遗忘或提示注入不可能。
 
-可选Migration601人格服务提供明确P0/P1/P2初始化、加密当前卡与只追加历史、版本CAS、operator锁定/编辑/撤回及AI自迭代理由/证据。遵A1锁定P0/P1而P2自主；旧M06笼统锁定验收的文字冲突已在源码保留。不能由聊天正文自动覆盖人格，没有HTTP/自动迭代触发器。只追加SQL约束也拒INSERT OR REPLACE替换旧历史。人格界面与自动迭代触发尚未接入，不宣称端到端人格污染防护验收完成。
+Migration601人格服务提供明确P0/P1/P2初始化、加密当前卡与只追加历史、版本CAS、operator锁定/编辑/撤回及AI自迭代理由/证据。现已在默认宿主注册既有601（不启用memory600），PersonaModule提供当前operator的显式初始化、当前卡读取、带reason/expectedVersion的手动PATCH与lock/unlock HTTP；不默认初始化，不允许JSON伪造actor/owner，非owner/admin无越权。遵A1锁定P0/P1而P2自主，owner手动编辑不受自主锁限制；旧M06笼统锁定验收冲突保留。历史仍加密且只追加，未公开无界history/revert或selfIterate。无自动迭代/模型/记忆触发器，未接人格UI或生产记忆授权，不宣称端到端人格污染防护验收完成。
 
 ContextualChat内部组合已将当前加密人格卡→固定system上下文→装箱→有预算runtime连通。显式profile绑定provider/model/tokenizer/窗口，runtime/gateway一次解析后精确匹配并固定同一dispatch；过期profile在pending前拒绝，输出预留贯通为实际max_tokens。可信scopeKey与AI必须精确一致，输出包含省略ID。10项真实SQLite/加密/回调provider测试通过；没有HTTP/定时自动回复入口，生产记忆授权和真实tokenizer仍由可信调用方提供。
 
