@@ -14,6 +14,7 @@ import '../audit/audit_log.dart';
 import 'message_store.dart';
 import 'reactions.dart';
 import 'scheduled.dart';
+import 'search.dart';
 
 /// 会话成员校验。未登记真实策略时拒绝读取和发送。
 abstract class MembershipCheck {
@@ -41,16 +42,19 @@ class MessagesModule extends HostModule {
     Authenticator? authenticate,
     ScheduledMessageService? scheduled,
     ReactionsService? reactions,
+    MessageSearchService? search,
     this.clock = const SystemClock(),
   }) : _store = store ?? InMemoryMessageStore(),
        _authenticate = authenticate,
        _scheduled = scheduled,
-       _reactions = reactions;
+       _reactions = reactions,
+       _searchService = search;
 
   final MessageStore _store;
   final Authenticator? _authenticate;
   final ScheduledMessageService? _scheduled;
   final ReactionsService? _reactions;
+  final MessageSearchService? _searchService;
   final Clock clock;
   late HostServices _services;
   Timer? _deliveryTimer;
@@ -96,8 +100,80 @@ class MessagesModule extends HostModule {
     router.delete(Routes.scheduledMessage, _cancelScheduled);
     router.post(Routes.messageReactions, _react);
     router.get(Routes.messageReactions, _reactionsList);
+    router.get(Routes.search, _search);
     router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
+  }
+
+  Future<HostResponse> _search(HostRequest request) async {
+    final search = _searchService;
+    if (search == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'search unavailable'),
+      );
+    }
+    final principal = request.principal!;
+    final query = request.query['q'];
+    if (query == null || query.trim().isEmpty || query.length > 200) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad query'),
+      );
+    }
+    final limit = int.tryParse(request.query['limit'] ?? '50');
+    if (limit == null || limit < 1 || limit > 100) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad limit'),
+      );
+    }
+    MessageKind? kind;
+    final kindRaw = request.query['kind'];
+    if (kindRaw != null) {
+      kind = MessageKind.tryParse(kindRaw);
+      if (kind == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.invalidArgument, 'bad kind'),
+        );
+      }
+    }
+    DateTime? from;
+    DateTime? to;
+    final fromRaw = request.query['from'];
+    final toRaw = request.query['to'];
+    if (fromRaw != null) {
+      from = DateTime.tryParse(fromRaw);
+      if (from == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.invalidArgument, 'bad from'),
+        );
+      }
+    }
+    if (toRaw != null) {
+      to = DateTime.tryParse(toRaw);
+      if (to == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.invalidArgument, 'bad to'),
+        );
+      }
+    }
+    final members = _members;
+    final history = _services.maybeGet<HistoryMembershipCheck>();
+    final result = await search.search(
+      accountId: principal.accountId,
+      query: query,
+      canRead: members.canRead,
+      firstVisibleSeq: (accountId, conversationId) async {
+        if (history != null) {
+          return history.firstVisibleSeq(accountId, conversationId);
+        }
+        return await members.canRead(accountId, conversationId) ? 1 : null;
+      },
+      senderId: request.query['senderId'],
+      kind: kind,
+      from: from,
+      to: to,
+      limit: limit,
+    );
+    return HostResponse.fromResult(result, (hits) => {'hits': hits});
   }
 
   Future<HostResponse> _react(HostRequest request) async {
