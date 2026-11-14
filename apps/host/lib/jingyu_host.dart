@@ -34,6 +34,7 @@ import 'src/storage/migrations.dart';
 import 'src/storage/storage_module.dart';
 import 'src/config.dart';
 import 'src/messages/blind_index.dart';
+import 'src/messages/favorites.dart';
 import 'src/messages/messages_module.dart';
 import 'src/messages/pins.dart';
 import 'src/messages/reactions.dart';
@@ -104,6 +105,11 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     blind: blindIndex,
   );
   final pins = PinsService(database: storage.database, clock: clock);
+  final favorites = FavoritesService(
+    database: storage.database,
+    cipher: storage.cipher,
+    clock: clock,
+  );
   final conversations = ConversationService(
     database: storage.database,
     clock: clock,
@@ -151,6 +157,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       search: messageSearch,
       pins: pins,
       blind: blindIndex,
+      favorites: favorites,
       clock: clock,
     ),
     SocialModule(
