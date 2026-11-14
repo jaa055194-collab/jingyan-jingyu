@@ -8,6 +8,7 @@ import 'ai_routes.dart';
 import 'config_routes.dart';
 import 'budget_routes.dart';
 import 'usage_routes.dart';
+import 'usage_trend_routes.dart';
 import 'model_runtime.dart';
 import '../security/url_guard.dart';
 import '../storage/cipher.dart';
@@ -60,6 +61,7 @@ class ModelsModule extends HostModule {
     if (accounts != null) {
       mountAiRoutes(router, accounts: accounts, db: db);
       mountUsageRoutes(router, db: db, clock: clock, accounts: accounts);
+      mountUsageTrendRoutes(router, db: db, clock: clock, accounts: accounts);
       mountBudgetRoutes(
         router,
         db: db,
