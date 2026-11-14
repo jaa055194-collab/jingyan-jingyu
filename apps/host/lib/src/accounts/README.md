@@ -24,6 +24,7 @@ Paths are shared protocol `Routes` constants.
 - `POST /api/v1/admin/invites`: administrator `{expiresAt: ISO8601, maxUses?: 1}` -> one-time `{code}`.
 - `GET /api/v1/admin/accounts`: administrator metadata allowlist only.
 - `POST /api/v1/admin/accounts`: administrator `{displayName,password}` -> `{accountId}`. Cannot create another administrator.
+- `POST /api/v1/admin/accounts/{accountId}/reset-password`: administrator-only, exactly `{newPassword: string}` -> `{reset: true}`. Uses the existing reset facade: human targets only, 12–1024 characters, clears target lockout and invalidates all target access/refresh sessions. Disabled accounts remain disabled. Resetting the administrator itself succeeds but requires a new login afterwards. These are existing domain semantics, not new recovery policies. No password/hash/session material is returned.
 
 Authenticated service facades (`domain.scope(bearer)`) expose AI creation/operator checks, disable/reset-password, invitations and devices. Each operation revalidates its bearer. Caller-provided principal IDs never grant service authority. AI account creation requires the acting human to be its operator; the administrator's separate disable power is operational account management.
 
