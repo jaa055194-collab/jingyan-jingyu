@@ -4,12 +4,16 @@
 /// Social services register visibility and optional history boundaries.
 library;
 
+import 'dart:async';
+
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../audit/audit_log.dart';
 import 'message_store.dart';
+import 'reactions.dart';
+import 'scheduled.dart';
 
 /// 会话成员校验。未登记真实策略时拒绝读取和发送。
 abstract class MembershipCheck {
@@ -35,14 +39,21 @@ class MessagesModule extends HostModule {
   MessagesModule({
     MessageStore? store,
     Authenticator? authenticate,
+    ScheduledMessageService? scheduled,
+    ReactionsService? reactions,
     this.clock = const SystemClock(),
   }) : _store = store ?? InMemoryMessageStore(),
-       _authenticate = authenticate;
+       _authenticate = authenticate,
+       _scheduled = scheduled,
+       _reactions = reactions;
 
   final MessageStore _store;
   final Authenticator? _authenticate;
+  final ScheduledMessageService? _scheduled;
+  final ReactionsService? _reactions;
   final Clock clock;
   late HostServices _services;
+  Timer? _deliveryTimer;
 
   @override
   String get name => 'messages';
@@ -51,6 +62,25 @@ class MessagesModule extends HostModule {
   Future<void> configure(HostServices services) async {
     _services = services;
     services.provide<MessageStore>(_store, owner: name);
+  }
+
+  @override
+  Future<void> start() async {
+    final scheduled = _scheduled;
+    if (scheduled == null) return;
+    _deliveryTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      try {
+        await scheduled.deliverDue();
+      } catch (_) {
+        // Delivery failures are retried on the next tick.
+      }
+    });
+  }
+
+  @override
+  Future<void> stop() async {
+    _deliveryTimer?.cancel();
+    _deliveryTimer = null;
   }
 
   MembershipCheck get _members =>
@@ -62,8 +92,162 @@ class MessagesModule extends HostModule {
     router.post(Routes.messageRecall, _recall);
     router.post(Routes.messageEdit, _edit);
     router.get(Routes.messageEdits, _editHistory, access: Access.admin);
+    router.post(Routes.scheduledMessages, _schedule);
+    router.delete(Routes.scheduledMessage, _cancelScheduled);
+    router.post(Routes.messageReactions, _react);
+    router.get(Routes.messageReactions, _reactionsList);
     router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
+  }
+
+  Future<HostResponse> _react(HostRequest request) async {
+    final reactions = _reactions;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (reactions == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'reactions unavailable'),
+      );
+    }
+    if (!await _members.canPost(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final body = request.jsonObject();
+    if (body is Err<Map<String, Object?>> || body.value['emoji'] is! String) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad body'),
+      );
+    }
+    final result = await reactions.toggle(
+      conversationId: conversationId,
+      messageId: messageId,
+      accountId: principal.accountId,
+      emoji: body.value['emoji']! as String,
+    );
+    return HostResponse.fromResult(result);
+  }
+
+  Future<HostResponse> _reactionsList(HostRequest request) async {
+    final reactions = _reactions;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (reactions == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'reactions unavailable'),
+      );
+    }
+    if (!await _members.canRead(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final result = await reactions.list(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+    return HostResponse.fromResult(
+      result,
+      (items) => {
+        'reactions': [
+          for (final item in items)
+            {'accountId': item['accountId'], 'emoji': item['emoji']},
+        ],
+      },
+    );
+  }
+
+  Future<HostResponse> _schedule(HostRequest request) async {
+    final scheduled = _scheduled;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (scheduled == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'scheduled messages unavailable'),
+      );
+    }
+    if (!await _members.canPost(principal.accountId, conversationId)) {
+      return HostResponse.failure(
+        const Failure(FailureCode.notFound, 'not visible'),
+      );
+    }
+    final body = request.jsonObject();
+    if (body is Err<Map<String, Object?>>) {
+      return HostResponse.failure(body.failure);
+    }
+    final json = body.value;
+    final kind = json['kind'] is String
+        ? MessageKind.tryParse(json['kind']! as String)
+        : null;
+    final content = json['body'];
+    final deliverAt = json['deliverAt'] is String
+        ? DateTime.tryParse(json['deliverAt']! as String)
+        : null;
+    if (kind == null || content is! Map || deliverAt == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad body'),
+      );
+    }
+    final result = await scheduled.schedule(
+      conversationId: conversationId,
+      senderId: principal.accountId,
+      kind: kind,
+      body: content.cast<String, Object?>(),
+      deliverAt: deliverAt,
+    );
+    return HostResponse.fromResult(result);
+  }
+
+  Future<HostResponse> _cancelScheduled(HostRequest request) async {
+    final scheduled = _scheduled;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final scheduledId = request.pathParams['scheduledId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(scheduledId, kind: 'scheduledMessage');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (scheduled == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'scheduled messages unavailable'),
+      );
+    }
+    final result = await scheduled.cancel(
+      conversationId: conversationId,
+      scheduledId: scheduledId,
+      senderId: principal.accountId,
+    );
+    return HostResponse.fromResult(result, (_) => {'cancelled': true});
   }
 
   Future<HostResponse> _send(HostRequest request) async {
