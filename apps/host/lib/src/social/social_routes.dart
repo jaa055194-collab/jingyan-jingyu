@@ -52,6 +52,17 @@ void mountSocialRoutes(Router router, ConversationService conversations) {
     return HostResponse.fromResult(result, (group) => group.toJson());
   });
 
+  router.get(Routes.conversationMembers, (request) async {
+    final result = await conversations.listMembers(
+      accountId: request.principal!.accountId,
+      conversationId: request.pathParams['conversationId']!,
+    );
+    return HostResponse.fromResult(
+      result,
+      (members) => {'members': members},
+    );
+  });
+
   router.post(Routes.conversationMembers, (request) async {
     final body = request.jsonObject().valueOrNull;
     if (body == null || body.keys.any((key) => key != 'accountId')) {
