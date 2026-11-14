@@ -22,6 +22,8 @@ Paths are shared protocol `Routes` constants.
 - `GET /api/v1/auth/devices`: authenticated current-account device metadata list.
 - `POST /api/v1/auth/devices/{deviceId}/revoke`: authenticated current-account device revocation.
 - `POST /api/v1/admin/invites`: administrator `{expiresAt: ISO8601, maxUses?: 1}` -> one-time `{code}`.
+- `GET /api/v1/admin/invites`: administrator metadata list with exactly `id`, `expiresAt`, `maxUses`, `usedCount`, `revokedAt`. Timestamps are UTC epoch milliseconds (`revokedAt` nullable); expired/exhausted/revoked records remain listed. Plaintext codes and digests are never returned here.
+- `POST /api/v1/admin/invites/{inviteId}/revoke`: administrator-only, no body -> `{revoked: true}`. The path uses the metadata ID, not the secret redemption code. Existing repeated-revoke behavior is preserved (success with a refreshed revocation timestamp); counts and unrelated invitations are unchanged. Revocation committed before an in-flight redemption's final transaction prevents that registration, not registrations already completed.
 - `GET /api/v1/admin/accounts`: administrator metadata allowlist only.
 - `POST /api/v1/admin/accounts`: administrator `{displayName,password}` -> `{accountId}`. Cannot create another administrator.
 
