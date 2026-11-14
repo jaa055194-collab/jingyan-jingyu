@@ -74,4 +74,17 @@ CREATE TABLE message_pins (
 );
 CREATE INDEX idx_message_pins_conversation ON message_pins(conversation_id);
 '''),
+  Migration(210, 'encrypted search blind index', '''
+CREATE TABLE message_search_tokens (
+  message_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  token_hmac TEXT NOT NULL,
+  PRIMARY KEY(message_id, token_hmac)
+);
+CREATE INDEX idx_search_tokens_hmac ON message_search_tokens(token_hmac);
+CREATE TABLE search_index_key (
+  id TEXT PRIMARY KEY NOT NULL,
+  sealed TEXT NOT NULL
+);
+'''),
 ];

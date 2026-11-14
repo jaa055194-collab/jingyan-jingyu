@@ -11,6 +11,7 @@ import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../audit/audit_log.dart';
+import 'blind_index.dart';
 import 'message_store.dart';
 import 'pins.dart';
 import 'reactions.dart';
@@ -45,13 +46,15 @@ class MessagesModule extends HostModule {
     ReactionsService? reactions,
     MessageSearchService? search,
     PinsService? pins,
+    BlindIndexService? blind,
     this.clock = const SystemClock(),
   }) : _store = store ?? InMemoryMessageStore(),
        _authenticate = authenticate,
        _scheduled = scheduled,
        _reactions = reactions,
        _searchService = search,
-       _pins = pins;
+       _pins = pins,
+       _blind = blind;
 
   final MessageStore _store;
   final Authenticator? _authenticate;
@@ -59,6 +62,7 @@ class MessagesModule extends HostModule {
   final ReactionsService? _reactions;
   final MessageSearchService? _searchService;
   final PinsService? _pins;
+  final BlindIndexService? _blind;
   final Clock clock;
   late HostServices _services;
   Timer? _deliveryTimer;
@@ -457,6 +461,18 @@ class MessagesModule extends HostModule {
       kind: kind,
       body: content.cast<String, Object?>(),
     );
+    final blind = _blind;
+    if (blind != null && result.isOk) {
+      try {
+        await blind.indexMessage(
+          messageId: result.value.message.messageId,
+          conversationId: conversationId,
+          body: result.value.message.body,
+        );
+      } catch (_) {
+        // Search indexing must not fail an accepted send; a rebuild can repair it.
+      }
+    }
     return HostResponse.fromResult(
       result,
       (r) => {'duplicate': r.duplicate, 'message': r.message.toPayload()},
@@ -496,6 +512,16 @@ class MessagesModule extends HostModule {
     );
     if (result.isErr) return HostResponse.failure(result.failureOrNull!);
     final edited = result.value;
+    final blind = _blind;
+    if (blind != null) {
+      try {
+        await blind.indexMessage(
+          messageId: edited.message.messageId,
+          conversationId: conversationId,
+          body: edited.message.body,
+        );
+      } catch (_) {}
+    }
     final audit = _services.maybeGet<AuditLog>();
     if (audit != null) {
       try {
@@ -568,6 +594,12 @@ class MessagesModule extends HostModule {
       senderId: principal.accountId,
     );
     if (result.isErr) return HostResponse.failure(result.failureOrNull!);
+    final blind = _blind;
+    if (blind != null) {
+      try {
+        await blind.removeMessage(messageId);
+      } catch (_) {}
+    }
     final audit = _services.maybeGet<AuditLog>();
     if (audit != null) {
       // The tombstone commit already happened inside the store transaction.

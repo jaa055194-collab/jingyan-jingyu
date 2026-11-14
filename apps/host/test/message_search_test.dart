@@ -5,6 +5,7 @@ import 'package:jingyu_host/jingyu_host.dart';
 import 'package:jingyu_host/src/accounts/accounts_migrations.dart';
 import 'package:jingyu_host/src/accounts/accounts_sql_store.dart';
 import 'package:jingyu_host/src/accounts/password_hasher.dart';
+import 'package:jingyu_host/src/messages/blind_index.dart';
 import 'package:jingyu_host/src/messages/messages_migrations.dart';
 import 'package:jingyu_host/src/messages/search.dart';
 import 'package:jingyu_host/src/messages/sqlite_message_store.dart';
@@ -144,10 +145,12 @@ void main() {
     final services = HostServices()
       ..provide<MembershipCheck>(membership, owner: 'search-test')
       ..provide<HistoryMembershipCheck>(membership, owner: 'search-test');
+    final blind = BlindIndexService(database: db, cipher: cipher);
     final module = MessagesModule(
       store: messages,
       authenticate: DbAuthenticator(accounts).call,
-      search: MessageSearchService(database: db, store: messages),
+      search: MessageSearchService(database: db, store: messages, blind: blind),
+      blind: blind,
       clock: clock,
     );
     await module.configure(services);
@@ -187,6 +190,7 @@ void main() {
       expect(found.status, 200);
       expect(hits(found), hasLength(1));
       expect(hits(found).single['conversationId'], own.id);
+      expect(hits(found).single['mode'], 'blind');
 
       final filteredOut = await search(
         tokens['member'],

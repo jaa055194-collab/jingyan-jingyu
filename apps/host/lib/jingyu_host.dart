@@ -33,6 +33,7 @@ import 'src/social/social_module.dart';
 import 'src/storage/migrations.dart';
 import 'src/storage/storage_module.dart';
 import 'src/config.dart';
+import 'src/messages/blind_index.dart';
 import 'src/messages/messages_module.dart';
 import 'src/messages/pins.dart';
 import 'src/messages/reactions.dart';
@@ -93,9 +94,14 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     clock: clock,
   );
   final reactions = ReactionsService(database: storage.database, clock: clock);
+  final blindIndex = BlindIndexService(
+    database: storage.database,
+    cipher: storage.cipher,
+  );
   final messageSearch = MessageSearchService(
     database: storage.database,
     store: messages,
+    blind: blindIndex,
   );
   final pins = PinsService(database: storage.database, clock: clock);
   final conversations = ConversationService(
@@ -144,6 +150,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       reactions: reactions,
       search: messageSearch,
       pins: pins,
+      blind: blindIndex,
       clock: clock,
     ),
     SocialModule(
