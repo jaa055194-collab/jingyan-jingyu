@@ -113,22 +113,22 @@ VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
   /// 投递所有到点消息，返回成功追加的条数；过期的标记 expired。
   Future<int> deliverDue({DateTime? now}) async {
     final current = (now ?? clock.now()).toUtc();
-    final due = await _database.query(
-      '''
+    // Compare parsed DateTimes instead of ISO text: the fractional-second width
+    // of toIso8601String is not fixed, so TEXT comparison can misorder values.
+    final pending = await _database.query('''
 SELECT id, conversation_id, sender_id, kind, body, deliver_at FROM scheduled_messages
-WHERE status = 'pending' AND deliver_at <= ?
-ORDER BY deliver_at, rowid
-''',
-      [current.toIso8601String()],
-    );
+WHERE status = 'pending'
+ORDER BY rowid
+''');
     var delivered = 0;
-    for (final row in due) {
+    for (final row in pending) {
       final id = row['id'] as String;
       final conversationId = row['conversation_id'] as String;
       final senderId = row['sender_id'] as String;
       final kind = MessageKind.tryParse(row['kind'] as String);
       final deliverAt = DateTime.parse(row['deliver_at'] as String).toUtc();
       if (kind == null) continue;
+      if (deliverAt.isAfter(current)) continue;
       if (current.difference(deliverAt) > _maxDelay) {
         await _mark(id, 'expired');
         continue;
