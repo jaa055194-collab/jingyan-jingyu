@@ -293,7 +293,7 @@ class InMemoryMessageStore implements MessageStore {
     final editId = _newId();
     final editedAt = clock.now().toUtc();
     _edits
-        .putIfAbsent(messageId, () => [])
+        .putIfAbsent('$conversationId|$messageId', () => [])
         .add(
           EditVersion(
             editId: editId,
@@ -325,5 +325,9 @@ class InMemoryMessageStore implements MessageStore {
   Future<Result<List<EditVersion>>> editHistory({
     required String conversationId,
     required String messageId,
-  }) async => Ok(List<EditVersion>.unmodifiable(_edits[messageId] ?? const []));
+  }) async => Ok(
+    List<EditVersion>.unmodifiable(
+      _edits['$conversationId|$messageId'] ?? const [],
+    ),
+  );
 }
