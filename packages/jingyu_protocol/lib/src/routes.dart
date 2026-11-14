@@ -44,6 +44,8 @@ abstract final class Routes {
   /// Administrator disables an account; the sole administrator is protected.
   static const String adminAccountDisable =
       '$prefix/admin/accounts/{accountId}/disable';
+  /// Bounded administrator audit envelopes; no entry metadata or bodies.
+  static const String adminAudit = '$prefix/admin/audit';
 
   /// 管理员邀请码管理。
   static const String adminInvites = '$prefix/admin/invites';
