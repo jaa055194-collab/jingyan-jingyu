@@ -182,6 +182,37 @@ class ConversationService implements HistoryMembershipCheck {
     });
   }
 
+  /// Current human owner changes existing group metadata, never another actor.
+  Future<Result<void>> setName({
+    required String actorId,
+    required String conversationId,
+    required String name,
+  }) async {
+    if (!_validId(actorId) ||
+        !_validId(conversationId) ||
+        name.trim().isEmpty ||
+        name.length > 100) {
+      return _invalid();
+    }
+    return _database.transaction((tx) async {
+      final rows = await tx.query(
+        'SELECT owner_account_id FROM social_conversations WHERE id = ?',
+        [conversationId],
+      );
+      if (rows.isEmpty ||
+          rows.single['owner_account_id'] != actorId ||
+          await _activeKind(tx, actorId) != 'human' ||
+          !await _isMember(tx, conversationId, actorId)) {
+        return _missing();
+      }
+      await tx.execute(
+        'UPDATE social_conversations SET name = ? WHERE id = ?',
+        [name.trim(), conversationId],
+      );
+      return const Ok(null);
+    });
+  }
+
   Future<Result<void>> transferOwnership({
     required String actorId,
     required String conversationId,

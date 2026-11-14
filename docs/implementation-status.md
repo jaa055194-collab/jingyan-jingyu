@@ -77,6 +77,8 @@ Migration302独立私聊固定成员与canonical唯一账户对；好友同意�
 
 ## 群管理与AI发言设置
 
+`PUT /api/v1/conversations/{conversationId}/name`仅当前active human群主且仍为成员时可改已有群名；认证账号/设备复核后，owner/member/active-kind与name-only UPDATE同Tx。沿create原始Dart长度≤100且trim非空，存trim值，无admin/operator绕过，legacy AI owner拒绝。原成员列表回读即见新名，无新migration/UI/头像/角色/通知。成功审计只记actor/group/action，不含旧新名字；审计仍是既有独立post-commit写，不保证与rename原子。
+
 群主可将所有权转给现有有效人类成员；非群主成员可退出，群主须先转让；群主可移除成员，operator可退出其当前持有的AI。成员身份撤销立即阻止群消息读写，joined历史群重新加入从新边界开始。认证群管理路由校验当前bearer账号与设备，非成员不获管理员越权。
 
 Migration303及认证配置路由保存群AI策略：群主设置群共享每日上限、轮次数、主持/自主插话及静音；AI operator单独配置该AI间隔，不被群主共享配置覆盖。默认需被提及，自主插话间隔只统计自主发言、每轮限制跨午夜不重置；日限额使用可信调用方提供的时区日。内部原子admission可以防并发超限，但**尚未接入AI触发与实际发消息事务**，不宣称群AI已自动发言或绝不会超发。HTTP秒数在构造Duration前验证可表示范围，避免整数回绕。
