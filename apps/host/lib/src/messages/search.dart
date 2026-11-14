@@ -4,6 +4,7 @@ import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../storage/database.dart';
+import 'blind_index.dart';
 import 'message_store.dart';
 
 /// 全局消息搜索（FR-17 / AC-20 的服务端子集）。
@@ -15,11 +16,14 @@ class MessageSearchService {
   MessageSearchService({
     required Database database,
     required MessageStore store,
+    BlindIndexService? blind,
   }) : _database = database,
-       _store = store;
+       _store = store,
+       _blind = blind;
 
   final Database _database;
   final MessageStore _store;
+  final BlindIndexService? _blind;
 
   static const int _maxPagesPerConversation = 20;
   static const int _pageSize = 200;
@@ -38,10 +42,58 @@ class MessageSearchService {
     int limit = 50,
   }) async {
     final needle = query.toLowerCase();
+    final hits = <Map<String, Object?>>[];
+    final seen = <String>{};
+    bool matches(
+      Map<String, Object?> body,
+      String sender,
+      String kindWire,
+      DateTime sentAt,
+    ) {
+      if (senderId != null && sender != senderId) return false;
+      if (kind != null && kind.wire != kindWire) return false;
+      if (from != null && sentAt.isBefore(from)) return false;
+      if (to != null && sentAt.isAfter(to)) return false;
+      return jsonEncode(body).toLowerCase().contains(needle);
+    }
+
+    // 盲索引候选优先（候选仍需解密校验与可见性检查）。
+    final blind = _blind;
+    if (blind != null) {
+      final candidates = await blind.candidates(query);
+      if (candidates.isOk) {
+        for (final row in await blind.resolve(candidates.value)) {
+          if (hits.length >= limit) break;
+          final conversationId = row['conversationId'] as String;
+          if (!await canRead(accountId, conversationId)) continue;
+          final first = await firstVisibleSeq(accountId, conversationId);
+          if (first == null) continue;
+          if ((row['seq'] as int) < first) continue;
+          final body = (row['body'] as Map).cast<String, Object?>();
+          final kindWire = row['kind'] as String;
+          final sentAt = DateTime.parse(row['sentAt'] as String);
+          if (!matches(body, row['senderId'] as String, kindWire, sentAt)) {
+            continue;
+          }
+          final id = row['messageId'] as String;
+          if (!seen.add(id)) continue;
+          hits.add({
+            'conversationId': conversationId,
+            'messageId': id,
+            'seq': row['seq'],
+            'senderId': row['senderId'],
+            'kind': kindWire,
+            'body': body,
+            'sentAt': sentAt.toIso8601String(),
+            'mode': 'blind',
+          });
+        }
+      }
+    }
+
     final conversations = await _database.query(
       'SELECT DISTINCT conversation_id FROM messages',
     );
-    final hits = <Map<String, Object?>>[];
     for (final row in conversations) {
       if (hits.length >= limit) break;
       final conversationId = row['conversation_id'] as String;
@@ -60,11 +112,13 @@ class MessageSearchService {
         final messages = page.value.messages;
         for (final message in messages) {
           if (hits.length >= limit) break;
-          if (senderId != null && message.senderId != senderId) continue;
-          if (kind != null && message.kind != kind) continue;
-          if (from != null && message.sentAt.isBefore(from)) continue;
-          if (to != null && message.sentAt.isAfter(to)) continue;
-          if (!jsonEncode(message.body).toLowerCase().contains(needle)) {
+          if (!seen.add(message.messageId)) continue;
+          if (!matches(
+            message.body,
+            message.senderId,
+            message.kind.wire,
+            message.sentAt,
+          )) {
             continue;
           }
           hits.add({
@@ -75,6 +129,7 @@ class MessageSearchService {
             'kind': message.kind.wire,
             'body': message.body,
             'sentAt': message.sentAt.toIso8601String(),
+            'mode': 'scan',
           });
         }
         if (!page.value.hasMore || messages.isEmpty) break;
