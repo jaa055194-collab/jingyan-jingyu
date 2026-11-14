@@ -36,6 +36,7 @@ abstract final class Routes {
 
   /// 管理员账号元数据与账号创建。
   static const String adminAccounts = '$prefix/admin/accounts';
+  static const String adminUsage = '$prefix/admin/usage';
 
   /// Administrator resets a human account's password; existing sessions are revoked.
   static const String adminAccountPasswordReset =

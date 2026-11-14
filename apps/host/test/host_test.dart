@@ -211,6 +211,7 @@ void main() {
         'storage',
         'accounts',
         'admin_audit',
+        'admin_usage',
         'messages',
         'attachments',
         'social',
