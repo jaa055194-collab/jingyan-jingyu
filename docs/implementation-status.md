@@ -8,6 +8,8 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 
 ## 本分支增量
 
+- Outbox.flush增加每实例single-flight：重叠调用共享首调用的submit/onDropped和report/error，不再并发读取同一head然后删错队首；transient保持显式下一次重试，throw后释放guard。原FIFO/永久失败drop/追加期间继续drain语义不变。12个确定性并发/错误/reentry测试与全client44通过；未接真实持久化/Flutter，callback不得await自身阻塞的flight。
+
 - 插件激活期复用受限上下文，保持私有内存状态；能力不可变快照，失败激活/停用后上下文失效。并发激活按实例隔离贡献并预留ID；停用立即撤销上下文，未结束的激活完成后清理资源并防止复活。若激活永不结束，宿主无法强制执行其清理。公开签名不变，不承诺跨重启保存。
 - M12 配额与并发许可纯策略，边界测试覆盖；未接入真实上传、清理或备份。
 - Migration 200 与 `SqliteMessageStore`：正文 AES-GCM（AAD含消息id）、事务 seq/幂等、分页、设备ack、重启持久化。MessageStore仍是内部可信仓储，权限由服务器成员策略执行。
