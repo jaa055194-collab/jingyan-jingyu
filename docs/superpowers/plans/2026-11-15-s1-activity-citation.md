@@ -31,11 +31,11 @@
 
 **Interfaces:** `S1Activity({required String id, required String summary})`; `typedef S1ActivityLookup = Future<List<S1Activity>> Function(AiId ai)`; `ActivityS1Responder({required S1ActivityLookup activities, S1Responder? fallback}) implements S1Responder`.
 
-- [ ] Write failing tests: status query with activity cites id+summary; no activity → fallback, no claim; non-query → fallback without lookup; padding neutral with no lookup; user-quoted event not claimed; blank id/summary skipped; real-router simple path S2 calls=0 and activityRefs carried.
-- [ ] Observe absent-file then throwing-skeleton failures.
-- [ ] Implement the decorator.
-- [ ] Run focused + existing brain tests, host analyze, then exact-head CI.
-- [ ] Independent review, fix findings, update traceability, commit, push, draft PR.
+- [x] Write failing tests: status query with activity cites id+summary; no activity → fallback, no claim; non-query → fallback without lookup; padding neutral with no lookup; user-quoted event not claimed; blank id/summary skipped; real-router simple path S2 calls=0 and activityRefs carried.
+- [x] Observe absent-file then throwing-skeleton failures.
+- [x] Implement the decorator (whole-phrase status match; lookup fail-soft; freshness note).
+- [x] Run focused + existing brain tests, host analyze, then exact-head CI.
+- [x] Independent review, fix findings (quoted-phrase guard, fail-soft, blank-then-valid, reachability doc+test), update traceability, commit, push, draft PR.
 
 ## Self-review
 

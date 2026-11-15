@@ -17,7 +17,7 @@ Source baseline: repository v4.2 FR-46, `docs/architecture/02-decisions.md` B-1/
 
 ## Deliberately not claimed
 
-No memoization, semantic/regex meme retrieval, AI/circle authorization, model binding, B1 metering, B2 degradation, host transport delivery, UI, persistence, real activity citation or downstream memory-candidate exclusion is implemented here. `source=s1` is preserved by the existing router but alone does not prove a downstream memory filter. No UI changed, so visual comparison is not applicable.
+No memoization, semantic/regex meme retrieval, AI/circle authorization, model binding, B1 metering, B2 degradation, host transport delivery, UI, persistence, real activity citation or downstream memory-candidate exclusion is implemented in the base S1 increment; a later S1 activity-citation increment is described below. `source=s1` is preserved by the existing router but alone does not prove a downstream memory filter. No UI changed, so visual comparison is not applicable.
 
 ## S1 activity citation (2026-11-15)
 
@@ -25,9 +25,9 @@ Baseline: main `3ac8e9f589da87fc426250f6811067f7c2d7c831`. Sources: `02-decision
 
 | ID | Source / approval | Observable acceptance | Implementation | Evidence / status | Remaining gap |
 |---|---|---|---|---|---|
-| M07-S1-008 | B-1 rule 5 / M07 rule 2 | A status query with a real activity replies with its summary and carries the activity id; no record → fallback with no event claim | `activity_s1_responder.dart` `ActivityS1Responder` | `brain_activity_s1_responder_test.dart` with/without-activity tests; focused pass | Source is a trusted port; actual `activity_log` production not wired |
-| M07-S1-009 | B-1 rules 5–6 | Non-status text and user-quoted events never cite an activity; padding is neutral and does no lookup; blank id/summary skipped; real router simple path S2 calls=0 and activityRefs carried | Same + existing router | quoted-event, non-status, padding, blank, and router tests; focused pass | Status-query phrase set is curated; not a general intent detector |
+| M07-S1-005 | B-1 rule 5 / M07 rule 2 | A status query with a real activity replies with its summary and carries the activity id; no record → fallback with no event claim; lookup error falls back (no abort); blank id/summary skipped, valid-after-blank cited | `activity_s1_responder.dart` `ActivityS1Responder` | `brain_activity_s1_responder_test.dart` with/without-activity, blank-skip, fail-soft tests; focused pass | Source is a trusted port; actual `activity_log` production/freshness not wired; source must pre-filter recency (the reply says "刚") |
+| M07-S1-006 | B-1 rules 5–6 | Non-status text, embedded/quoted status phrases and user-quoted events never cite; padding is neutral and does no lookup; real router simple path S2 calls=0 and activityRefs carried | Same + existing router | quoted/embedded, non-status, padding, and router tests; focused pass | Only the router's simple, non-padding path reaches this; question-marked/呢/吗 phrasings classify complex → padding+S2 and do not cite (tested and documented); not a general intent detector |
 
-Verification: TDD absent-file then throwing-skeleton failures observed, then `dart test test/brain_activity_s1_responder_test.dart` 7/7 and existing brain suite 91/91; host `dart analyze --fatal-infos` clean. Exact-head CI recorded in the PR.
+Verification: TDD absent-file then throwing-skeleton failures observed, then `dart test test/brain_activity_s1_responder_test.dart` 11/11 and existing brain suite 91/91; host `dart analyze --fatal-infos` clean. Exact-head CI recorded in the PR.
 
-Deliberate limits: no activity-log production/scheduler, no default-host assembly, no model call; no full AC-33 acceptance. S1 only formats a trusted activity's summary and never asserts user/world facts or promises.
+Deliberate limits: no activity-log production/scheduler, no default-host assembly, no model call; no full AC-33 acceptance. S1 only formats a trusted activity's summary and never asserts user/world facts or promises. Reachability is intentionally limited to simple status phrases; broader status handling belongs in the classifier/routing layer.
