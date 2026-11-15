@@ -9,6 +9,9 @@ import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
 import 'src/ai/persona/persona_migrations.dart';
 import 'src/ai/persona/persona_module.dart';
+import 'src/ai/social_level/social_level_migrations.dart';
+import 'src/ai/social_level/social_level_module.dart';
+import 'src/ai/social_level/sqlite_social_level_store.dart';
 import 'src/audit/admin_audit_module.dart';
 import 'src/audit/admin_audit_reader.dart';
 import 'src/accounts/accounts_module.dart';
@@ -93,6 +96,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       ...usageMigrations,
       budgetTimezoneMigration,
       ...personaMigrations,
+      socialLevelMigration,
     ],
   );
   final messages = SqliteMessageStore(
@@ -199,6 +203,11 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       db: storage.database,
       cipher: storage.cipher,
       urlGuard: urlGuard,
+      clock: clock,
+    ),
+    SocialLevelModule(
+      service: SqliteSocialLevelStore(database: storage.database, clock: clock),
+      authenticate: DbAuthenticator(accounts).call,
       clock: clock,
     ),
     PersonaModule(

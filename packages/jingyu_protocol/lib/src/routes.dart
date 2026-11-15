@@ -170,6 +170,9 @@ abstract final class Routes {
   static const String aiUsage = '$prefix/ai-profiles/{aiId}/usage';
   static const String aiUsageTrend = '$prefix/ai-profiles/{aiId}/usage/trend';
 
+  /// Current operator's explicit L0-L4 configuration, not reply authorization.
+  static const String aiSocialLevel = '$prefix/ai-profiles/{aiId}/social-level';
+
   /// Explicit owner persona initialization and CAS-based configuration.
   static const String aiPersona = '$prefix/ai-profiles/{aiId}/persona';
   static const String aiPersonaInitialize =
