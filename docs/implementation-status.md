@@ -37,6 +37,8 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 
 ## M05 模型配置与内部调用链
 
+`GET /api/v1/ai-profiles/{aiId}/usage` 为当前operator返回AI今日已记录token按层/能力汇总。拥有关系、显式offset与账本同Tx读取，计数用BigInt并以十进制字符串输出；旧日期未结算usage单独按能力标未知。即使额度耗尽或有pending仍可读，不作为模型放行凭据；不含周趋势、UI、费用、余额或provider历史归因，无新网络调用/账本写入。未配置/legacy空offset要求配置，不推断UTC。
+
 按认证账号隔离的provider CRUD与加密key存储（Migration500）仅返回掩码视图；501显式映射AiId档案与AI账号。502保存独立chat/chatFast绑定，禁用不改配置，有绑定provider删除返回conflict。503持久预算/usage账本，504原子配置显式时区；旧null时区要求配置，不默认UTC。认证注册已有AI、绑定、预算路由已挂默认宿主。
 
 内部ModelRuntime经持久化时区调用gateway：解析绑定→预算/降级→取凭证→事务登记pending→单次调用→真实usage结算。B1不替用S2；B2层耗尽只有可信主人私聊允许，日/能力硬停仍优先。unknown usage保留pending并阻止同能力后续调用，需可信对账；重复请求不重发，没有结果缓存。
