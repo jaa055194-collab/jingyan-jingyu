@@ -101,6 +101,12 @@ Migration601人格服务提供明确P0/P1/P2初始化、加密当前卡与只追
 
 ContextualChat内部组合已将当前加密人格卡→固定system上下文→装箱→有预算runtime连通。显式profile绑定provider/model/tokenizer/窗口，runtime/gateway一次解析后精确匹配并固定同一dispatch；过期profile在pending前拒绝，输出预留贯通为实际max_tokens。可信scopeKey与AI必须精确一致，输出包含省略ID。10项真实SQLite/加密/回调provider测试通过；没有HTTP/定时自动回复入口，生产记忆授权和真实tokenizer仍由可信调用方提供。
 
+## 显式AI社交等级配置（FR43后端子集）
+
+默认宿主Migration603及SocialLevelModule提供当前operator的 `GET/PUT /api/v1/ai-profiles/{aiId}/social-level`。无配置时只返回configurationRequired=true及null等级/时间，不猜测通用L0/L1默认、不写种子行。PUT严格接受L0–L4；每次设置/读取与active human owner、active AI及profile关系在同一事务校验，无admin越权。按owner/profile保存；转移后新owner未配置、旧owner不可访问，若AI再次转回原owner则其保留的旧设置可能恢复。只存枚举与UTC时间，损坏非canonical时间失败关闭；审计只记录等级/目标，沿既有postcommit写入而非配置审计原子提交。
+
+22项memory/SQLite契约、默认宿主HTTP/鉴权、重启、升级无默认且保留persona/life、CHECK、同owner多profile、时间损坏和回滚测试通过，相关分析clean。独立源review无Critical/Important；两Minor（时间溢出及承诺覆盖）已回归修正。这只保存显式选择，不执行L0任务取消、实际回复、好友同意或L4开关/多轮权限，不宣称完整FR43/AC04。
+
 ## 规则生活心跳（内部能力）
 
 可选Migration602与LifeEngine要求显式gap阈值、注入规则selector与Clock，不新建timer、不调LLM、不发主动消息。每60秒至多一条实际活动，持久化cadence，恢复只记一条gap而不补造离线活动；结构化状态/枚举SQL检查，没有自由正文。当前operator/active AI每次同Tx核验，记录ID可供后续S1证据引用。13项定向测试通过；未挂生产调度、L0/静默窗与主动行为未实现。
