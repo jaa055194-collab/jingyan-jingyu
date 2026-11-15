@@ -66,6 +66,41 @@ Uint8List _asUnixMade(Uint8List zip, String target) {
   return b;
 }
 
+/// 把 zip 中指定条目的“声明未压缩尺寸”在中央目录与本地文件头里都改成 [declared]，
+/// 模拟伪造头：DEFLATE 流实际能展开出远大于声明值的字节，但头里撒谎说很小。
+Uint8List _forgeUncompressedSize(Uint8List zip, String target, int declared) {
+  final b = Uint8List.fromList(zip);
+  final bd = ByteData.sublistView(b);
+  var eocd = -1;
+  for (var i = b.length - 22; i >= 0; i--) {
+    if (bd.getUint32(i, Endian.little) == 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw StateError('EOCD 未找到');
+  final count = bd.getUint16(eocd + 10, Endian.little);
+  var off = bd.getUint32(eocd + 16, Endian.little);
+  for (var n = 0; n < count; n++) {
+    if (bd.getUint32(off, Endian.little) != 0x02014b50) {
+      throw StateError('中央目录头损坏');
+    }
+    final nameLen = bd.getUint16(off + 28, Endian.little);
+    final extraLen = bd.getUint16(off + 30, Endian.little);
+    final commentLen = bd.getUint16(off + 32, Endian.little);
+    final localOff = bd.getUint32(off + 42, Endian.little);
+    final name = utf8.decode(b.sublist(off + 46, off + 46 + nameLen));
+    if (name == target) {
+      bd.setUint32(off + 24, declared, Endian.little); // 中央目录声明未压缩尺寸
+      if (bd.getUint32(localOff, Endian.little) == 0x04034b50) {
+        bd.setUint32(localOff + 22, declared, Endian.little); // 本地头同名伪造
+      }
+    }
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  return b;
+}
+
 void main() {
   group('validatePluginPackage：正常路径', () {
     test('合法插件包通过，解析出清单并给出 sha256', () {
@@ -419,6 +454,71 @@ void main() {
       final r = validatePluginPackage(patched);
       expect(r.ok, isFalse);
       expect(_has(r, PluginPackageIssueCode.notZip), isTrue);
+    });
+  });
+
+  group('伪造头 / 有界解压（I1）', () {
+    test('伪造头：清单声明很小但真实解压超过单条上限 → entryTooLarge（不信任声明值）', () {
+      // 真实展开 200000 字节（> 单条上限 1000），但头里只声明 10 字节。
+      final content = '$_validManifest${_repeat(' ', 200000)}';
+      final bytes = _forgeUncompressedSize(
+          _zip([_textFile('plugin.json', content)]), 'plugin.json', 10);
+      final r = validatePluginPackage(bytes,
+          limits: const PluginPackageLimits(maxEntryUncompressedBytes: 1000));
+      expect(r.ok, isFalse, reason: r.issues.join(', '));
+      expect(_has(r, PluginPackageIssueCode.entryTooLarge), isTrue);
+      expect(r.manifest, isNull);
+    });
+
+    test('伪造头：清单真实解压超过 maxManifestBytes → manifestTooLarge', () {
+      final content = '$_validManifest${_repeat(' ', 400000)}';
+      final bytes = _forgeUncompressedSize(
+          _zip([_textFile('plugin.json', content)]), 'plugin.json', 10);
+      final r = validatePluginPackage(bytes);
+      expect(r.ok, isFalse, reason: r.issues.join(', '));
+      expect(_has(r, PluginPackageIssueCode.manifestTooLarge), isTrue);
+      expect(r.manifest, isNull);
+    });
+
+    test('伪造头（STORE 未压缩清单）：声明很小但真实很大 → entryTooLarge', () {
+      final content = '$_validManifest${_repeat(' ', 200000)}';
+      final file =
+          ArchiveFile('plugin.json', 0, Uint8List.fromList(utf8.encode(content)))
+            ..compress = false;
+      final bytes = _forgeUncompressedSize(_zip([file]), 'plugin.json', 10);
+      final r = validatePluginPackage(bytes,
+          limits: const PluginPackageLimits(maxEntryUncompressedBytes: 1000));
+      expect(r.ok, isFalse, reason: r.issues.join(', '));
+      expect(_has(r, PluginPackageIssueCode.entryTooLarge), isTrue);
+      expect(r.manifest, isNull);
+    });
+
+    test('伪造头：真实清单使总量超过 maxTotalUncompressedBytes → totalTooLarge', () {
+      final content = '$_validManifest${_repeat(' ', 2000)}';
+      final bytes = _forgeUncompressedSize(
+          _zip([_textFile('plugin.json', content)]), 'plugin.json', 10);
+      final r = validatePluginPackage(bytes,
+          limits: const PluginPackageLimits(maxTotalUncompressedBytes: 1000));
+      expect(r.ok, isFalse, reason: r.issues.join(', '));
+      expect(_has(r, PluginPackageIssueCode.totalTooLarge), isTrue);
+    });
+
+    test('伪造头但真实尺寸在上限内 → 仍通过（不误伤合法小清单）', () {
+      final bytes = _forgeUncompressedSize(
+          _zip([_textFile('plugin.json', _validManifest)]), 'plugin.json', 10);
+      final r = validatePluginPackage(bytes,
+          limits: const PluginPackageLimits(maxEntryUncompressedBytes: 1000));
+      expect(r.ok, isTrue, reason: r.issues.join(', '));
+      expect(r.manifest?.id, 'jingyu.demo.pkg');
+    });
+
+    test('伪造头谎报过大（声明超限）→ 预扫描即拒绝 entryTooLarge（fail-closed）', () {
+      final bytes = _forgeUncompressedSize(
+          _zip([_textFile('plugin.json', _validManifest)]), 'plugin.json', 999999);
+      final r = validatePluginPackage(bytes,
+          limits: const PluginPackageLimits(maxEntryUncompressedBytes: 1000));
+      expect(r.ok, isFalse);
+      expect(_has(r, PluginPackageIssueCode.entryTooLarge), isTrue);
     });
   });
 }
