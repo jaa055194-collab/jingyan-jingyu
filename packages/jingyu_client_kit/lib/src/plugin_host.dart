@@ -3,6 +3,9 @@ library;
 
 import 'dart:async';
 
+import 'package:jingyu_core/jingyu_core.dart';
+import 'package:jingyu_protocol/jingyu_protocol.dart';
+
 import 'plugin.dart';
 
 /// 加载失败原因。
@@ -32,15 +35,63 @@ class PluginEnvironment {
 
 /// 发送消息的回调，由外壳接到发件箱上。
 typedef SendText = Future<void> Function(String conversationId, String text);
+typedef ReadConversation =
+    Future<Result<List<MessageEventFrame>>> Function(
+      String pluginId,
+      String conversationId,
+    );
+typedef ModelInvoke =
+    Future<Result<Map<String, Object?>>> Function(
+      String pluginId,
+      PluginModelRequest request,
+    );
 
 class _Context implements PluginContext {
-  _Context(this.pluginId, Set<PluginCapability> caps, this._send)
-    : _caps = Set.unmodifiable(caps);
+  _Context(
+    this.pluginId,
+    Set<PluginCapability> caps,
+    this._send,
+    this._read,
+    this._invoke,
+  ) : _caps = Set.unmodifiable(caps);
 
   @override
   final String pluginId;
   final Set<PluginCapability> _caps;
   final SendText _send;
+  final ReadConversation? _read;
+  final ModelInvoke? _invoke;
+
+  @override
+  Future<Result<List<MessageEventFrame>>> readConversation(
+    String conversationId,
+  ) {
+    _require(PluginCapability.readConversation);
+    final callback = _read;
+    if (callback == null) {
+      return Future.value(
+        err(FailureCode.unavailable, 'Conversation access unavailable'),
+      );
+    }
+    return callback(pluginId, conversationId).then(
+      (result) => result.map(
+        (messages) => List<MessageEventFrame>.unmodifiable(messages),
+      ),
+    );
+  }
+
+  @override
+  Future<Result<Map<String, Object?>>> modelInvoke(PluginModelRequest request) {
+    _require(PluginCapability.modelInvoke);
+    final callback = _invoke;
+    if (callback == null) {
+      return Future.value(
+        err(FailureCode.unavailable, 'Model invocation unavailable'),
+      );
+    }
+    return callback(pluginId, request);
+  }
+
   final Map<String, String> _storage = {};
   bool _active = true;
 
@@ -137,11 +188,19 @@ class _CleanupScope {
 
 /// 插件宿主。
 class PluginHost {
-  PluginHost({required this.environment, required SendText sendText})
-    : _sendText = sendText;
+  PluginHost({
+    required this.environment,
+    required SendText sendText,
+    ReadConversation? readConversation,
+    ModelInvoke? modelInvoke,
+  }) : _sendText = sendText,
+       _readConversation = readConversation,
+       _modelInvoke = modelInvoke;
 
   final PluginEnvironment environment;
   final SendText _sendText;
+  final ReadConversation? _readConversation;
+  final ModelInvoke? _modelInvoke;
 
   final Map<String, ClientPlugin> _active = {};
   final Map<String, _Registrar> _registrars = {};
@@ -186,7 +245,13 @@ class PluginHost {
       return false;
     }
 
-    final context = _Context(m.id, m.capabilities, _sendText);
+    final context = _Context(
+      m.id,
+      m.capabilities,
+      _sendText,
+      _readConversation,
+      _modelInvoke,
+    );
     final registrar = _Registrar(this, context);
     // Reserve before calling plugin code, including synchronous reentrant load.
     _pending[m.id] = registrar;

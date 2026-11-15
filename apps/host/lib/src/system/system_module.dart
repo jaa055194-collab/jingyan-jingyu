@@ -43,7 +43,12 @@ class SystemModule extends HostModule {
     router.get(Routes.health, (_) async => HostResponse.ok({'status': 'ok'}), access: Access.public);
     router.get(
       Routes.hostInfo,
-      (_) async => HostResponse.ok({
+      (request) async => HostResponse.ok({
+        'isHostMachine': request.principal?.isAdmin == true &&
+            config.hostAccountId?.trim().isNotEmpty == true &&
+            config.hostDeviceId?.trim().isNotEmpty == true &&
+            request.principal?.accountId == config.hostAccountId &&
+            request.principal?.deviceId == config.hostDeviceId,
         'hostVersion': config.hostVersion,
         'protocolVersion': protocolVersion,
         'modules': moduleNames(),
