@@ -23,6 +23,7 @@
   - **严格镜像 `archive` 的 `ZipDirectory.read`**：按中央目录**尺寸窗口**（`cdOffset .. cdOffset+cdSize`）逐条解析，**不信任** EOCD 的 16-bit 条目计数（该字段可被伪造以让预扫只读良性前缀）；结构异常、走到条目数与 EOCD 不符、或未恰好走完窗口时一律 fail-closed；`cdSize` 越过文件边界（`cdEnd > 文件长度`）也 fail-closed（archive 的 `subset`/`toUint8List` 会截断而不报错，可能仍解码出符号链接）。
   - zip64 触发字段与解码器完全一致：任一盘号/条目计数为 `0xFFFF` 或 CD 大小/偏移为 `0xFFFFFFFF` 都拒绝（fail-closed，防止被引导到攻击者控制的 zip64 CD）。
 - **清单真实字节复核**：`plugin.json` 解压后再按真实长度复核 `maxManifestBytes`（保留既有纵深防御），并把清单解析的 `on FormatException` 扩展为 `on Object`，任何非受控异常（如 `TypeError`）都转成 `manifestInvalid`。
+- **清单有界流式解压（I1 修复）**：不再用 `ZipFile.content` 一次性 inflate 清单；改为纯 Dart 的 `Inflate.stream` + 带硬上限的输出流，在 DEFLATE 解压过程中按**真实输出字节**封顶（硬上限取 `maxManifestBytes` 与 `maxEntryUncompressedBytes` 的较小值），超限立即抛内部信号并 fail-closed（复用 `manifestTooLarge`/`entryTooLarge`/`totalTooLarge`）。同时用真实清单长度修正解压总量，避免伪造头少算总量。STORE 未压缩清单同样按真实原始字节校验。
 - **`license` 类型校验**：`PluginManifest.fromJson` 校验 `license` 必须为字符串或 null，否则抛 `FormatException`。
 - **bundle 路径校验**：`icon` / `locales` 值 / `plugins[].entry` / `configSchema` 一律经 `sanitizePackageEntryPath` 校验（拒绝绝对/盘符/`..`/Windows 尾点与保留名）；插件 id 去重改为不区分大小写。
 - **路径函数加固**：`sanitizePackageEntryPath` 增加 Windows 尾点/尾空格 + 保留设备名拒绝。
@@ -35,7 +36,7 @@
 ## 4. 残余风险（如实记录）
 
 - **非清单条目不做实际解压**（仅清单解压），故其“真实解压体积”仍只在安装/解包消费方按声明值受限；声明可伪造时，消费方仍需以流式/配额兜底（本层不承担解包）。
-- **清单解压仍可能先分配再复核**：`plugin.json` 的真实长度复核发生在 `content` 完全 inflate 之后；声明可伪造时，单个大清单在复核前仍会解压（受 `maxManifestBytes` 声明值约束但不构成硬上限）。真正上限需流式 inflate + 输出封顶（archive 当前接口不支持），列为残余风险。
+- **清单解压已改为有界流式解压（本轮 I1 已修复，不再是残余风险）**：`plugin.json` 的 DEFLATE 输出在解压过程中按真实字节封顶，超限立即中止 fail-closed，伪造头无法在复核前触发大分配。修复前（历史记录）：真实长度复核发生在 `content` 完全 inflate 之后，伪造头可在复核前完成解压（受可伪造的声明值约束但不构成硬上限）。
 - **zip64 暂不支持**（直接拒绝）；如需支持需扩展预扫。
 - **压缩比**仍以声明总量 / 包字节估计；声明可伪造时仅作启发式。
 
