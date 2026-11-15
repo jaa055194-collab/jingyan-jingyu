@@ -5,6 +5,7 @@
 /// 依赖本包，把插件声明的扩展点渲染成界面。
 library;
 
+export 'src/client_session.dart';
 export 'src/local_search_index.dart';
 export 'src/local_message_cache.dart';
 export 'src/outbox.dart';
