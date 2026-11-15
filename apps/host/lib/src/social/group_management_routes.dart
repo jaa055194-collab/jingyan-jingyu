@@ -82,6 +82,27 @@ void mountGroupManagementRoutes(
     ),
   );
 
+  router.put(Routes.groupName, (request) async {
+    final actor = await actorId(request);
+    if (actor == null) return unauthenticated();
+    final conversation = conversationId(request);
+    final body = request.jsonObject().valueOrNull;
+    if (conversation == null ||
+        request.query.isNotEmpty ||
+        body == null ||
+        body.length != 1 ||
+        body['name'] is! String) {
+      return invalid();
+    }
+    final result = await conversations.setName(
+      actorId: actor,
+      conversationId: conversation,
+      name: body['name'] as String,
+    );
+    if (result.isOk) await record(actor, conversation, 'group.name.set');
+    return HostResponse.fromResult(result);
+  });
+
   router.put(Routes.groupOwner, (request) async {
     final actor = await actorId(request);
     if (actor == null) return unauthenticated();
