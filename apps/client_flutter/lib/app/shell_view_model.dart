@@ -14,12 +14,14 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get locked;
   bool get online;
   String? get error;
-  List<ShellOwnedAi> get ownAiAccounts;
-  String? get ownAiNotice;
-  Object? get ownAiSessionContext;
-  bool get ownAiLoaded;
-  Future<void> loadOwnAi();
-  Future<void> createOwnAi(String displayName);
+  // Defaults keep older read-only view-model doubles source-compatible. The
+  // runtime overrides all of these.
+  List<ShellOwnedAi> get ownAiAccounts => const <ShellOwnedAi>[];
+  String? get ownAiNotice => null;
+  Object? get ownAiSessionContext => null;
+  bool get ownAiLoaded => false;
+  Future<void> loadOwnAi() async {}
+  Future<void> createOwnAi(String displayName) async {}
   String? get selectedConversationId;
   List<ShellConversation> get conversations;
   List<ShellMessage> get messages;

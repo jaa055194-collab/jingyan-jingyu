@@ -68,63 +68,6 @@ class SettingsScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text('我的 AI', style: Theme.of(context).textTheme.titleMedium),
-            const Text('仅管理你拥有的 AI 账户。回复仍需宿主配置；创建不会自动配置模型、社交等级或授权。'),
-            Wrap(
-              spacing: 8,
-              children: [
-                TextButton.icon(
-                  key: const Key('own-ai-refresh'),
-                  onPressed:
-                      model.authenticated &&
-                          model.online &&
-                          !model.locked &&
-                          !model.busy
-                      ? model.loadOwnAi
-                      : null,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('刷新我的 AI'),
-                ),
-                FilledButton.icon(
-                  key: const Key('own-ai-create'),
-                  onPressed:
-                      model.authenticated &&
-                          model.online &&
-                          !model.locked &&
-                          !model.busy
-                      ? () => showDialog<void>(
-                          context: context,
-                          builder: (_) => _CreateOwnAiDialog(model: model),
-                        )
-                      : null,
-                  icon: const Icon(Icons.add),
-                  label: const Text('创建 AI 账户'),
-                ),
-              ],
-            ),
-            if (model.authenticated && !model.locked) ...[
-              if (model.ownAiNotice != null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: SelectableText(model.ownAiNotice!),
-                ),
-              if (model.ownAiAccounts.isEmpty)
-                Text(model.ownAiLoaded ? '你还没有 AI 账户。' : '尚未加载，请刷新我的 AI。'),
-              for (final ai in model.ownAiAccounts)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${ai.displayName} · ${ai.disabled ? "已停用" : "未停用"}',
-                      ),
-                      SelectableText(ai.accountId),
-                    ],
-                  ),
-                ),
-            ],
-            const Divider(height: 32),
             Text('隐私与安全', style: Theme.of(context).textTheme.titleMedium),
             SwitchListTile(
               title: const Text('应用锁'),
@@ -191,6 +134,63 @@ class SettingsScreen extends StatelessWidget {
               onChanged: model.busy ? null : model.setFontScale,
             ),
             const Text('此设置同时应用于导航、消息和输入区域。'),
+            const Divider(height: 32),
+            Text('我的 AI', style: Theme.of(context).textTheme.titleMedium),
+            const Text('仅管理你拥有的 AI 账户。回复仍需宿主配置；创建不会自动配置模型、社交等级或授权。'),
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton.icon(
+                  key: const Key('own-ai-refresh'),
+                  onPressed:
+                      model.authenticated &&
+                          model.online &&
+                          !model.locked &&
+                          !model.busy
+                      ? model.loadOwnAi
+                      : null,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('刷新我的 AI'),
+                ),
+                FilledButton.icon(
+                  key: const Key('own-ai-create'),
+                  onPressed:
+                      model.authenticated &&
+                          model.online &&
+                          !model.locked &&
+                          !model.busy
+                      ? () => showDialog<void>(
+                          context: context,
+                          builder: (_) => _CreateOwnAiDialog(model: model),
+                        )
+                      : null,
+                  icon: const Icon(Icons.add),
+                  label: const Text('创建 AI 账户'),
+                ),
+              ],
+            ),
+            if (model.authenticated && !model.locked) ...[
+              if (model.ownAiNotice != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: SelectableText(model.ownAiNotice!),
+                ),
+              if (model.ownAiAccounts.isEmpty)
+                Text(model.ownAiLoaded ? '你还没有 AI 账户。' : '尚未加载，请刷新我的 AI。'),
+              for (final ai in model.ownAiAccounts)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${ai.displayName} · ${ai.disabled ? "已停用" : "未停用"}',
+                      ),
+                      SelectableText(ai.accountId),
+                    ],
+                  ),
+                ),
+            ],
           ],
         ),
       ),

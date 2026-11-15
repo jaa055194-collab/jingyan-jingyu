@@ -38,6 +38,11 @@ class _Model extends TestShellModel {
   }
 }
 
+Future<void> reveal(WidgetTester tester, Key key) async {
+  await tester.scrollUntilVisible(find.byKey(key), 300);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('settings owns AI create refresh and canonical account ID', (
     tester,
@@ -53,9 +58,11 @@ void main() {
         ),
       ),
     );
+    await reveal(tester, const Key('own-ai-refresh'));
     await tester.tap(find.byKey(const Key('own-ai-refresh')));
     await tester.pumpAndSettle();
     expect(model.loads, 1);
+    await reveal(tester, const Key('own-ai-create'));
     await tester.tap(find.byKey(const Key('own-ai-create')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('own-ai-name')), 'Nora');
@@ -79,6 +86,7 @@ void main() {
           ),
         ),
       );
+      await reveal(tester, const Key('own-ai-create'));
       await tester.tap(find.byKey(const Key('own-ai-create')));
       await tester.pumpAndSettle();
       await tester.enterText(
@@ -107,6 +115,7 @@ void main() {
           ),
         ),
       );
+      await reveal(tester, const Key('own-ai-create'));
       await tester.tap(find.byKey(const Key('own-ai-create')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('own-ai-confirm')));
