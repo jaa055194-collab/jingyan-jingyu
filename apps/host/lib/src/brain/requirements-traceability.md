@@ -18,3 +18,18 @@ Source baseline: repository v4.2 FR-46, `docs/architecture/02-decisions.md` B-1/
 ## Deliberately not claimed
 
 No memoization, semantic/regex meme retrieval, AI/circle authorization, model binding, B1 metering, B2 degradation, host transport delivery, UI, persistence, real activity citation or downstream memory-candidate exclusion is implemented here. `source=s1` is preserved by the existing router but alone does not prove a downstream memory filter. No UI changed, so visual comparison is not applicable.
+
+## Budget-aware reply admission (2026-11-15)
+
+Baseline: main `3ac8e9f589da87fc426250f6811067f7c2d7c831`. Sources: FR-48 (B2 degradation), FR-58 (hard stop), M07 rule 5, decisions B-5. This adds admission *disposition only*; the gateway/usage meter remain the authoritative spend gate.
+
+| ID | Source / approval | Observable acceptance | Implementation | Evidence / status | Remaining gap |
+|---|---|---|---|---|---|
+| M07-BUD-001 | FR-48 B2 / M07 rule 5 | Normal budget proceeds; B2 exhausted still allows trusted owner-private slow replies | `budget_policy.dart` `BrainBudgetPolicy` | `brain_budget_admission_test.dart` normal + owner-private cases; focused pass | Snapshot is advisory; authoritative B2 metering unchanged |
+| M07-BUD-002 | FR-48 / M07 rule 5 | B2 exhausted defers non-owner slow replies to a single `source=s2` "稍后回" with no padding/pacing/model; simple S1 replies unaffected | Policy + `RulesFirstBrainRouter.respond` seam | deferral, unsure and simple-unaffected tests; focused pass | Friend/group distinction supplied by trusted resolver, not implemented here |
+| M07-BUD-003 | FR-58 hard stop | Global/capability hard stop is `silent` for every complexity and overrides the owner exception, before any padding | Policy + router | silent simple/complex and capability-override tests; focused pass | Actual hard-stop detection and enforcement remain gateway/usage responsibilities |
+| M07-BUD-004 | M07 group gate / fail-closed | Group denial short-circuits before admission; resolver error yields no reply and no model call | Router ordering + `valueOrNull` fail-closed | group-first and resolver-error tests; focused pass | Trusted identity derived by adapter, not message fields |
+
+Verification: TDD absent-file then throwing-skeleton failures observed (`1 passed, 13 failed` with skeleton), then `dart test test/brain_budget_admission_test.dart` 14/14 and existing brain suite 91/91; host `dart analyze --fatal-infos` clean. Exact-head CI recorded in the PR.
+
+Deliberate limits: no B1/B2 metering, no canonical snapshot production, no default-host wiring, no model/budget hard-stop enforcement, no UI; no AC-35 full acceptance claim. Trusted resolver must avoid trusting `senderId`/`inGroup`.
