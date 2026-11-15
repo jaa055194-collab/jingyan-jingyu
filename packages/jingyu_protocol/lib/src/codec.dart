@@ -107,7 +107,7 @@ Result<String> _asString(Object? value, String key) {
 
 Result<int> _asInt(Object? value, String key) {
   if (value is int) return Ok<int>(value);
-  if (value is double && value == value.roundToDouble()) {
+  if (value is double && value.isFinite && value == value.roundToDouble()) {
     return Ok<int>(value.toInt());
   }
   return err<int>(FailureCode.invalidArgument, '字段 $key 必须是整数');

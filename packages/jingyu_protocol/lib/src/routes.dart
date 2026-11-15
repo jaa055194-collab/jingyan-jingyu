@@ -36,6 +36,7 @@ abstract final class Routes {
 
   /// 管理员账号元数据与账号创建。
   static const String adminAccounts = '$prefix/admin/accounts';
+  static const String adminUsage = '$prefix/admin/usage';
 
   /// Administrator resets a human account's password; existing sessions are revoked.
   static const String adminAccountPasswordReset =
@@ -44,6 +45,8 @@ abstract final class Routes {
   /// Administrator disables an account; the sole administrator is protected.
   static const String adminAccountDisable =
       '$prefix/admin/accounts/{accountId}/disable';
+  /// Bounded administrator audit envelopes; no entry metadata or bodies.
+  static const String adminAudit = '$prefix/admin/audit';
 
   /// 管理员邀请码管理。
   static const String adminInvites = '$prefix/admin/invites';
@@ -54,6 +57,8 @@ abstract final class Routes {
 
   /// 会话列表。
   static const String conversations = '$prefix/conversations';
+  static const String conversationPreferences =
+      '$prefix/conversations/{conversationId}/preferences';
   static const String directConversations = '$prefix/direct-conversations';
   static const String friendState = '$prefix/friends/{accountId}';
   static const String friendRequest = '$prefix/friends/{accountId}/requests';
@@ -64,6 +69,7 @@ abstract final class Routes {
   /// Group owner adds an existing account after approving membership.
   static const String conversationMembers =
       '$prefix/conversations/{conversationId}/members';
+  static const String groupName = '$prefix/conversations/{conversationId}/name';
   static const String groupOwner =
       '$prefix/conversations/{conversationId}/owner';
   static const String groupLeave =
@@ -162,6 +168,7 @@ abstract final class Routes {
       '$prefix/ai-profiles/{aiId}/bindings/{capability}';
   static const String aiBudget = '$prefix/ai-profiles/{aiId}/budget';
   static const String aiUsage = '$prefix/ai-profiles/{aiId}/usage';
+  static const String aiUsageTrend = '$prefix/ai-profiles/{aiId}/usage/trend';
 
   /// Explicit owner persona initialization and CAS-based configuration.
   static const String aiPersona = '$prefix/ai-profiles/{aiId}/persona';
