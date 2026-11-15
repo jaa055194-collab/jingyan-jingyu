@@ -397,6 +397,38 @@ WHERE operator.id = ? AND operator.kind = 'human' AND operator.disabled = 0
     });
   }
 
+  /// 列出群成员（仅当前成员可列出）。返回 accountId、是否群主、加入时间。
+  Future<Result<List<Map<String, Object?>>>> listMembers({
+    required String accountId,
+    required String conversationId,
+  }) async {
+    if (!_validId(accountId) || !_validId(conversationId)) return _invalid();
+    return _database.transaction((tx) async {
+      if (await _activeKind(tx, accountId) == null ||
+          !(await _isMember(tx, conversationId, accountId))) {
+        return _missing();
+      }
+      final conversation = await tx.query(
+        'SELECT owner_account_id FROM social_conversations WHERE id = ?',
+        [conversationId],
+      );
+      if (conversation.isEmpty) return _missing();
+      final owner = conversation.single['owner_account_id'];
+      final rows = await tx.query(
+        'SELECT account_id, joined_at FROM social_members WHERE conversation_id = ? ORDER BY joined_at, account_id',
+        [conversationId],
+      );
+      return Ok(<Map<String, Object?>>[
+        for (final row in rows)
+          {
+            'accountId': row['account_id'],
+            'isOwner': row['account_id'] == owner,
+            'joinedAt': row['joined_at'],
+          },
+      ]);
+    });
+  }
+
   Future<String?> _activeKind(Tx tx, String accountId) async {
     final rows = await tx.query(
       '''
