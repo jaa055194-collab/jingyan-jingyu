@@ -8,10 +8,11 @@ import 'package:test/test.dart';
 final AiId ai = AiId.parse('ai1');
 final DateTime now = DateTime.utc(2026, 11, 15, 12);
 
-IncomingMessage message(String text) => IncomingMessage(
+IncomingMessage message(String text, {bool inGroup = false}) => IncomingMessage(
   id: 'm1',
   text: text,
   conversationId: ConversationId.parse('c1'),
+  inGroup: inGroup,
 );
 
 Meme meme(
@@ -127,6 +128,51 @@ void main() {
       ]);
       final S1Reply reply = await r.replyTo(ai, message('开黑'), padding: false);
       expect(reply.text, '内部梗');
+    });
+
+    test('occasion-scoped meme matches only in its occasion', () async {
+      final r = responder(<Meme>[
+        Meme(
+          id: 'g1',
+          layer: MemeLayer.circle,
+          reply: '群里梗',
+          keywords: <String>['开黑'],
+          occasion: 'group',
+        ),
+      ]);
+      final S1Reply priv = await r.replyTo(
+        ai,
+        message('开黑', inGroup: false),
+        padding: false,
+      );
+      expect(priv.text, isNot('群里梗'));
+      final S1Reply group = await r.replyTo(
+        ai,
+        message('开黑', inGroup: true),
+        padding: false,
+      );
+      expect(group.text, '群里梗');
+    });
+
+    test('clamp boundary: exactly max unchanged, max+1 truncated', () async {
+      String ofLength(int n) => '字' * n;
+      final exact = responder(<Meme>[
+        meme('g1', MemeLayer.general, ofLength(30), keywords: <String>['开黑']),
+      ]);
+      expect(
+        (await exact.replyTo(ai, message('开黑'), padding: false)).text,
+        ofLength(30),
+      );
+      final over = responder(<Meme>[
+        meme('g1', MemeLayer.general, ofLength(31), keywords: <String>['开黑']),
+      ]);
+      final String text = (await over.replyTo(
+        ai,
+        message('开黑'),
+        padding: false,
+      )).text;
+      expect(text.runes.length, 30);
+      expect(text.endsWith('…'), isTrue);
     });
   });
 

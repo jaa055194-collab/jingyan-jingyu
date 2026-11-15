@@ -38,7 +38,11 @@ class MemeS1Responder implements S1Responder {
     if (text.isEmpty) {
       return fallback.replyTo(ai, message, padding: false);
     }
-    final Meme? meme = memes.find(text, now: clock.now());
+    // Occasion-scoped memes are reachable via the group/private signal; the
+    // per-relationship scope is not threaded here (needs M04 relationship data)
+    // and is documented as a gap rather than silently assumed.
+    final String occasion = message.inGroup ? 'group' : 'private';
+    final Meme? meme = memes.find(text, now: clock.now(), occasion: occasion);
     if (meme == null) {
       return fallback.replyTo(ai, message, padding: false);
     }
