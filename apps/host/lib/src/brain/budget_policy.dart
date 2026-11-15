@@ -18,6 +18,12 @@ class BrainBudgetSnapshot {
 }
 
 /// Admission outcome for one reply attempt.
+///
+/// [deferSlow] is surfaced by the router as a single canned `source='s2'`
+/// placeholder ("稍后回"). It is not model output: any downstream consumer that
+/// keys on `source` (e.g. memory/persona ingestion) must treat this deferral as
+/// system text, not real S2 content, and it needs a distinct marker before such
+/// wiring exists.
 enum BrainDisposition { proceed, deferSlow, silent }
 
 /// Trusted resolver of the current snapshot. Derived from the authenticated
@@ -50,10 +56,17 @@ class BrainBudgetPolicy implements BrainAdmission {
     required ConversationId? conversationId,
     required Complexity complexity,
   }) async {
-    final Result<BrainBudgetSnapshot> result = await _snapshot(
-      ai,
-      conversationId,
-    );
+    // Project convention is Result-not-exceptions; still fail closed if a
+    // trusted adapter throws, instead of escaping the router's async* stream.
+    final Result<BrainBudgetSnapshot> result;
+    try {
+      result = await _snapshot(ai, conversationId);
+    } catch (_) {
+      return err<BrainDisposition>(
+        FailureCode.internal,
+        'budget snapshot unavailable',
+      );
+    }
     return result.map(
       (BrainBudgetSnapshot snapshot) => _decide(snapshot, complexity),
     );

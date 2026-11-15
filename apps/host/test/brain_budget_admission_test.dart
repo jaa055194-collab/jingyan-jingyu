@@ -1,6 +1,7 @@
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/src/brain/budget_policy.dart';
 import 'package:jingyu_host/src/brain/classifier.dart';
+import 'package:jingyu_host/src/brain/pacing.dart';
 import 'package:jingyu_host/src/brain/router.dart';
 import 'package:test/test.dart';
 
@@ -83,6 +84,7 @@ RulesFirstBrainRouter buildRouter({
   FakeS2? s2,
   FakeGroup? group,
   BrainAdmission? admission,
+  HumanPacing? pacing,
   bool enablePadding = true,
   List<Duration>? sleeps,
 }) => RulesFirstBrainRouter(
@@ -90,6 +92,7 @@ RulesFirstBrainRouter buildRouter({
   s2: s2 ?? FakeS2(),
   groupPolicy: group,
   admission: admission,
+  pacing: pacing,
   enablePadding: enablePadding,
   sleep: (Duration d) async {
     sleeps?.add(d);
@@ -193,6 +196,9 @@ void main() {
         final router = buildRouter(
           s1: s1,
           s2: s2,
+          // Pacing is enabled so the empty `sleeps` proves the defer path
+          // really skips pacing rather than skipping it only because it is off.
+          pacing: HumanPacing(clock: FakeClock(DateTime.utc(2026, 11, 15))),
           admission: FakeAdmission(
             const Ok<BrainDisposition>(BrainDisposition.deferSlow),
           ),
@@ -304,5 +310,73 @@ void main() {
       expect(s1.calls, 0);
       expect(s2.calls, 0);
     });
+
+    test(
+      'a thrown resolver fails closed without escaping the stream',
+      () async {
+        final FakeS1 s1 = FakeS1();
+        final FakeS2 s2 = FakeS2();
+        final router = buildRouter(
+          s1: s1,
+          s2: s2,
+          admission: BrainBudgetPolicy(
+            snapshot: (_, _) async => throw StateError('adapter bug'),
+          ),
+        );
+
+        final d = await router.decide(ai, message('你吃饭了吗'), inGroup: false);
+        final out = await router.respond(ai, message('你吃饭了吗'), d).toList();
+        expect(out, isEmpty);
+        expect(s1.calls, 0);
+        expect(s2.calls, 0);
+      },
+    );
+
+    test(
+      'real policy: B2 exhaustion still lets a simple greeting reach S1',
+      () async {
+        final FakeS1 s1 = FakeS1();
+        final FakeS2 s2 = FakeS2();
+        final router = buildRouter(
+          s1: s1,
+          s2: s2,
+          admission: BrainBudgetPolicy(
+            snapshot: (_, _) async => const Ok<BrainBudgetSnapshot>(
+              BrainBudgetSnapshot(slowLayerExhausted: true),
+            ),
+          ),
+        );
+
+        final d = await router.decide(ai, message('你好'), inGroup: false);
+        expect(d.complexity, Complexity.simple);
+        final out = await router.respond(ai, message('你好'), d).toList();
+        expect(out.map((p) => p.source), <String>['s1']);
+        expect(s1.calls, 1);
+        expect(s2.calls, 0);
+      },
+    );
+
+    test(
+      'real policy: capability hard stop silences a simple greeting',
+      () async {
+        final FakeS1 s1 = FakeS1();
+        final FakeS2 s2 = FakeS2();
+        final router = buildRouter(
+          s1: s1,
+          s2: s2,
+          admission: BrainBudgetPolicy(
+            snapshot: (_, _) async => const Ok<BrainBudgetSnapshot>(
+              BrainBudgetSnapshot(capabilityHardStop: true),
+            ),
+          ),
+        );
+
+        final d = await router.decide(ai, message('你好'), inGroup: false);
+        final out = await router.respond(ai, message('你好'), d).toList();
+        expect(out, isEmpty);
+        expect(s1.calls, 0);
+        expect(s2.calls, 0);
+      },
+    );
   });
 }
