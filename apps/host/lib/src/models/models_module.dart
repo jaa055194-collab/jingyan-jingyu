@@ -10,10 +10,12 @@ import 'budget_routes.dart';
 import 'usage_routes.dart';
 import 'usage_trend_routes.dart';
 import 'model_runtime.dart';
+import 'openai_chat_adapter.dart';
 import '../security/url_guard.dart';
 import '../storage/cipher.dart';
 import '../storage/database.dart';
 import 'provider_registry.dart';
+import 'provider_model_discovery.dart';
 
 /// Authenticated provider HTTP boundary. The host assembles migrations before
 /// requests are accepted; ownership always comes from the current principal.
@@ -24,6 +26,7 @@ class ModelsModule extends HostModule {
     required this.urlGuard,
     required this.clock,
     this.runtime,
+    this.providerDiscoveryRequest,
   });
 
   final Database db;
@@ -31,6 +34,7 @@ class ModelsModule extends HostModule {
   final UrlGuard urlGuard;
   final Clock clock;
   final ModelRuntime? runtime;
+  final GuardedChatRequest? providerDiscoveryRequest;
   late AuditLog _audit;
   AccountsDomain? _accounts;
 
@@ -55,6 +59,7 @@ class ModelsModule extends HostModule {
     router.get(Routes.modelProviders, _list);
     router.post(Routes.modelProviders, _create);
     router.get(Routes.modelProvider, _get);
+    router.get(Routes.modelProviderModels, _discoverModels);
     router.put(Routes.modelProvider, _update);
     router.delete(Routes.modelProvider, _delete);
     final accounts = _accounts;
@@ -90,6 +95,49 @@ class ModelsModule extends HostModule {
   HostResponse _bad() => HostResponse.failure(
     const Failure(FailureCode.invalidArgument, 'Invalid provider input'),
   );
+
+  Future<HostResponse> _discoverModels(HostRequest request) async {
+    final accounts = _accounts;
+    final principal = request.principal;
+    final header = request.headers['authorization'] ?? '';
+    final bearer = header.startsWith('Bearer ') ? header.substring(7).trim() : '';
+    final current = accounts == null ? null : await accounts.authenticate(bearer);
+    if (current == null ||
+        current.accountId != principal?.accountId ||
+        current.deviceId != principal?.deviceId) {
+      return HostResponse.failure(
+        const Failure(FailureCode.unauthenticated, 'Authentication required'),
+      );
+    }
+    final length = request.headers['content-length'];
+    if (request.query.isNotEmpty ||
+        request.body != null ||
+        (length != null && int.tryParse(length) != 0) ||
+        request.headers.containsKey('transfer-encoding')) {
+      return _bad();
+    }
+    final providerId = request.pathParams['providerId'] ?? '';
+    try {
+      validateId(providerId, kind: 'provider');
+    } on FormatException {
+      return _bad();
+    }
+    final result = await ProviderModelDiscovery.forOwner(
+      ownerId: current.accountId,
+      db: db,
+      cipher: cipher,
+      urlGuard: urlGuard,
+      clock: clock,
+      request: providerDiscoveryRequest,
+    ).discover(providerId);
+    if (result.isOk) await _record(request, 'provider.models', providerId);
+    return HostResponse.fromResult(
+      result,
+      (ids) => {
+        'models': [for (final id in ids) {'id': id}],
+      },
+    );
+  }
 
   static const _fields = {
     'name',
