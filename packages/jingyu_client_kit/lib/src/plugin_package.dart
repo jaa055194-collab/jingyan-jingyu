@@ -436,8 +436,17 @@ _PreScanResult _preScanCentralDirectory(
     return _PreScanResult(false, issues);
   }
   final cdEnd = cdOffset + cdSize;
-  if (cdOffset < 0 || cdEnd > bytes.length || cdOffset + 46 > cdEnd) {
-    return _PreScanResult(true, issues); // 交由解码器报 notZip
+  if (cdOffset < 0 || cdEnd > bytes.length) {
+    // 合法 zip 的 cdEnd 必 ≤ EOCD 位置 ≤ 文件长度；越过 EOF 视为异常并 fail-closed。
+    // 不能“交由解码器报 notZip”：archive 的 subset/toUint8List 会截断而不报错，可能仍
+    // 解码出符号链接（解码期解压目标），从而绕过预扫。
+    issues.add(const PluginPackageIssue(
+        PluginPackageIssueCode.notZip, '中央目录超出文件边界'));
+    return _PreScanResult(false, issues);
+  }
+  if (cdOffset + 46 > cdEnd) {
+    // 空 / 超短中央目录（无条目）：交由解码器按 empty 处理。
+    return _PreScanResult(true, issues);
   }
 
   // 与 archive 的 ZipDirectory.read 一致：在中央目录尺寸窗口 [cdOffset, cdEnd)
