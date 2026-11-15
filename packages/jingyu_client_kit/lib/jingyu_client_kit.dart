@@ -9,5 +9,6 @@ export 'src/local_search_index.dart';
 export 'src/local_message_cache.dart';
 export 'src/outbox.dart';
 export 'src/plugin.dart';
+export 'src/plugin_bundle.dart';
 export 'src/plugin_host.dart';
 export 'src/sync_cursor.dart';
