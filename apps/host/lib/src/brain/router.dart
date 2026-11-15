@@ -16,6 +16,7 @@ library;
 
 import 'package:jingyu_core/jingyu_core.dart';
 
+import 'budget_policy.dart';
 import 'classifier.dart';
 import 'pacing.dart';
 
@@ -175,6 +176,7 @@ class RulesFirstBrainRouter implements BrainRouter {
     required S1Responder s1,
     required S2Responder s2,
     GroupPostPolicy? groupPolicy,
+    BrainAdmission? admission,
     HumanPacing? pacing,
     this.enablePadding = true,
     Future<void> Function(Duration delay)? sleep,
@@ -182,6 +184,7 @@ class RulesFirstBrainRouter implements BrainRouter {
        _s1 = s1,
        _s2 = s2,
        _groupPolicy = groupPolicy,
+       _admission = admission,
        _pacing = pacing,
        _sleep = sleep ?? _defaultSleep;
 
@@ -189,6 +192,7 @@ class RulesFirstBrainRouter implements BrainRouter {
   final S1Responder _s1;
   final S2Responder _s2;
   final GroupPostPolicy? _groupPolicy;
+  final BrainAdmission? _admission;
   final HumanPacing? _pacing;
   final Future<void> Function(Duration delay) _sleep;
 
@@ -204,8 +208,10 @@ class RulesFirstBrainRouter implements BrainRouter {
     IncomingMessage message, {
     required bool inGroup,
   }) async {
-    final Classification classification =
-        _classifier.classify(message.text, inGroup: inGroup);
+    final Classification classification = _classifier.classify(
+      message.text,
+      inGroup: inGroup,
+    );
     final bool sendPadding =
         enablePadding && classification.complexity != Complexity.simple;
     return BrainDecision(
@@ -226,6 +232,29 @@ class RulesFirstBrainRouter implements BrainRouter {
     if (message.inGroup && policy != null) {
       final bool allowed = await policy.mayPost(ai, message);
       if (!allowed) {
+        return;
+      }
+    }
+
+    // Budget admission runs after group permission and before any pacing,
+    // padding or S1/S2 work, so an exhausted/deferred reply costs nothing.
+    final BrainAdmission? admission = _admission;
+    if (admission != null) {
+      final Result<BrainDisposition> admitted = await admission.admit(
+        ai,
+        conversationId: message.conversationId,
+        complexity: decision.complexity,
+      );
+      final BrainDisposition? disposition = admitted.valueOrNull;
+      if (disposition == null) {
+        // Trusted snapshot lookup failed: fail closed, no automatic reply.
+        return;
+      }
+      if (disposition == BrainDisposition.silent) {
+        return;
+      }
+      if (disposition == BrainDisposition.deferSlow) {
+        yield OutgoingPiece(text: '稍后回', source: 's2');
         return;
       }
     }
