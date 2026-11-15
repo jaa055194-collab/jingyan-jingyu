@@ -49,4 +49,6 @@
 - [x] Observe missing route failing before implementation.
 - [x] Add route using existing validation/authentication and transactional service.
 - [x] Run focused tests and default-host assembly route regression.
-- [ ] Run full `tool/check.ps1`, independent review, update REQ-020/status with actual evidence and limitations, inspect final diff, commit, push, open PR, and follow CI.
+- [x] Run full `tool/check.ps1`, independent review, update REQ-020/status with actual evidence and limitations, inspect final diff, commit, push, open PR, and follow CI.
+
+Verification: final focused suite 45 passed; host analyzer clean; independent review found no blocking issue. Local full run had an unchanged TLS timing regression (625 host pass/1 fail), then all 13 guarded transport tests passed in isolation. GitHub Windows full CI for production/test revision `2c207c7` passed (run 43670177925). A second local full run was interrupted by ticket retry and is not counted as a pass. PR #32 remains a backend-only increment; all limitations above apply.
