@@ -31,6 +31,7 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 - 群公告：Migration305 为 `social_conversations` 增加加密 `announcement` 列；`ConversationService.setAnnouncement/getAnnouncement` 仅群主可设置/清空（≤2000字符）、成员可读、非成员拒绝；认证 `PUT/GET /conversations/{id}/announcement` 已挂默认宿主。
 - 群成员列表：认证 `GET /conversations/{id}/members` 供当前成员列出成员（accountId、是否群主、加入时间）；非成员 404、匿名 401；身份只取 principal。
 - 客户端本地消息缓存：`jingyu_client_kit` 新增纯 Dart `LocalMessageCache`（按账号/会话/seq 有序、同身份编辑覆盖、冲突身份拒绝、深不可变正文、撤回终态、分页、账号隔离、版本化快照原子导入导出）；旧页和旧快照不复活已知撤回正文，损坏快照不清空现有数据。不落盘，加密持久化与服务端授权由外壳负责。
+- 插件包安全校验：`jingyu_client_kit` 新增纯 Dart `validatePluginPackage`（基于 archive 解压校验 + crypto sha256 完整性；zip-slip/zip-bomb/条目数/体积/压缩比/重复/符号链接/清单严格解析/JSON 深度；不读文件系统、不改既有插件接口），附契约测试；未接入 M11 安装 UI 与真实签名。
 
 ## 验证
 
