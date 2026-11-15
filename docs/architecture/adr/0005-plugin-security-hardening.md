@@ -20,7 +20,7 @@
 - **解码前中央目录预扫** `_preScanCentralDirectory`：只读解析 EOCD + 中央目录（不解压），在任何解码前：
   - 拒绝符号链接条目（`versionMadeBy>>8==3` 且 `externalAttrs>>16 & 0xF000 == 0xA000`）——从根本上避免解码期符号链接解压；
   - 用声明尺寸先做条目数 / 单条 / 总量限额，超限直接拒绝，不进入解码；
-  - **严格镜像 `archive` 的 `ZipDirectory.read`**：按中央目录**尺寸窗口**（`cdOffset .. cdOffset+cdSize`）逐条解析，**不信任** EOCD 的 16-bit 条目计数（该字段可被伪造以让预扫只读良性前缀）；结构异常、走到条目数与 EOCD 不符、或未恰好走完窗口时一律 fail-closed；
+  - **严格镜像 `archive` 的 `ZipDirectory.read`**：按中央目录**尺寸窗口**（`cdOffset .. cdOffset+cdSize`）逐条解析，**不信任** EOCD 的 16-bit 条目计数（该字段可被伪造以让预扫只读良性前缀）；结构异常、走到条目数与 EOCD 不符、或未恰好走完窗口时一律 fail-closed；`cdSize` 越过文件边界（`cdEnd > 文件长度`）也 fail-closed（archive 的 `subset`/`toUint8List` 会截断而不报错，可能仍解码出符号链接）。
   - zip64 触发字段与解码器完全一致：任一盘号/条目计数为 `0xFFFF` 或 CD 大小/偏移为 `0xFFFFFFFF` 都拒绝（fail-closed，防止被引导到攻击者控制的 zip64 CD）。
 - **清单真实字节复核**：`plugin.json` 解压后再按真实长度复核 `maxManifestBytes`（保留既有纵深防御），并把清单解析的 `on FormatException` 扩展为 `on Object`，任何非受控异常（如 `TypeError`）都转成 `manifestInvalid`。
 - **`license` 类型校验**：`PluginManifest.fromJson` 校验 `license` 必须为字符串或 null，否则抛 `FormatException`。

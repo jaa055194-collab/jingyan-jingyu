@@ -371,6 +371,36 @@ void main() {
       final r = validatePluginPackage(patched);
       expect(r.ok, isFalse);
       expect(_has(r, PluginPackageIssueCode.symbolicLink), isTrue);
+      expect(
+          r.issues
+              .where((i) => i.code == PluginPackageIssueCode.symbolicLink)
+              .any((i) => i.message.contains('预扫')),
+          isTrue);
+    });
+
+    test('cdSize 越过文件边界必须 fail-closed（不解码）', () {
+      final link = ArchiveFile(
+          'evil-link', 0, Uint8List.fromList(utf8.encode('/etc/passwd')))
+        ..mode = 0xA1FF;
+      final bytes = _asUnixMade(
+          _zip([_textFile('plugin.json', _validManifest), link]), 'evil-link');
+      final patched = Uint8List.fromList(bytes);
+      final bd = ByteData.sublistView(patched);
+      var eocd = -1;
+      for (var i = patched.length - 22; i >= 0; i--) {
+        if (bd.getUint32(i, Endian.little) == 0x06054b50) {
+          eocd = i;
+          break;
+        }
+      }
+      expect(eocd >= 0, isTrue);
+      // 把 cdSize 改成整个文件长度 → cdEnd 越过 EOF；archive 会截断而非报错。
+      bd.setUint32(eocd + 12, patched.length, Endian.little);
+      final r = validatePluginPackage(patched);
+      expect(r.ok, isFalse);
+      expect(_has(r, PluginPackageIssueCode.notZip), isTrue);
+      // 必须未进入解码：不应出现任何 symbolicLink 诊断。
+      expect(_has(r, PluginPackageIssueCode.symbolicLink), isFalse);
     });
 
     test('zip64 触发字段被 fail-closed 拒绝', () {
