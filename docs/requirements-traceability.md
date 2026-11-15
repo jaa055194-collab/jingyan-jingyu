@@ -23,7 +23,7 @@
 | REQ-017 | FR-49/50 / M06 / A-7 | 加密记忆与采集闸门 | 已授权局部 | opt-out零写入、空分类T1、pending不注入、T2 model用途排除、模型不能自确认 | ai/memory/memory_store、可选Migration600 | memory7项真实SQLite/AES，空分类先RED后修；父独立复跑7项及host analyze通过 | 内部仓储验证通过，未生产装配；fixture授权不能算跨用户/外部群传播权限 |
 | REQ-018 | FR-08/22 / M04 | 好友同意、拉黑与私聊只读 | 已授权 | target接受才好友；拉黑双向和人类AI继承；解除需重新申请；既有私聊只读 | friendship_service/routes 301、private_conversations/routes 302、CombinedMembership | friend9/HTTP5/private7/HTTP5、重排装配1，独立review | 后端链路通过；AI预授权/双端UI未完成 |
 | REQ-019 | FR-48 / 2026-11-13长期上下文要求 | 显式窗口预算与少量相关召回 | 已授权 | 固定人格不裁剪、完整近期轮次、来源与scope/topK阈值、省略ID可见 | ai/context/context_assembler | 21项含万轮历史、Unicode、计数overhead、恶意召回角色隔离，独立review | 内部装箱通过；精确tokenizer、持久重要事实召回及端到端延迟未验，不承诺零遗忘 |
-| REQ-020 | FR-41 / decisions A1 / 长期人格隔离要求 | 人格分层版本、锁定和撤回 | 已授权 | P0/P1锁生效、P2自主；canonical AI才能迭代；证据/CAS/不可替换历史/加密隔离 | ai/persona/persona_service、601；默认PersonaModule owner HTTP initialize/current/edit/lock | 内部21项SQLite/AES；HTTP13项与默认装配2项、host_models2项合跑38通过；默认缺路由404 RED，analysis清洁；独立静态review无Critical/Important | operator手动配置HTTP已接默认宿主；不含UI/自迭代触发/公开history/revert/记忆授权，不算端到端抗污染已完成 |
+| REQ-020 | FR-41 / decisions A1 / 长期人格隔离要求 | 人格分层版本、锁定和撤回 | 已授权 | P0/P1锁生效、P2自主；canonical AI才能迭代；证据/CAS/不可替换历史/加密隔离 | ai/persona/persona_service、601；默认PersonaModule owner HTTP initialize/current/edit/lock | 内部21项SQLite/AES；HTTP13项与默认装配2项、host_models2项合跑38通过；默认缺路由404 RED，analysis清洁；独立静态review无Critical/Important | operator手动配置及有界history/revert HTTP已接默认宿主：版本升序分页默认50、上限100，仅解密返回条目；revert以所选before完整快照追加新版本，保留当前锁（也会撤销之后的内容修改）。本增量证据见下方“人格历史与恢复”记录。不含UI/自迭代触发/记忆授权，不算端到端抗污染已完成 |
 | REQ-021 | FR-48 / 长期上下文要求 | 人格与窗口到模型调用一致 | 已授权局部 | 当前卡固定提示、输出预留max_tokens一致、profile/provider/model精确匹配、换绑不误用tokenizer | ContextualChat、runtime/gateway expected pair | contextual10/gateway-runtime35，父合跑58与review关闭profile错绑Important | 内部组合通过；无自动回复入口/真实tokenizer/记忆ACL默认 |
 | REQ-022 | FR-42/45 / M06 | 60秒规则心跳与恢复gap | 已授权局部 | 不调模型，每60秒至多一条；重启只记一次gap不造活动；当前owner权限 | LifeEngine、可选602 | life13项Clock/SQLite/回滚/枚举SQL/错误脱敏，独立review | 内部规则能力通过；未生产调度/主动行为/静默窗 |
 | REQ-023 | FR-22 / AC-32 | 群主转让、成员退出及AI移除 | 已授权 | 有效成员间转让；群主不能孤儿退出；退出立即撤权；operator仅撤回自己的AI | conversation_service、group_management_routes | service17/HTTP5+装配回归，独立review | 后端通过；群管理员角色与UI未完成 |
@@ -91,5 +91,12 @@
 2026-11-14 附件上传/内容提取、收藏专用盲索引、客户端本地索引增量（PR #16）：各包 `dart analyze --fatal-infos` 无问题；`jingyu_core` 20、`jingyu_protocol` 9、`jingyu_host_kit` 10、`jingyu_client_kit` 47（含 local_search_index_test 15）通过；新增 `favorite_blind_index_test` 9 与 `attachments_test` 17 通过；`apps/host` 定向 93 项（新能力 + 收藏/搜索/盲索引/配额/迁移/社交装配/撤回/默认宿主装配与HTTP/真实端口冒烟）通过，`guarded_http_test`+`process_http_test` 真实网络/TLS 19 项单独跑通过。因新增 attachments 模块与迁移 212/213，同步更新了默认宿主模块列表与迁移版本列表两处既有装配测试期望。全仓 `tool/check.ps1` 由 CI（windows-latest）执行。
 
 2026-11-15 附件消息与文件搜索增量（PR #16 续）：新增 `AttachmentService.assertSendable` 与 `GET /search?type=file`（仅本人自有附件、按已抽取正文包含匹配并返回片段）。`attachment_message_test` 6 项真实 SQLite/AES 通过；`attachments_test` 17、`favorites_test` 9、`message_search_test` 3、`host_models_assembly_test` 2 合跑 37 项通过；`apps/host` analyze 无问题；全仓 `tool/check.ps1` 由 CI 执行。
+
+## 人格历史与恢复（2026-11-15，REQ-020 增量）
+
+- 基线 `3a94137`；实现为 `PersonaService.historyPage`、`PersonaModule` 的 `GET /persona/history` 与 `POST /persona/revert`、`Routes.aiPersonaHistory/aiPersonaRevert`；无迁移或依赖变更。
+- 新HTTP用例先观察缺路由404而失败（修正损坏历史fixture需显式移除不可变触发器后重跑，确认失败原因仍为缺路由）；实现后服务/HTTP/默认宿主装配合跑43项通过，随后补102版本分页/内部history兼容及凭证边界。独立只读审查复跑44项，再对最新2项边界用例重跑通过；未发现Critical/Important。最终当前工作树host分析无问题，服务/HTTP/默认装配合跑45项通过。第一次全仓检查五包分析无问题、四个库测试通过，但host既有TLS时序用例在guarded_http_test.dart:499失败（16个socket期望、实际14）；单用例复跑在:501失败（期望16、实际17）。相关生产代码/用例未变更，完整验证尚未通过，不能计本增量为完整交付；后续完整验证记录以PR及本节最终结果为准。
+- 覆盖顺序/游标/默认50/上限100/终页、diff与原因/证据/快照、不可变历史、非owner/admin拒绝、旧凭据/账号或设备错配/撤销/过期、AI停用/归属转让/同owner不同profile、损坏sentinel不解密与选中行安全500、revert完整before恢复/当前锁保留/旧记录不变/重开持久化、并发CAS仅一项接受和输入拒绝无写入。
+- 局限：行数上限不是字节或延迟上限；现有适配器对重复query键归一为单值，不宣称重复键拒绝；无人格UI、模型自迭代触发或生产记忆授权，不计完整M06或端到端产品验收。
 
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。

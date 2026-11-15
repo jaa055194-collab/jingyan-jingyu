@@ -94,6 +94,47 @@ VALUES (?,?,?,?,0,?,0,0)''',
   });
 
   test(
+    'bounded history caps defaults and maximum without changing internal history',
+    () async {
+      await initialize();
+      for (var version = 1; version <= 101; version++) {
+        await iterate(
+          version: version,
+          diff: PersonaDiff(p2: {'mood': 'mood_$version'}),
+        );
+      }
+      final first = (await owner.historyPage(profile)).value;
+      expect(
+        first.changes.map((c) => c.version),
+        List.generate(50, (i) => i + 1),
+      );
+      expect(first.nextAfterVersion, 50);
+      final hundred = (await owner.historyPage(profile, limit: 100)).value;
+      expect(hundred.changes, hasLength(100));
+      expect(hundred.nextAfterVersion, 100);
+      final last = (await owner.historyPage(
+        profile,
+        afterVersion: 100,
+        limit: 2,
+      )).value;
+      expect(last.changes.map((c) => c.version), [101, 102]);
+      expect(last.nextAfterVersion, null);
+      expect((await owner.history(profile)).value, hasLength(102));
+      expect(() => first.changes.clear(), throwsUnsupportedError);
+      for (final args in [(-1, 50), (0, 0), (0, 101)]) {
+        expect(
+          (await owner.historyPage(
+            profile,
+            afterVersion: args.$1,
+            limit: args.$2,
+          )).failureOrNull?.code,
+          FailureCode.invalidArgument,
+        );
+      }
+    },
+  );
+
+  test(
     'FR41 explicit initialization is encrypted and does not happen on read',
     () async {
       expect(

@@ -28,8 +28,10 @@ void main() {
           '/api/v1/ai-profiles/profile/persona',
           '/api/v1/ai-profiles/profile/persona/initialize',
           '/api/v1/ai-profiles/profile/persona/lock',
+          '/api/v1/ai-profiles/profile/persona/history',
+          '/api/v1/ai-profiles/profile/persona/revert',
         ]) {
-          final method = path.endsWith('initialize')
+          final method = path.endsWith('initialize') || path.endsWith('revert')
               ? 'POST'
               : path.endsWith('lock')
               ? 'PUT'
@@ -131,6 +133,51 @@ void main() {
       );
       expect(await db.query('SELECT * FROM persona_cards'), hasLength(1));
       expect(await db.query('SELECT * FROM persona_history'), hasLength(1));
+      Future<HostResponse> request(
+        String method,
+        String suffix, {
+        Object? body,
+      }) => host.pipeline.handle(
+        HostRequest(
+          method: method,
+          path: '$path$suffix',
+          body: body,
+          headers: {'authorization': 'Bearer $token'},
+        ),
+      );
+      expect(
+        (await request(
+          'PATCH',
+          '',
+          body: {
+            'expectedVersion': 1,
+            'reason': 'New style',
+            'diff': {
+              'p1': {'style': 'brief'},
+            },
+          },
+        )).status,
+        200,
+      );
+      final history = await request('GET', '/history');
+      expect(history.status, 200);
+      final changes = (history.json as Map)['changes'] as List;
+      expect(changes, hasLength(2));
+      final restored = await request(
+        'POST',
+        '/revert',
+        body: {
+          'changeId': (changes.last as Map)['id'],
+          'expectedVersion': 2,
+          'reason': 'Undo style',
+        },
+      );
+      expect(restored.status, 200);
+      expect((restored.json as Map)['version'], 3);
+      expect(
+        (((restored.json as Map)['layers'] as Map)['p1'] as Map)['style'],
+        'warm',
+      );
     } finally {
       await host.shutdown();
       await dir.delete(recursive: true);

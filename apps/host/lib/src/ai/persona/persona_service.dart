@@ -91,6 +91,17 @@ final class PersonaChange {
   final String? revertsChangeId;
 }
 
+/// A bounded ascending-version view; a cursor is present only when more rows exist.
+final class PersonaHistoryPage {
+  PersonaHistoryPage({
+    required List<PersonaChange> changes,
+    this.nextAfterVersion,
+  }) : changes = List.unmodifiable(changes);
+
+  final List<PersonaChange> changes;
+  final int? nextAfterVersion;
+}
+
 /// Pure internal service. Execution identity and owner scope must be supplied
 /// by a trusted authenticated boundary, never by model output or HTTP payloads.
 abstract interface class PersonaService {
@@ -100,6 +111,11 @@ abstract interface class PersonaService {
   });
   Future<Result<PersonaCard>> current(AiId ai);
   Future<Result<List<PersonaChange>>> history(AiId ai);
+  Future<Result<PersonaHistoryPage>> historyPage(
+    AiId ai, {
+    int afterVersion = 0,
+    int limit = 50,
+  });
   Future<Result<PersonaChange>> selfIterate(
     AiId ai,
     PersonaDiff diff, {
@@ -325,6 +341,39 @@ SELECT * FROM persona_history WHERE owner_id=? AND ai_profile_id=? ORDER BY vers
         if (rows.isEmpty) return err(FailureCode.notFound, 'Persona not found');
         return Ok(List.unmodifiable(rows.map((row) => _change(ai, row))));
       });
+
+  @override
+  Future<Result<PersonaHistoryPage>> historyPage(
+    AiId ai, {
+    int afterVersion = 0,
+    int limit = 50,
+  }) => _withAi(ai, (tx, _) async {
+    if (afterVersion < 0 || limit < 1 || limit > 100) {
+      return err(FailureCode.invalidArgument, 'Invalid persona pagination');
+    }
+    // Existence is owner-scoped, without decrypting an unrelated current card.
+    if ((await tx.query(
+      'SELECT 1 FROM persona_cards WHERE owner_id=? AND ai_profile_id=?',
+      [_ownerId, ai.value],
+    )).isEmpty) {
+      return err(FailureCode.notFound, 'Persona not found');
+    }
+    final rows = await tx.query(
+      '''
+SELECT * FROM persona_history WHERE owner_id=? AND ai_profile_id=? AND version>?
+ORDER BY version LIMIT ?
+''',
+      [_ownerId, ai.value, afterVersion, limit + 1],
+    );
+    // Never decode the sentinel or records outside the requested page.
+    final changes = rows.take(limit).map((row) => _change(ai, row)).toList();
+    return Ok(
+      PersonaHistoryPage(
+        changes: changes,
+        nextAfterVersion: rows.length > limit ? changes.last.version : null,
+      ),
+    );
+  });
 
   String _changeId() =>
       'persona_${List.generate(24, (_) => _random.nextInt(256).toRadixString(16).padLeft(2, '0')).join()}';
