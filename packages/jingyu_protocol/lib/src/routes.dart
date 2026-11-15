@@ -161,6 +161,10 @@ abstract final class Routes {
   /// 模型接入配置。
   static const String modelProviders = '$prefix/model-providers';
   static const String modelProvider = '$prefix/model-providers/{providerId}';
+
+  /// Saved provider model catalog discovery; normal body limits, no chat.
+  static const String modelProviderModels =
+      '$prefix/model-providers/{providerId}/models';
   static const String aiProfileRegister = '$prefix/ai-profiles/register';
   static const String aiProfile = '$prefix/ai-profiles/{aiId}';
   static const String aiBindings = '$prefix/ai-profiles/{aiId}/bindings';
