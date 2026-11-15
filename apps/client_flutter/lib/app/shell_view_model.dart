@@ -48,6 +48,12 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get canAddMembersToSelectedGroup;
   void updateDraft(String value);
   Future<void> sendMessage();
+  bool get canMentionAi;
+  Future<void> sendMentionedMessage({
+    required String conversationId,
+    required String expectedDraft,
+    required String aiAccountId,
+  });
   Future<void> setAiConsent(bool allowed);
   Future<void> attachFile(String kind);
   Future<void> setAppLock(bool enabled, String pin);

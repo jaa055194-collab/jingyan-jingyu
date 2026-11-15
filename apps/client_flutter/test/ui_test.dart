@@ -120,6 +120,11 @@ class TestShellModel extends ShellViewModel {
   Future<void> addGroupMember(String groupId, String accountId) async {}
 
   @override
+  bool get canMentionAi => false;
+  @override
+  Future<void> sendMentionedMessage({required String conversationId,required String expectedDraft,required String aiAccountId}) async {}
+
+  @override
   Future<void> sendMessage() async {
     messages = [
       ...messages,

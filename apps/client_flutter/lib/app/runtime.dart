@@ -45,6 +45,16 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool _controllersReady = false;
   String? _error, _selected, _preview;
   String _draft = '';
+  final _draftRevisions = <String, int>{};
+  ({
+    ClientShellController shell,
+    int generation,
+    String group,
+    String text,
+    String target,
+    String id,
+  })?
+  _pendingMention;
   @override
   bool get ready => _ready;
   @override
@@ -188,6 +198,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         }
         if (call.method == 'shareReceived') {
           final data = call.arguments as Map;
+          if (_selected != null) {
+            _draftRevisions.update(
+              _selected!,
+              (revision) => revision + 1,
+              ifAbsent: () => 1,
+            );
+          }
           _draft = data['text']?.toString() ?? '';
           if (_selected != null) await shell.saveDraft(_selected!, _draft);
           notifyListeners();
@@ -405,6 +422,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   Future<void> _logout() async {
     final generation = ++_generation;
+    _pendingMention = null;
     _credentials = null;
     _pendingRenewal = null;
     _renewWork = null;
@@ -598,6 +616,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       final submission = _submissionTransport;
       final oldPlugins = plugins;
       ++_generation;
+      _pendingMention = null;
       _credentials = credentials;
       _sessionRejected = false;
       _pendingRenewal = null;
@@ -770,6 +789,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   void updateDraft(String value) {
+    if (_selected != null) {
+      _draftRevisions.update(
+        _selected!,
+        (revision) => revision + 1,
+        ifAbsent: () => 1,
+      );
+    }
     _draft = value;
     notifyListeners();
     if (_selected != null) {
@@ -785,6 +811,23 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   @override
   Future<void> sendMessage() => _run(() async {
     if (locked || _selected == null || _draft.trim().isEmpty) return;
+    final queuedMention = shell.outbox.items.any(
+      (item) =>
+          item.conversationId == _selected &&
+          item.body['text'] == _draft &&
+          item.body['mentionAccountIds'] is List,
+    );
+    final pending = _pendingMention;
+    if (queuedMention) {
+      throw const FormatException('本条提及已排队，请重试原提及以确认保存，避免重复发送');
+    }
+    if (pending != null &&
+        pending.generation == _generation &&
+        identical(pending.shell, shell) &&
+        pending.group == _selected &&
+        pending.text == _draft) {
+      throw const FormatException('本条提及已排队，请重试原提及以确认保存，避免重复发送');
+    }
     final generation = _generation;
     final sessionShell = shell;
     final selected = _selected!;
@@ -795,6 +838,136 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     if (_selected == selected && _draft == text) _draft = '';
     if (_online && !locked) await sessionShell.flush();
   });
+  @override
+  bool get canMentionAi =>
+      authenticated &&
+      !locked &&
+      !_busy &&
+      _draft.trim().isNotEmpty &&
+      _conversations.any(
+        (item) => item.id == _selected && item.kind == 'group',
+      );
+
+  @override
+  Future<void> sendMentionedMessage({
+    required String conversationId,
+    required String expectedDraft,
+    required String aiAccountId,
+  }) => _run(() async {
+    if (!authenticated ||
+        _sessionRejected ||
+        locked ||
+        _switching ||
+        _selected != conversationId ||
+        _draft != expectedDraft ||
+        expectedDraft.trim().isEmpty ||
+        !_conversations.any(
+          (item) => item.id == conversationId && item.kind == 'group',
+        )) {
+      throw const FormatException('聊天状态已变化，请重新确认本条提及');
+    }
+    final target = AccountId.parse(aiAccountId).value;
+    final draftRevision = _draftRevisions[conversationId] ?? 0;
+    final generation = _generation;
+    final sessionShell = shell;
+    var pending = _pendingMention;
+    if (pending == null ||
+        pending.generation != generation ||
+        !identical(pending.shell, sessionShell)) {
+      for (final item in sessionShell.outbox.items) {
+        final ids = item.body['mentionAccountIds'];
+        if (item.conversationId == conversationId &&
+            item.body['text'] == expectedDraft &&
+            ids is List &&
+            ids.length == 1 &&
+            ids.single is String) {
+          pending = (
+            shell: sessionShell,
+            generation: generation,
+            group: conversationId,
+            text: expectedDraft,
+            target: ids.single as String,
+            id: item.clientMsgId,
+          );
+          _pendingMention = pending;
+          break;
+        }
+      }
+    }
+    final sameIntent =
+        pending != null &&
+        pending.generation == generation &&
+        identical(pending.shell, sessionShell) &&
+        pending.group == conversationId &&
+        pending.text == expectedDraft;
+    if (pending != null &&
+        pending.generation == generation &&
+        identical(pending.shell, sessionShell) &&
+        (!sameIntent || pending.target != target)) {
+      throw const FormatException('上一条提及保存尚未确认，请返回原会话重试原提及，避免重复发送');
+    }
+    if (!sameIntent) {
+      final previousIds = sessionShell.outbox.items
+          .map((item) => item.clientMsgId)
+          .toSet();
+      try {
+        final id = await sessionShell.enqueue(
+          conversationId,
+          MessageKind.text,
+          {
+            'text': expectedDraft,
+            'mentionAccountIds': <String>[target],
+          },
+        );
+        pending = (
+          shell: sessionShell,
+          generation: generation,
+          group: conversationId,
+          text: expectedDraft,
+          target: target,
+          id: id,
+        );
+        if (_current(generation)) _pendingMention = pending;
+      } catch (_) {
+        // enqueue retains its item when the durable checkpoint fails. Capture
+        // that original identity so confirm/recovery cannot enqueue a duplicate.
+        for (final item in sessionShell.outbox.items) {
+          final mentions = item.body['mentionAccountIds'];
+          if (!previousIds.contains(item.clientMsgId) &&
+              item.conversationId == conversationId &&
+              item.body['text'] == expectedDraft &&
+              mentions is List &&
+              mentions.length == 1 &&
+              mentions.single == target) {
+            if (_current(generation)) {
+              _pendingMention = (
+                shell: sessionShell,
+                generation: generation,
+                group: conversationId,
+                text: expectedDraft,
+                target: target,
+                id: item.clientMsgId,
+              );
+            }
+            break;
+          }
+        }
+        throw const FormatException('本条提及仍保留待发送；保存未确认，请重试原提及，勿重复普通发送');
+      }
+    }
+    if (!_current(generation)) return;
+    if ((_draftRevisions[conversationId] ?? 0) != draftRevision) return;
+    await sessionShell.saveDraft(conversationId, '');
+    if (!_current(generation)) return;
+    if (_selected == conversationId &&
+        _draft == expectedDraft &&
+        (_draftRevisions[conversationId] ?? 0) == draftRevision) {
+      _draft = '';
+    }
+    if (_pendingMention?.id == pending.id) _pendingMention = null;
+    if (_online && !locked && authenticated) await sessionShell.flush();
+  });
+
   @override
   Future<void> setAiConsent(bool allowed) => _run(() async {
     if (_selected == null) return;
@@ -859,6 +1032,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     if (_disposed) return;
     _disposed = true;
     ++_generation;
+    _pendingMention = null;
     _credentials = null;
     _pendingRenewal = null;
     reconnect?.cancel();

@@ -97,9 +97,14 @@ class ConversationList extends StatelessWidget {
 }
 
 class _GroupActionDialog extends StatefulWidget {
-  const _GroupActionDialog({required this.model, this.groupId});
+  const _GroupActionDialog({
+    required this.model,
+    this.groupId,
+    this.mentionDraft,
+  });
   final ShellViewModel model;
   final String? groupId;
+  final String? mentionDraft;
   @override
   State<_GroupActionDialog> createState() => _GroupActionDialogState();
 }
@@ -111,7 +116,8 @@ class _GroupActionDialogState extends State<_GroupActionDialog> {
   String? failure;
   late final String? initialAccount;
   bool invalidated = false;
-  bool get adding => widget.groupId != null;
+  bool get mentioning => widget.mentionDraft != null;
+  bool get adding => widget.groupId != null && !mentioning;
   @override
   void initState() {
     super.initState();
@@ -131,7 +137,7 @@ class _GroupActionDialogState extends State<_GroupActionDialog> {
         model.busy ||
         !model.authenticated ||
         model.locked ||
-        !model.online ||
+        (!mentioning && !model.online) ||
         form.currentState?.validate() != true) {
       return;
     }
@@ -139,7 +145,13 @@ class _GroupActionDialogState extends State<_GroupActionDialog> {
       submitting = true;
       failure = null;
     });
-    if (adding) {
+    if (mentioning) {
+      await model.sendMentionedMessage(
+        conversationId: widget.groupId!,
+        expectedDraft: widget.mentionDraft!,
+        aiAccountId: input.text.trim(),
+      );
+    } else if (adding) {
       await model.addGroupMember(widget.groupId!, input.text.trim());
     } else {
       await model.createGroup(input.text);
@@ -165,7 +177,11 @@ class _GroupActionDialogState extends State<_GroupActionDialog> {
       final model = widget.model;
       if (!model.authenticated ||
           model.locked ||
-          model.connectedAccountId != initialAccount) {
+          model.connectedAccountId != initialAccount ||
+          (mentioning &&
+              !submitting &&
+              (model.selectedConversationId != widget.groupId ||
+                  model.draft != widget.mentionDraft))) {
         invalidated = true;
       }
       if (invalidated) {
@@ -180,11 +196,18 @@ class _GroupActionDialogState extends State<_GroupActionDialog> {
           ],
         );
       }
-      final permitted = model.authenticated && !model.locked && model.online;
+      final permitted =
+          model.authenticated && !model.locked && (mentioning || model.online);
       return PopScope(
         canPop: !submitting,
         child: AlertDialog(
-          title: Text(adding ? '添加群成员' : '创建群聊'),
+          title: Text(
+            mentioning
+                ? '提及 AI 并发送本条消息'
+                : adding
+                ? '添加群成员'
+                : '创建群聊',
+          ),
           content: SingleChildScrollView(
             child: Form(
               key: form,
@@ -192,20 +215,43 @@ class _GroupActionDialogState extends State<_GroupActionDialog> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    adding ? '输入对方已知的账户 ID。仅群主可添加成员。' : '先创建群聊，再单独添加已知账户 ID。',
+                    mentioning
+                        ? '输入已知 AI 账户 ID，仅本条消息提及。是否回复由宿主策略决定；不保证模型回复。'
+                        : adding
+                        ? '输入对方已知的账户 ID。仅群主可添加成员。'
+                        : '先创建群聊，再单独添加已知账户 ID。',
                   ),
+                  if (mentioning)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        widget.mentionDraft!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   const SizedBox(height: 16),
                   TextFormField(
-                    key: Key(adding ? 'member-account-id' : 'group-name'),
+                    key: Key(
+                      mentioning
+                          ? 'mention-ai-id'
+                          : adding
+                          ? 'member-account-id'
+                          : 'group-name',
+                    ),
                     controller: input,
                     autofocus: true,
                     enabled: permitted && !submitting,
                     decoration: InputDecoration(
-                      labelText: adding ? '账户 ID' : '群名称',
+                      labelText: mentioning
+                          ? 'AI 账户 ID'
+                          : adding
+                          ? '账户 ID'
+                          : '群名称',
                     ),
                     validator: (value) {
                       final text = value ?? '';
-                      if (!adding) {
+                      if (!adding && !mentioning) {
                         return text.trim().isEmpty || text.length > 100
                             ? '请输入1–100个字符的群名'
                             : null;
@@ -245,11 +291,23 @@ class _GroupActionDialogState extends State<_GroupActionDialog> {
               child: const Text('取消'),
             ),
             FilledButton(
-              key: Key(adding ? 'confirm-add-member' : 'confirm-create-group'),
+              key: Key(
+                mentioning
+                    ? 'confirm-mention-message'
+                    : adding
+                    ? 'confirm-add-member'
+                    : 'confirm-create-group',
+              ),
               onPressed: permitted && !submitting && !model.busy
                   ? submit
                   : null,
-              child: Text(adding ? '添加' : '创建'),
+              child: Text(
+                mentioning
+                    ? '确认提及并发送'
+                    : adding
+                    ? '添加'
+                    : '创建',
+              ),
             ),
           ],
         ),
@@ -400,6 +458,32 @@ class _ChatPaneState extends State<ChatPane> {
                 ),
         ),
         const Divider(height: 1),
+        if (model.conversations.any(
+          (item) =>
+              item.id == model.selectedConversationId && item.kind == 'group',
+        ))
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              key: const Key('mention-ai-message'),
+              onPressed: model.canMentionAi
+                  ? () {
+                      final groupId = model.selectedConversationId;
+                      final draft = model.draft;
+                      showDialog<void>(
+                        context: context,
+                        builder: (_) => _GroupActionDialog(
+                          model: model,
+                          groupId: groupId,
+                          mentionDraft: draft,
+                        ),
+                      );
+                    }
+                  : null,
+              icon: const Icon(Icons.alternate_email),
+              label: const Text('提及 AI 并发送'),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.all(8),
           child: Row(
