@@ -100,3 +100,79 @@ class DrawPlugin extends ClientPlugin {
 ```
 
 验收：插件目录下 `dart test` 通过；在 `PluginHost` 上加载成功；去掉清单里任一能力后加载失败。
+
+## 7. 插件包安全校验
+
+> 代码：`packages/jingyu_client_kit/lib/src/plugin_package.dart`（纯 Dart、无 IO）。依据见 `docs/architecture/adr/0001-plugin-package-validation.md`。
+
+v3 插件以 bundle（zip 包）分发。安装前先调用 `validatePluginPackage` 对**包字节**做安全与完整性校验；通过后再把 `manifest` 交给既有 `PluginHost.load`。本步骤不改变 `PluginManifest` / `pluginApiVersion = 1` / `PluginHost.load` 的既有语义。
+
+### 7.1 限额 `PluginPackageLimits`
+
+| 字段 | 默认值 | 含义 |
+|---|---|---|
+| `maxEntries` | 512 | 条目数上限 |
+| `maxTotalUncompressedBytes` | 64 MiB | 全部条目解压后总字节上限 |
+| `maxEntryUncompressedBytes` | 16 MiB | 单条目解压后字节上限 |
+| `maxCompressionRatio` | 100 | 整包压缩比上限（全部解压后总量 / 包字节） |
+| `maxManifestBytes` | 256 KiB | 根 `plugin.json` 字节上限 |
+| `maxJsonDepth` | 32 | 清单 JSON 嵌套深度上限 |
+
+### 7.2 问题码 `PluginPackageIssueCode`
+
+`empty`、`notZip`、`tooManyEntries`、`entryTooLarge`、`totalTooLarge`、`compressionRatioTooHigh`、`unsafeEntryPath`、`duplicateEntry`、`symbolicLink`、`missingManifest`、`manifestTooLarge`、`manifestTooDeep`、`manifestInvalidJson`、`manifestInvalid`、`integrityMismatch`。
+
+### 7.3 数据结构
+
+```dart
+class PluginPackageIssue {
+  final PluginPackageIssueCode code;
+  final String message;
+  final String? path; // 相关条目路径，能定位时给出
+}
+
+class PluginPackageValidation {
+  final bool ok;                       // 所有校验通过才为 true
+  final PluginManifest? manifest;      // ok 时有值；解析失败为 null
+  final String sha256Hex;              // 对包字节计算的 sha256（小写十六进制）
+  final List<PluginPackageIssue> issues;
+}
+```
+
+### 7.4 入口
+
+```dart
+PluginPackageValidation validatePluginPackage(
+  Uint8List bytes, {
+  PluginPackageLimits limits,
+  String? expectedSha256Hex,
+})
+```
+
+- **纯函数**：不读文件系统、不做网络与其它 IO；只校验传入的内存字节。
+- 要求包内有**根目录的** `plugin.json` 清单。
+- 计算整包字节的 sha256；若给了 `expectedSha256Hex` 则比对。
+- 用 `PluginManifest.fromJson` 解析清单：**严格**，字段非法时抛 `FormatException`，本函数捕获并转为 `manifestInvalid`（不向外抛出）。
+- 可疑/非法情况一律记 `issues` 并置 `ok=false`，不抛未受控异常。
+- 清单字段的「结构」仍由 `PluginManifest.fromJson` 严格保证（如 `apiVersion` 必为整数、`platforms` 只允许 android/windows、能力必须合法）；此处**不**判定 `apiVersion` 兼容性 / 平台适用性 / `hostOnly` 等运行期语义，这些仍由 `PluginHost.load` 决定（关注点分离）。
+
+### 7.5 每一项校验与规则
+
+| 检查 | 规则 | 触发码 |
+|---|---|---|
+| 非空 | 包字节不能为空 | `empty` |
+| zip 格式 | 必须能识别为 zip 结构 | `notZip` |
+| 条目数 | 条目数 ≤ `maxEntries` | `tooManyEntries` |
+| 单条体积 | 每条解压后 ≤ `maxEntryUncompressedBytes` | `entryTooLarge` |
+| 总体积 | 全部解压后合计 ≤ `maxTotalUncompressedBytes` | `totalTooLarge` |
+| 压缩比 | 整包（全部解压后总量 / 包字节）≤ `maxCompressionRatio`，超过视为疑似 zip 炸弹 | `compressionRatioTooHigh` |
+| 路径安全（Zip Slip） | 拒绝绝对路径、盘符、含 `..` 的条目路径 | `unsafeEntryPath` |
+| 重复条目 | 拒绝大小写不敏感的重名条目 | `duplicateEntry` |
+| 符号链接 | 拒绝符号链接条目 | `symbolicLink` |
+| 清单存在 | 必须有根 `plugin.json` | `missingManifest` |
+| 清单体积 | `plugin.json` ≤ `maxManifestBytes` | `manifestTooLarge` |
+| 清单深度 | JSON 嵌套 ≤ `maxJsonDepth` | `manifestTooDeep` |
+| 清单 JSON | 必须是合法 JSON | `manifestInvalidJson` |
+| 清单字段 | `PluginManifest.fromJson` 严格解析通过 | `manifestInvalid` |
+| 完整性 | 计算 sha256 与 `expectedSha256Hex` 一致（给了才校验） | `integrityMismatch` |
+
