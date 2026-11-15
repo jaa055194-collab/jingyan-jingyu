@@ -34,8 +34,10 @@ class PersonaModule extends HostModule {
 
   Future<HostResponse> _handle(
     HostRequest request,
-    Future<HostResponse> Function(SqlitePersonaService service, AiId ai) action,
-  ) async {
+    Future<HostResponse> Function(SqlitePersonaService service, AiId ai)
+    action, {
+    Set<String> allowedQuery = const {},
+  }) async {
     final current = await authenticate(request);
     if (current == null ||
         current.accountId != request.principal?.accountId ||
@@ -50,7 +52,9 @@ class PersonaModule extends HostModule {
     } on FormatException {
       return _bad();
     }
-    if (request.query.isNotEmpty) return _bad();
+    if (request.query.keys.any((key) => !allowedQuery.contains(key))) {
+      return _bad();
+    }
     return action(
       SqlitePersonaService.forOwner(
         ownerId: current.accountId,
@@ -106,8 +110,76 @@ class PersonaModule extends HostModule {
     ),
   );
 
+  Map<String, Object?> _historyChange(PersonaChange change) => {
+    'id': change.id,
+    'version': change.version,
+    'kind': change.kind.name,
+    'actorAccountId': change.actorAccountId.value,
+    'before': change.before?.toJson(),
+    'after': change.after.toJson(),
+    'diff': change.diff.toJson(),
+    'reason': change.reason,
+    'evidenceIds': change.evidenceIds,
+    'at': change.at.toUtc().toIso8601String(),
+    'lockedBefore': change.lockedBefore,
+    'lockedAfter': change.lockedAfter,
+    'revertsChangeId': change.revertsChangeId,
+  };
+
+  int? _decimal(String? value, int fallback) => value == null
+      ? fallback
+      : RegExp(r'^[0-9]+$').hasMatch(value)
+      ? int.tryParse(value)
+      : null;
+
   @override
   void mount(Router router) {
+    router.get(
+      Routes.aiPersonaHistory,
+      (request) => _handle(request, (service, ai) async {
+        final after = _decimal(request.query['afterVersion'], 0);
+        final limit = _decimal(request.query['limit'], 50);
+        if (after == null || limit == null) return _bad();
+        return HostResponse.fromResult(
+          await service.historyPage(ai, afterVersion: after, limit: limit),
+          (page) => {
+            'changes': page.changes.map(_historyChange).toList(),
+            'nextAfterVersion': page.nextAfterVersion,
+          },
+        );
+      }, allowedQuery: const {'afterVersion', 'limit'}),
+    );
+
+    router.post(
+      Routes.aiPersonaRevert,
+      (request) => _handle(request, (service, ai) async {
+        final json = _body(request, const {
+          'changeId',
+          'expectedVersion',
+          'reason',
+        });
+        if (json == null || json.length != 3) return _bad();
+        final id = json['changeId'];
+        final version = json['expectedVersion'];
+        final reason = json['reason'];
+        if (id is! String ||
+            version is! int ||
+            version < 1 ||
+            reason is! String) {
+          return _bad();
+        }
+        return HostResponse.fromResult(
+          await service.revert(
+            ai,
+            id,
+            expectedVersion: version,
+            reason: reason,
+          ),
+          (change) => _change(ai, change),
+        );
+      }),
+    );
+
     router.get(
       Routes.aiPersona,
       (request) => _handle(request, (service, ai) async {
