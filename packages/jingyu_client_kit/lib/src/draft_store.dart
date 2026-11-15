@@ -37,7 +37,7 @@ class ConversationDraft {
     if (parsedAt == null) return null;
     try {
       validateId(conversationId, kind: 'conversation');
-    } on ArgumentError {
+    } on FormatException {
       return null;
     }
     return ConversationDraft(
@@ -49,6 +49,9 @@ class ConversationDraft {
 }
 
 /// 账号隔离的会话草稿存储。
+///
+/// 写入与导入严格校验 id；读取/清除接口对非法 id 采取宽松只读处理（返回空或
+/// 无操作），不用于权限判断。快照按 [drafts] 的确定性顺序导出。
 class DraftStore {
   final Map<String, Map<String, ConversationDraft>> _data =
       <String, Map<String, ConversationDraft>>{};
@@ -111,9 +114,7 @@ class DraftStore {
   Map<String, Object?> exportAccount(String accountId) => <String, Object?>{
     'version': 1,
     'drafts': <Map<String, Object?>>[
-      for (final ConversationDraft draft
-          in _data[accountId]?.values ?? <ConversationDraft>[])
-        draft.toJson(),
+      for (final ConversationDraft draft in drafts(accountId)) draft.toJson(),
     ],
   };
 
