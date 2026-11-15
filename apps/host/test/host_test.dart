@@ -216,6 +216,7 @@ void main() {
         'attachments',
         'social',
         'models',
+        'social_level',
         'persona',
       ]);
       final metadata = await host.pipeline.handle(
