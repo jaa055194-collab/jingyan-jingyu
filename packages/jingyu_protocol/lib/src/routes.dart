@@ -161,6 +161,7 @@ abstract final class Routes {
   static const String aiBinding =
       '$prefix/ai-profiles/{aiId}/bindings/{capability}';
   static const String aiBudget = '$prefix/ai-profiles/{aiId}/budget';
+  static const String aiUsage = '$prefix/ai-profiles/{aiId}/usage';
 
   /// Explicit owner persona initialization and CAS-based configuration.
   static const String aiPersona = '$prefix/ai-profiles/{aiId}/persona';
