@@ -387,7 +387,7 @@ String? sanitizePackageEntryPath(String entryName) {
 
 /// Windows 保留设备名（不区分大小写）。
 const Set<String> _windowsReservedNames = {
-  'CON', 'PRN', 'AUX', 'NUL', //
+  'CON', 'PRN', 'AUX', 'NUL', 'CONIN\$', 'CONOUT\$', //
   'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
   'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
 };
@@ -420,23 +420,38 @@ _PreScanResult _preScanCentralDirectory(
   }
   if (eocd < 0) return _PreScanResult(true, issues);
 
-  final totalEntries = data.getUint16(eocd + 10, Endian.little);
+  final rawEntries = data.getUint16(eocd + 10, Endian.little);
   final cdSize = data.getUint32(eocd + 12, Endian.little);
   final cdOffset = data.getUint32(eocd + 16, Endian.little);
-  if (totalEntries == 0xFFFF || cdSize == 0xFFFFFFFF || cdOffset == 0xFFFFFFFF) {
+  // zip64 触发与 archive 的 ZipDirectory.read 完全对齐：任一盘号/条目计数字段
+  // 为 0xFFFF，或 CD 大小/偏移为 0xFFFFFFFF，都视为 zip64（fail-closed 拒绝）。
+  if (data.getUint16(eocd + 4, Endian.little) == 0xFFFF ||
+      data.getUint16(eocd + 6, Endian.little) == 0xFFFF ||
+      data.getUint16(eocd + 8, Endian.little) == 0xFFFF ||
+      rawEntries == 0xFFFF ||
+      cdSize == 0xFFFFFFFF ||
+      cdOffset == 0xFFFFFFFF) {
     issues.add(const PluginPackageIssue(
         PluginPackageIssueCode.notZip, '暂不支持 zip64 插件包'));
     return _PreScanResult(false, issues);
   }
-  if (cdOffset + 46 > bytes.length) return _PreScanResult(true, issues);
+  final cdEnd = cdOffset + cdSize;
+  if (cdOffset < 0 || cdEnd > bytes.length || cdOffset + 46 > cdEnd) {
+    return _PreScanResult(true, issues); // 交由解码器报 notZip
+  }
 
+  // 与 archive 的 ZipDirectory.read 一致：在中央目录尺寸窗口 [cdOffset, cdEnd)
+  // 内逐条解析，而不是相信 EOCD 的 16-bit 条目计数（该字段可被伪造）。
   var off = cdOffset;
   var count = 0;
   var total = 0;
   var blocking = false;
-  for (var n = 0; n < totalEntries; n++) {
-    if (off + 46 > bytes.length) break;
-    if (data.getUint32(off, Endian.little) != 0x02014b50) break;
+  var malformed = false;
+  while (off + 46 <= cdEnd) {
+    if (data.getUint32(off, Endian.little) != 0x02014b50) {
+      malformed = true;
+      break;
+    }
     final versionMadeBy = data.getUint16(off + 4, Endian.little);
     final uncompressedSize = data.getUint32(off + 24, Endian.little);
     final nameLen = data.getUint16(off + 28, Endian.little);
@@ -445,7 +460,11 @@ _PreScanResult _preScanCentralDirectory(
     final externalAttrs = data.getUint32(off + 38, Endian.little);
     final nameStart = off + 46;
     final nameEnd = nameStart + nameLen;
-    if (nameEnd > bytes.length) break;
+    final nextOff = nameEnd + extraLen + commentLen;
+    if (nameEnd > cdEnd || nextOff > cdEnd) {
+      malformed = true;
+      break;
+    }
     final name =
         utf8.decode(bytes.sublist(nameStart, nameEnd), allowMalformed: true);
     count++;
@@ -464,7 +483,15 @@ _PreScanResult _preScanCentralDirectory(
       blocking = true;
     }
     total += uncompressedSize;
-    off = nameEnd + extraLen + commentLen;
+    off = nextOff;
+  }
+
+  // 预扫必须与解码器看到完全一样的中央目录：结构异常、条目数与 EOCD 不符、
+  // 或未恰好走完 cdSize 窗口时，一律 fail-closed，绝不进入解码。
+  if (malformed || count != rawEntries || off != cdEnd) {
+    issues.add(const PluginPackageIssue(PluginPackageIssueCode.notZip,
+        '中央目录结构异常或条目数与 EOCD 不一致'));
+    return _PreScanResult(false, issues);
   }
 
   if (count > limits.maxEntries) {

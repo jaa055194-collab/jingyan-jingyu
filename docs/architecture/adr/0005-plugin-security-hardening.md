@@ -20,7 +20,8 @@
 - **解码前中央目录预扫** `_preScanCentralDirectory`：只读解析 EOCD + 中央目录（不解压），在任何解码前：
   - 拒绝符号链接条目（`versionMadeBy>>8==3` 且 `externalAttrs>>16 & 0xF000 == 0xA000`）——从根本上避免解码期符号链接解压；
   - 用声明尺寸先做条目数 / 单条 / 总量限额，超限直接拒绝，不进入解码；
-  - zip64 哨兵值暂不支持 → fail-closed 拒绝（防止绕过）。
+  - **严格镜像 `archive` 的 `ZipDirectory.read`**：按中央目录**尺寸窗口**（`cdOffset .. cdOffset+cdSize`）逐条解析，**不信任** EOCD 的 16-bit 条目计数（该字段可被伪造以让预扫只读良性前缀）；结构异常、走到条目数与 EOCD 不符、或未恰好走完窗口时一律 fail-closed；
+  - zip64 触发字段与解码器完全一致：任一盘号/条目计数为 `0xFFFF` 或 CD 大小/偏移为 `0xFFFFFFFF` 都拒绝（fail-closed，防止被引导到攻击者控制的 zip64 CD）。
 - **清单真实字节复核**：`plugin.json` 解压后再按真实长度复核 `maxManifestBytes`（保留既有纵深防御），并把清单解析的 `on FormatException` 扩展为 `on Object`，任何非受控异常（如 `TypeError`）都转成 `manifestInvalid`。
 - **`license` 类型校验**：`PluginManifest.fromJson` 校验 `license` 必须为字符串或 null，否则抛 `FormatException`。
 - **bundle 路径校验**：`icon` / `locales` 值 / `plugins[].entry` / `configSchema` 一律经 `sanitizePackageEntryPath` 校验（拒绝绝对/盘符/`..`/Windows 尾点与保留名）；插件 id 去重改为不区分大小写。
@@ -34,6 +35,7 @@
 ## 4. 残余风险（如实记录）
 
 - **非清单条目不做实际解压**（仅清单解压），故其“真实解压体积”仍只在安装/解包消费方按声明值受限；声明可伪造时，消费方仍需以流式/配额兜底（本层不承担解包）。
+- **清单解压仍可能先分配再复核**：`plugin.json` 的真实长度复核发生在 `content` 完全 inflate 之后；声明可伪造时，单个大清单在复核前仍会解压（受 `maxManifestBytes` 声明值约束但不构成硬上限）。真正上限需流式 inflate + 输出封顶（archive 当前接口不支持），列为残余风险。
 - **zip64 暂不支持**（直接拒绝）；如需支持需扩展预扫。
 - **压缩比**仍以声明总量 / 包字节估计；声明可伪造时仅作启发式。
 
