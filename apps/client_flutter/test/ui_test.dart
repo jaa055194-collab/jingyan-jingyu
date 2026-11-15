@@ -12,6 +12,8 @@ class TestShellModel extends ShellViewModel {
   @override
   bool onboarded = true;
   @override
+  bool chatEntered = false;
+  @override
   bool locked = false;
   @override
   bool online = false;
@@ -76,6 +78,12 @@ class TestShellModel extends ShellViewModel {
   }
 
   @override
+  Future<void> enterChat() async {
+    chatEntered = true;
+    notifyListeners();
+  }
+
+  @override
   Future<void> chooseCharacter(String characterId) async {}
   @override
   Future<void> generateRoom(String preset) async {
@@ -101,6 +109,20 @@ class TestShellModel extends ShellViewModel {
     drafts[selectedConversationId!] = value;
     notifyListeners();
   }
+
+  @override
+  bool get canAddMembersToSelectedGroup => false;
+  @override
+  Future<void> createGroup(String name) async {}
+  @override
+  Future<void> refreshConversations() async {}
+  @override
+  Future<void> addGroupMember(String groupId, String accountId) async {}
+
+  @override
+  bool get canMentionAi => false;
+  @override
+  Future<void> sendMentionedMessage({required String conversationId,required String expectedDraft,required String aiAccountId}) async {}
 
   @override
   Future<void> sendMessage() async {
@@ -491,6 +513,144 @@ void main() {
     expect(model.error, isNull);
     expect(find.text('选择你的形象'), findsOneWidget);
     expect(passwordController.text, isEmpty);
+  });
+
+  testWidgets(
+    'authenticated user can defer world setup and reach the chat shell',
+    (tester) async {
+      final model = TestShellModel()..onboarded = false;
+      await tester.pumpWidget(WhaleChatApp(model: model));
+      await enterOnboardingField(
+        tester,
+        'host-address',
+        'https://host.example',
+      );
+      await enterOnboardingField(tester, 'host-invite', 'invite');
+      await fillNewAccountCredentials(tester);
+      await submitHostConnection(tester);
+      expect(find.text('选择你的形象'), findsOneWidget);
+      expect(find.byKey(const Key('defer-world-setup')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('defer-world-setup')));
+      await tester.pumpAndSettle();
+      expect(model.chatEntered, isTrue);
+      expect(model.onboarded, isFalse);
+      expect(find.text('小鲸'), findsOneWidget);
+      expect(find.text('选择你的形象'), findsNothing);
+    },
+  );
+
+  testWidgets('world setup remains explicitly optional from the world tab', (
+    tester,
+  ) async {
+    final model = TestShellModel()
+      ..onboarded = false
+      ..chatEntered = true
+      ..connectedAccountId = 'account-9';
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await tester.tap(find.text('世界'));
+    await tester.pumpAndSettle();
+    expect(find.text('世界与形象'), findsOneWidget);
+    expect(find.text('设置形象与房间（可选）'), findsOneWidget);
+    await tester.tap(find.text('设置形象与房间（可选）'));
+    await tester.pumpAndSettle();
+    expect(find.text('选择你的形象'), findsOneWidget);
+    expect(find.byKey(const Key('defer-world-setup')), findsOneWidget);
+  });
+
+  for (final event in ['lock', 'logout']) {
+    testWidgets('optional world route shields account setup after $event', (
+      tester,
+    ) async {
+      final model = TestShellModel()
+        ..onboarded = false
+        ..chatEntered = true
+        ..connectedAccountId = 'account-9';
+      await tester.pumpWidget(WhaleChatApp(model: model));
+      await tester.tap(find.text('世界'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('设置形象与房间（可选）'));
+      await tester.pumpAndSettle();
+      expect(find.text('账号 ID：account-9'), findsOneWidget);
+      if (event == 'lock') {
+        model.locked = true;
+      } else {
+        model.connectedAccountId = null;
+        model.chatEntered = false;
+      }
+      model.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(find.text('账号 ID：account-9'), findsNothing);
+      expect(find.text('选择你的形象'), findsNothing);
+      expect(find.byKey(const Key('defer-world-setup')), findsNothing);
+      expect(
+        event == 'lock'
+            ? find.byKey(const Key('unlock-pin'))
+            : find.byKey(const Key('host-address')),
+        findsOneWidget,
+      );
+      model.locked = false;
+      model.connectedAccountId = event == 'lock' ? 'account-9' : 'account-10';
+      model.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(find.text('选择你的形象'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('optional world action fits a short mobile viewport', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 350);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final model = TestShellModel()
+      ..onboarded = false
+      ..chatEntered = true
+      ..connectedAccountId = 'account-9'
+      ..fontScale = 1.5;
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await tester.tap(find.text('世界'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.ensureVisible(find.text('设置形象与房间（可选）'));
+    expect(find.text('设置形象与房间（可选）'), findsOneWidget);
+  });
+
+  testWidgets('restored pending setup returns to credentials after logout', (
+    tester,
+  ) async {
+    final model = TestShellModel()
+      ..onboarded = false
+      ..connectedAccountId = 'account-9';
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    expect(find.text('选择你的形象'), findsOneWidget);
+    model.connectedAccountId = null;
+    model.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('host-address')), findsOneWidget);
+    expect(find.text('选择你的形象'), findsNothing);
+  });
+
+  testWidgets('deferred flag alone never opens unauthenticated chat', (
+    tester,
+  ) async {
+    final model = TestShellModel()
+      ..onboarded = false
+      ..chatEntered = true;
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    expect(find.text('连接你的宿主'), findsOneWidget);
+    expect(find.text('好友'), findsNothing);
+  });
+
+  testWidgets('deferring world setup is unavailable before authentication', (
+    tester,
+  ) async {
+    final model = TestShellModel()..onboarded = false;
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    expect(find.text('连接你的宿主'), findsOneWidget);
+    expect(find.byKey(const Key('defer-world-setup')), findsNothing);
+    expect(model.chatEntered, isFalse);
   });
 
   testWidgets('onboarding requires room preview before confirmation', (

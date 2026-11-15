@@ -38,8 +38,11 @@ class WhaleChatApp extends StatelessWidget {
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : model.locked
           ? UnlockScreen(model: model)
-          : !model.onboarded
-          ? OnboardingScreen(model: model)
+          : !model.onboarded && !(model.authenticated && model.chatEntered)
+          ? OnboardingScreen(
+              model: model,
+              initialStep: model.authenticated ? 1 : 0,
+            )
           : _ShellHome(model: model),
     ),
   );
@@ -70,6 +73,66 @@ class _ShellHomeState extends State<_ShellHome> {
       setState(() => mobileChat = true);
     }
   }
+
+  void openWorldSetup() {
+    final model = widget.model;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (routeContext) => ListenableBuilder(
+          listenable: model,
+          builder: (_, _) {
+            if (!model.ready) {
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator()),
+              );
+            }
+            if (model.locked) return UnlockScreen(model: model);
+            if (!model.authenticated) {
+              return OnboardingScreen(
+                key: const ValueKey('route-login'),
+                model: model,
+              );
+            }
+            return OnboardingScreen(
+              key: const ValueKey('route-world-setup'),
+              model: model,
+              initialStep: 1,
+              onClose: () => Navigator.of(routeContext).pop(),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget world() => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.public, size: 40),
+          const SizedBox(height: 16),
+          Text('世界与形象', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(
+            widget.model.onboarded
+                ? '形象与房间设置已完成。'
+                : '形象和房间属于可选世界设置，可稍后在这里完成；聊天不受影响。',
+            textAlign: TextAlign.center,
+          ),
+          if (!widget.model.onboarded) ...[
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: widget.model.authenticated ? openWorldSetup : null,
+              icon: const Icon(Icons.tune),
+              label: const Text('设置形象与房间（可选）'),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
 
   Widget empty() {
     const titles = ['', '暂无联系人', '暂无动态', '暂无通知', '世界尚未开放'];
@@ -111,6 +174,8 @@ class _ShellHomeState extends State<_ShellHome> {
               model: model,
               onBack: () => setState(() => settings = false),
             )
+          : destination == 4
+          ? world()
           : destination != 0
           ? empty()
           : wide

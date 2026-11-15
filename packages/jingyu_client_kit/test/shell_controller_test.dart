@@ -31,6 +31,72 @@ MessageEventFrame message(int seq) => MessageEventFrame(
   sentAt: DateTime.utc(2026),
 );
 void main() {
+  for (final code in [FailureCode.unavailable, FailureCode.rateLimited]) {
+    test(
+      'overlapping shell flush shares transient flight without retry $code',
+      () async {
+        final store = MemoryPersistence(),
+            started = Completer<void>(),
+            release = Completer<void>();
+        var sends = 0;
+        final shell = ClientShellController(
+          persistence: store,
+          submit: (_) async {
+            sends++;
+            if (!started.isCompleted) started.complete();
+            await release.future;
+            return err<void>(code, 'temporary');
+          },
+          requestSync: (_) async {},
+        );
+        await shell.initialize();
+        final id = await shell.enqueue('c', MessageKind.text, {
+          'text': 'queued',
+        });
+        final first = shell.flush();
+        await started.future;
+        final second = shell.flush();
+        release.complete();
+        final reports = await Future.wait([first, second]);
+        expect(sends, 1);
+        expect(identical(first, second), isTrue);
+        expect(identical(reports.first, reports.last), isTrue);
+        expect(shell.outbox.items.single.clientMsgId, id);
+        expect(shell.outbox.items.single.attempts, 1);
+        await shell.flush();
+        expect(sends, 2);
+        expect(shell.outbox.items.single.attempts, 2);
+      },
+    );
+  }
+  test(
+    'shared shell checkpoint errors release flight for later explicit retry',
+    () async {
+      final store = MemoryPersistence();
+      var sends = 0;
+      final shell = ClientShellController(
+        persistence: store,
+        submit: (_) async {
+          sends++;
+          return const Ok(null);
+        },
+        requestSync: (_) async {},
+      );
+      await shell.initialize();
+      await shell.enqueue('c', MessageKind.text, {'text': 'queued'});
+      store.fail = true;
+      final first = shell.flush(), second = shell.flush();
+      await Future.wait([
+        expectLater(first, throwsStateError),
+        expectLater(second, throwsStateError),
+      ]);
+      expect(identical(first, second), isTrue);
+      expect(sends, 0);
+      store.fail = false;
+      expect((await shell.flush()).sent, 1);
+      expect(sends, 1);
+    },
+  );
   test(
     'durable enqueue survives restart and concurrent flush preserves ids',
     () async {

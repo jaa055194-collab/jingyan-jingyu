@@ -3,8 +3,20 @@ import 'package:material_ui/material_ui.dart';
 import '../../app/shell_view_model.dart';
 
 class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({super.key, required this.model});
+  const OnboardingScreen({
+    super.key,
+    required this.model,
+    this.initialStep = 0,
+    this.onClose,
+  });
   final ShellViewModel model;
+
+  /// Character/room setup can be reopened later at step 1 while keeping the
+  /// same screens; zero retains the initial connect step.
+  final int initialStep;
+
+  /// Set when this screen is pushed as optional world setup; enables back.
+  final VoidCallback? onClose;
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
 }
@@ -17,7 +29,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final deviceName = TextEditingController();
   final password = TextEditingController();
   bool existingAccount = false;
-  int step = 0;
+  late int step = widget.initialStep.clamp(0, 2);
+  String? sessionAccount;
+
+  @override
+  void initState() {
+    super.initState();
+    sessionAccount = widget.model.connectedAccountId;
+  }
+
+  @override
+  void didUpdateWidget(covariant OnboardingScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final current = widget.model.connectedAccountId;
+    if (sessionAccount != null && current != sessionAccount) {
+      step = current == null ? 0 : widget.initialStep.clamp(0, 2);
+      previewPreset = null;
+      validation = null;
+    }
+    sessionAccount = current;
+  }
+
   String character = 'whale';
   String preset = 'quiet';
   String? previewPreset;
@@ -81,7 +113,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Widget build(BuildContext context) {
     final model = widget.model;
     return Scaffold(
-      appBar: AppBar(title: const Text('鲸言鲸语')),
+      appBar: AppBar(
+        title: const Text('鲸言鲸语'),
+        leading: widget.onClose == null
+            ? null
+            : IconButton(
+                tooltip: '返回',
+                onPressed: widget.onClose,
+                icon: const Icon(Icons.arrow_back),
+              ),
+      ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 520),
@@ -256,6 +297,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         },
                   child: const Text('下一步'),
                 ),
+                const SizedBox(height: 12),
+                if (model.authenticated) ...[
+                  OutlinedButton.icon(
+                    key: const Key('defer-world-setup'),
+                    onPressed: model.busy
+                        ? null
+                        : () async {
+                            model.clearError();
+                            await model.enterChat();
+                            if (mounted &&
+                                model.error == null &&
+                                widget.onClose != null) {
+                              widget.onClose!();
+                            }
+                          },
+                    icon: const Icon(Icons.chat_bubble_outline),
+                    label: const Text('稍后设置，先进入聊天'),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('形象和房间属于可选世界设置，之后可在“世界”里继续。'),
+                ],
               ],
               if (step == 2) ...[
                 const Text('选择 RoomBrief 预设，生成并检查预览后再确认。'),
@@ -311,6 +373,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       : model.confirmRoom,
                   child: const Text('确认并进入'),
                 ),
+                const SizedBox(height: 12),
+                if (model.authenticated)
+                  OutlinedButton.icon(
+                    key: const Key('defer-world-setup-room'),
+                    onPressed: model.busy
+                        ? null
+                        : () async {
+                            model.clearError();
+                            await model.enterChat();
+                            if (mounted &&
+                                model.error == null &&
+                                widget.onClose != null) {
+                              widget.onClose!();
+                            }
+                          },
+                    icon: const Icon(Icons.chat_bubble_outline),
+                    label: const Text('稍后设置，先进入聊天'),
+                  ),
               ],
               if (model.busy)
                 const Padding(

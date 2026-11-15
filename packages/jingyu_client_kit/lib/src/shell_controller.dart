@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 import 'outbox.dart';
@@ -34,6 +35,7 @@ class ClientShellController {
   final _dropped = <DroppedMessage>[];
   bool _initialized = false;
   int _requestId = 0;
+  Future<FlushReport>? _flushFlight;
 
   List<DroppedMessage> get dropped => List.unmodifiable(_dropped);
   List<MessageEventFrame> messagesFor(String id) =>
@@ -91,7 +93,28 @@ class ClientShellController {
     return id;
   });
 
-  Future<FlushReport> flush() => _serial.run(() async {
+  /// Overlapping callers share this flight; a transient stop is not implicitly
+  /// retried by a queued joiner. A later explicit call may start a fresh flight.
+  Future<FlushReport> flush() {
+    final active = _flushFlight;
+    if (active != null) return active;
+    final completion = Completer<FlushReport>();
+    final flight = completion.future;
+    _flushFlight = flight;
+    _flush().then<void>(
+      (report) {
+        _flushFlight = null;
+        completion.complete(report);
+      },
+      onError: (Object error, StackTrace stack) {
+        _flushFlight = null;
+        completion.completeError(error, stack);
+      },
+    );
+    return flight;
+  }
+
+  Future<FlushReport> _flush() => _serial.run(() async {
     _requireInitialized();
     // Also retries a prior failed enqueue checkpoint before any network IO.
     await _persist();

@@ -26,6 +26,30 @@ Source: Issue #5, `docs/modules/M11-client-shell.md`, v4.2 FR-09/11/13/18/61. Ow
 - Logout invalidates in-flight login/refresh generations, closes both transports, unloads plugins, and orders protected clearing after earlier writes. Dispose prevents live activation; a valid already-in-flight protected save may finish for next launch.
 - A401 is retried after at most one single-flight refresh. If authentication remains unavailable, the outbox retains its original message ID. A transient secure-store failure retains the rotated pair in memory for a later persistence attempt on the same device, rather than reusing an invalidated refresh token.
 
+## Approved temporary chat-first workflow
+
+The owner approved deferring unavailable character/room setup: after real host authentication, an unlocked user can explicitly enter the existing chat shell. This is a local app flow increment atop PR #8, not a merge/release of that held draft. Character/room screens remain accessible from the World tab and still report unavailable host contracts honestly; `onboarded` is never set by deferral.
+
+The separate `chatEntered` choice is persisted only in the existing host/account/device snapshot. It does not rewrite credentials or change token rotation. New widget/runtime regressions cover the defer route, optional return to setup, unauthenticated and locked denial, credential nonmutation, restart, and identity isolation. See [actual native comparison](evidence/public-comparison.md): matched before/after Windows HWND captures use the real app/public authentication and identical capture-only native state isolation. Baseline is7c5405f; changed four-file patch6231F493 is a source subset ofb53655d, not its entire tree. Capture-only tray/hotkey/autostart are disabled and model image input was unavailable, so native integration acceptance and independent visual inspection remain incomplete. Earlier [harness evidence](evidence/chat-first-harness.md) is explicitly intermediate and not final visual evidence.
+
+## Ordinary group-chat client increment
+
+Authenticated online users can create a named group from the conversation list, select the server-confirmed group, and separately add a known account ID when the host's canonical group metadata identifies the current owner. Existing outbox/send/sync and draft persistence are reused. Unconfirmed creation is not automatically replayed; explicit refresh recovers the authoritative list and clears obsolete recovery guidance after success. Dialog input is hidden after lock/logout. No account enumeration, friendship grant, or AI-consent shortcut is introduced.
+
+Final focused group/mapping/authentication tests:36 passed. Lead full Flutter suite:181 passed,1 evidence-generation skipped; final Flutter analysis clean. Independent source-review follow-up found no remaining actionable blocker after the refresh-recovery regression. Actual default-host two-human helper smoke passed creation, membership, duplicate-clientMsgId deduplication, exact text sync and durable host restart; this is not the UI acceptance result. Actual native group UI integration passed: real create dialog, server-confirmed selection, add-member action and composer/send reached a second synthetic human's real public-API list/sync with exact text and queue0. [Matched native group comparison](evidence/public-group-comparison.md) identifies source6b85f00 and capture isolation; before/after tray instrumentation differs and is disclosed. Android debug APK built successfully (442.3s), source/lock remained unchanged; no Android device acceptance. Model image input was unavailable, so independent visual inspection remains pending. No automatic AI reply is delivered by this increment.
+
+## Explicit one-message AI mention and local rules greeting
+
+The group composer now offers explicit confirmation for one known AI account ID on that message only. It persists `{text, mentionAccountIds:[id]}` through the existing outbox; ordinary subsequent sends stay text-only. Failed local checkpoints reconcile the original retained client message ID, refuse replacing another unresolved mention, and preserve newer per-conversation draft revisions. No persistent intent ledger or exactly-once crash recovery is claimed.
+
+Lead final Flutter suite at8752948:196 passed,1 evidence-generation skipped; analyzer clean. Final Android debug build96.3s and uninstrumented production Windows debug79.2s passed with unchanged source/lock. Fresh independent source follow-up found no remaining blocker after checkpoint/revision regressions. Actual native UI against host47a19b0 passed: real user enters你好, confirms knownAIID once, canonicalAI reply你好呀 is persisted with source=s1/activityRefs=[], client displays it and a second human's public sync verifies exact body/sequence; pending queue0. [Actual matched comparison](evidence/public-mention-s1-comparison.md) records source8752948/host47a, same native isolation, viewport and limitations.
+
+This is an explicitly admitted **curated rules-only S1 greeting**, not model chat or general AI conversation. Host configuration must explicitly provide current socialL1+, canonical membership/history, budget/timezone and group admission. No provider/model call, private-AI friendship bypass, memory capture or external group-content export occurs. Image-capable visual inspection and Android device acceptance remain unavailable.
+
+## Tray-unavailable startup fallback
+
+Windows native initialization now reports the actual `tray:false` capability instead of aborting the entire client solely because the notification-area icon could not be created. Real registration is still attempted; other native initialization failures are unchanged. A separate actual native integration kept `Shell_NotifyIconW` intact, observed its false result, and verified real DPAPI session restoration with ready/authenticated true and no startup error. This is not full tray/hotkey/autostart or AC-16 acceptance.
+
 ## Remaining integration
 
 1. Complete character/room host contracts and RoomGenerator persistence; do not mark onboarding complete before then.

@@ -5,6 +5,12 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get ready;
   bool get busy;
   bool get onboarded;
+
+  /// True when an authenticated host session is available.
+  bool get authenticated => connectedAccountId != null;
+
+  /// True once the user chose to use chat before optional world setup.
+  bool get chatEntered;
   bool get locked;
   bool get online;
   String? get error;
@@ -29,12 +35,25 @@ abstract class ShellViewModel extends ChangeNotifier {
     String deviceName = '',
     String accountId = '',
   });
+
+  /// Enter the existing chat shell without completing world setup.
+  Future<void> enterChat();
   Future<void> chooseCharacter(String characterId);
   Future<void> generateRoom(String preset);
   Future<void> confirmRoom();
   Future<void> selectConversation(String id);
+  Future<void> createGroup(String name);
+  Future<void> refreshConversations();
+  Future<void> addGroupMember(String groupId, String accountId);
+  bool get canAddMembersToSelectedGroup;
   void updateDraft(String value);
   Future<void> sendMessage();
+  bool get canMentionAi;
+  Future<void> sendMentionedMessage({
+    required String conversationId,
+    required String expectedDraft,
+    required String aiAccountId,
+  });
   Future<void> setAiConsent(bool allowed);
   Future<void> attachFile(String kind);
   Future<void> setAppLock(bool enabled, String pin);
@@ -52,11 +71,15 @@ class ShellConversation {
     required this.title,
     this.preview = '',
     this.unread = 0,
+    this.kind = 'unknown',
+    this.ownerAccountId,
   });
   final String id;
   final String title;
   final String preview;
   final int unread;
+  final String kind;
+  final String? ownerAccountId;
 }
 
 class ShellMessage {

@@ -161,7 +161,6 @@ void PlatformIntegration::Initialize() {
   data.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
   wcscpy_s(data.szTip, L"Jingyu Client");
   tray_ = Shell_NotifyIconW(NIM_ADD, &data) != FALSE;
-  if (!tray_) throw std::runtime_error("Cannot create notification area icon");
   hotkey_ = RegisterHotKey(window_, kHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'J') != FALSE;
   WTSRegisterSessionNotification(window_, NOTIFY_FOR_THIS_SESSION);
   WNDCLASSW wc{};

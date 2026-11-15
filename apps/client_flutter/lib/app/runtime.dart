@@ -11,6 +11,7 @@ import '../data/file_persistence.dart';
 import '../data/account_snapshots.dart';
 import '../net/account_auth.dart';
 import '../net/host_connection.dart';
+import '../net/group_api.dart';
 import '../platform/native_platform.dart';
 import 'conversation_mapping.dart';
 import 'shell_view_model.dart';
@@ -25,7 +26,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Future<void> _secureTail = Future<void>.value();
   ClientCredentials? _credentials;
   ({int generation, ClientCredentials source, ClientCredentials rotated})?
-      _pendingRenewal;
+  _pendingRenewal;
   int _generation = 0;
   bool _disposed = false;
   bool _switching = false;
@@ -39,17 +40,32 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Map<String, Object?> preferences = {};
   List<ShellConversation> _conversations = [];
   bool _ready = false, _busy = false, _online = false, _onboarded = false;
+  bool _chatEntered = false;
+  bool _sessionRejected = false;
   bool _controllersReady = false;
   String? _error, _selected, _preview;
   String _draft = '';
+  final _draftRevisions = <String, int>{};
+  ({
+    ClientShellController shell,
+    int generation,
+    String group,
+    String text,
+    String target,
+    String id,
+  })?
+  _pendingMention;
   @override
   bool get ready => _ready;
   @override
   bool get busy => _busy;
   @override
-  bool get onboarded => _onboarded;
+  bool get onboarded => _onboarded && !_sessionRejected;
   @override
-  String? get connectedAccountId => _credentials?.accountId;
+  bool get chatEntered => _chatEntered;
+  @override
+  String? get connectedAccountId =>
+      _sessionRejected ? null : _credentials?.accountId;
   @override
   bool get locked => _controllersReady && appLock.isLocked;
   @override
@@ -162,6 +178,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           _publishSnapshot(prepared);
           connection = _newConnection(credentials, generation);
           _onboarded = decoded['onboarded'] == true;
+          _chatEntered = _chatEntered || _onboarded;
         } on FormatException {
           // Old unscoped credentials are not paired with private legacy data.
           _error = '旧登录记录缺少账号或设备身份，请重新登录；本地旧数据保持不变';
@@ -181,6 +198,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         }
         if (call.method == 'shareReceived') {
           final data = call.arguments as Map;
+          if (_selected != null) {
+            _draftRevisions.update(
+              _selected!,
+              (revision) => revision + 1,
+              ifAbsent: () => 1,
+            );
+          }
           _draft = data['text']?.toString() ?? '';
           if (_selected != null) await shell.saveDraft(_selected!, _draft);
           notifyListeners();
@@ -291,7 +315,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   ) async {
     try {
       final pending = _pendingRenewal;
-      final rotated = pending != null &&
+      final rotated =
+          pending != null &&
               pending.generation == generation &&
               identical(pending.source, current)
           ? pending.rotated
@@ -301,8 +326,16 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       }
       // The host already rotated its pair. Retain it in memory if protected
       // storage temporarily fails; refreshing the previous token cannot recover.
-      _pendingRenewal = (generation: generation, source: current, rotated: rotated);
-      if (!await _storeCredentials(rotated, generation, onboarded: _onboarded)) {
+      _pendingRenewal = (
+        generation: generation,
+        source: current,
+        rotated: rotated,
+      );
+      if (!await _storeCredentials(
+        rotated,
+        generation,
+        onboarded: _onboarded,
+      )) {
         return false;
       }
       if (!_current(generation) || !identical(_credentials, current)) {
@@ -313,8 +346,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       connection?.updateAccessToken(rotated.accessToken);
       _submissionTransport?.updateAccessToken(rotated.accessToken);
       return true;
-    } catch (_) {
+    } catch (error) {
       if (_current(generation)) {
+        if (error is HostRequestException &&
+            error.failure.code == FailureCode.unauthenticated) {
+          _sessionRejected = true;
+          _chatEntered = false;
+        }
         _online = false;
         _error = '登录验证失败，请重新登录；待发送消息已保留';
         notifyListeners();
@@ -357,7 +395,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     try {
       await next.initialize();
       await nextConsent.initialize();
-      return _PreparedSnapshot(snapshot, next, nextConsent, transport);
+      final saved = await snapshot.read();
+      return _PreparedSnapshot(
+        snapshot,
+        next,
+        nextConsent,
+        transport,
+        credentials != null && saved['chatEntered'] == true,
+      );
     } catch (_) {
       await transport?.close();
       rethrow;
@@ -369,6 +414,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     storage = prepared.storage;
     shell = prepared.shell;
     consent = prepared.consent;
+    _chatEntered = prepared.chatEntered;
     _controllersReady = true;
   }
 
@@ -376,6 +422,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   Future<void> _logout() async {
     final generation = ++_generation;
+    _pendingMention = null;
     _credentials = null;
     _pendingRenewal = null;
     _renewWork = null;
@@ -387,6 +434,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     connection = null;
     _submissionTransport = null;
     _onboarded = false;
+    _chatEntered = false;
     _online = false;
     _conversations = [];
     _selected = null;
@@ -568,7 +616,9 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       final submission = _submissionTransport;
       final oldPlugins = plugins;
       ++_generation;
+      _pendingMention = null;
       _credentials = credentials;
+      _sessionRejected = false;
       _pendingRenewal = null;
       _renewWork = null;
       _refreshWork = null;
@@ -592,6 +642,26 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     }
     await _refresh();
   });
+
+  /// Enter the existing chat shell before optional world setup. Requires a
+  /// published authenticated session; it never marks world setup complete.
+  @override
+  Future<void> enterChat() => _run(() async {
+    final credentials = _credentials;
+    if (credentials == null || _sessionRejected || locked) {
+      throw const FormatException('请先解锁应用并连接宿主登录');
+    }
+    final generation = _generation;
+    final sessionStorage = storage;
+    await writeClientSection(sessionStorage, 'chatEntered', true);
+    if (!_current(generation) ||
+        locked ||
+        !identical(storage, sessionStorage)) {
+      return;
+    }
+    _chatEntered = true;
+    notifyListeners();
+  });
   @override
   Future<void> chooseCharacter(String characterId) => _run(() async {
     throw const HttpException('宿主人物创建接口尚未提供，无法保存形象');
@@ -607,6 +677,110 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     throw const HttpException('宿主房间保存接口尚未提供');
   });
   @override
+  bool get canAddMembersToSelectedGroup =>
+      authenticated &&
+      _conversations.any(
+        (conversation) =>
+            conversation.id == _selected &&
+            conversation.kind == 'group' &&
+            conversation.ownerAccountId == connectedAccountId,
+      );
+
+  void _requireOnlineGroupSession() {
+    if (!authenticated ||
+        _sessionRejected ||
+        connection == null ||
+        locked ||
+        !_online ||
+        _switching) {
+      throw const FormatException('请先解锁并连接宿主，群操作需要在线完成');
+    }
+  }
+
+  @override
+  Future<void> refreshConversations() async {
+    if (_busy || !authenticated || _sessionRejected || locked || _switching) {
+      return;
+    }
+    final generation = _generation;
+    final previousError = _error;
+    await _refresh();
+    if (_current(generation) &&
+        authenticated &&
+        !locked &&
+        !_busy &&
+        _online &&
+        _error == previousError) {
+      _error = null;
+      notifyListeners();
+    }
+  }
+
+  @override
+  Future<void> createGroup(String name) => _run(() async {
+    _requireOnlineGroupSession();
+    final generation = _generation;
+    final sessionConnection = connection!;
+    final sessionShell = shell;
+    // Finish any already-running list refresh before publishing the new group;
+    // periodic refresh does not start while _run holds busy.
+    await _refreshWork;
+    if (!_current(generation) ||
+        locked ||
+        !authenticated ||
+        !identical(connection, sessionConnection)) {
+      return;
+    }
+    _requireOnlineGroupSession();
+    if (_selected != null) await sessionShell.saveDraft(_selected!, _draft);
+    if (!_current(generation) || locked || !authenticated) return;
+    if (name.trim().isEmpty || name.length > 100) {
+      throw const FormatException('群名须为1–100个字符');
+    }
+    final HostGroup group;
+    try {
+      group = await GroupApi(sessionConnection).createGroup(name);
+    } catch (_) {
+      throw const FormatException('群聊创建未确认，可能已创建；请刷新会话后再重试');
+    }
+    if (!_current(generation) ||
+        locked ||
+        !authenticated ||
+        !identical(connection, sessionConnection)) {
+      return;
+    }
+    _conversations = [
+      ..._conversations.where((conversation) => conversation.id != group.id),
+      ShellConversation(
+        id: group.id,
+        title: group.name,
+        kind: 'group',
+        ownerAccountId: group.ownerAccountId,
+      ),
+    ]..sort((left, right) => left.title.compareTo(right.title));
+    _selected = group.id;
+    _draft = sessionShell.draftFor(group.id);
+  });
+
+  @override
+  Future<void> addGroupMember(String groupId, String accountId) =>
+      _run(() async {
+        _requireOnlineGroupSession();
+        if (_selected != groupId || !canAddMembersToSelectedGroup) {
+          throw const FormatException('仅当前群主可添加成员');
+        }
+        final generation = _generation;
+        final sessionConnection = connection!;
+        await GroupApi(sessionConnection).addMember(groupId, accountId);
+        if (!_current(generation) ||
+            locked ||
+            !authenticated ||
+            !identical(connection, sessionConnection)) {
+          return;
+        }
+      });
+
+  @override
   Future<void> selectConversation(String id) async {
     _selected = id;
     _draft = shell.draftFor(id);
@@ -615,6 +789,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   void updateDraft(String value) {
+    if (_selected != null) {
+      _draftRevisions.update(
+        _selected!,
+        (revision) => revision + 1,
+        ifAbsent: () => 1,
+      );
+    }
     _draft = value;
     notifyListeners();
     if (_selected != null) {
@@ -630,6 +811,23 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   @override
   Future<void> sendMessage() => _run(() async {
     if (locked || _selected == null || _draft.trim().isEmpty) return;
+    final queuedMention = shell.outbox.items.any(
+      (item) =>
+          item.conversationId == _selected &&
+          item.body['text'] == _draft &&
+          item.body['mentionAccountIds'] is List,
+    );
+    final pending = _pendingMention;
+    if (queuedMention) {
+      throw const FormatException('本条提及已排队，请重试原提及以确认保存，避免重复发送');
+    }
+    if (pending != null &&
+        pending.generation == _generation &&
+        identical(pending.shell, shell) &&
+        pending.group == _selected &&
+        pending.text == _draft) {
+      throw const FormatException('本条提及已排队，请重试原提及以确认保存，避免重复发送');
+    }
     final generation = _generation;
     final sessionShell = shell;
     final selected = _selected!;
@@ -640,6 +838,136 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     if (_selected == selected && _draft == text) _draft = '';
     if (_online && !locked) await sessionShell.flush();
   });
+  @override
+  bool get canMentionAi =>
+      authenticated &&
+      !locked &&
+      !_busy &&
+      _draft.trim().isNotEmpty &&
+      _conversations.any(
+        (item) => item.id == _selected && item.kind == 'group',
+      );
+
+  @override
+  Future<void> sendMentionedMessage({
+    required String conversationId,
+    required String expectedDraft,
+    required String aiAccountId,
+  }) => _run(() async {
+    if (!authenticated ||
+        _sessionRejected ||
+        locked ||
+        _switching ||
+        _selected != conversationId ||
+        _draft != expectedDraft ||
+        expectedDraft.trim().isEmpty ||
+        !_conversations.any(
+          (item) => item.id == conversationId && item.kind == 'group',
+        )) {
+      throw const FormatException('聊天状态已变化，请重新确认本条提及');
+    }
+    final target = AccountId.parse(aiAccountId).value;
+    final draftRevision = _draftRevisions[conversationId] ?? 0;
+    final generation = _generation;
+    final sessionShell = shell;
+    var pending = _pendingMention;
+    if (pending == null ||
+        pending.generation != generation ||
+        !identical(pending.shell, sessionShell)) {
+      for (final item in sessionShell.outbox.items) {
+        final ids = item.body['mentionAccountIds'];
+        if (item.conversationId == conversationId &&
+            item.body['text'] == expectedDraft &&
+            ids is List &&
+            ids.length == 1 &&
+            ids.single is String) {
+          pending = (
+            shell: sessionShell,
+            generation: generation,
+            group: conversationId,
+            text: expectedDraft,
+            target: ids.single as String,
+            id: item.clientMsgId,
+          );
+          _pendingMention = pending;
+          break;
+        }
+      }
+    }
+    final sameIntent =
+        pending != null &&
+        pending.generation == generation &&
+        identical(pending.shell, sessionShell) &&
+        pending.group == conversationId &&
+        pending.text == expectedDraft;
+    if (pending != null &&
+        pending.generation == generation &&
+        identical(pending.shell, sessionShell) &&
+        (!sameIntent || pending.target != target)) {
+      throw const FormatException('上一条提及保存尚未确认，请返回原会话重试原提及，避免重复发送');
+    }
+    if (!sameIntent) {
+      final previousIds = sessionShell.outbox.items
+          .map((item) => item.clientMsgId)
+          .toSet();
+      try {
+        final id = await sessionShell.enqueue(
+          conversationId,
+          MessageKind.text,
+          {
+            'text': expectedDraft,
+            'mentionAccountIds': <String>[target],
+          },
+        );
+        pending = (
+          shell: sessionShell,
+          generation: generation,
+          group: conversationId,
+          text: expectedDraft,
+          target: target,
+          id: id,
+        );
+        if (_current(generation)) _pendingMention = pending;
+      } catch (_) {
+        // enqueue retains its item when the durable checkpoint fails. Capture
+        // that original identity so confirm/recovery cannot enqueue a duplicate.
+        for (final item in sessionShell.outbox.items) {
+          final mentions = item.body['mentionAccountIds'];
+          if (!previousIds.contains(item.clientMsgId) &&
+              item.conversationId == conversationId &&
+              item.body['text'] == expectedDraft &&
+              mentions is List &&
+              mentions.length == 1 &&
+              mentions.single == target) {
+            if (_current(generation)) {
+              _pendingMention = (
+                shell: sessionShell,
+                generation: generation,
+                group: conversationId,
+                text: expectedDraft,
+                target: target,
+                id: item.clientMsgId,
+              );
+            }
+            break;
+          }
+        }
+        throw const FormatException('本条提及仍保留待发送；保存未确认，请重试原提及，勿重复普通发送');
+      }
+    }
+    if (!_current(generation)) return;
+    if ((_draftRevisions[conversationId] ?? 0) != draftRevision) return;
+    await sessionShell.saveDraft(conversationId, '');
+    if (!_current(generation)) return;
+    if (_selected == conversationId &&
+        _draft == expectedDraft &&
+        (_draftRevisions[conversationId] ?? 0) == draftRevision) {
+      _draft = '';
+    }
+    if (_pendingMention?.id == pending.id) _pendingMention = null;
+    if (_online && !locked && authenticated) await sessionShell.flush();
+  });
+
   @override
   Future<void> setAiConsent(bool allowed) => _run(() async {
     if (_selected == null) return;
@@ -704,6 +1032,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     if (_disposed) return;
     _disposed = true;
     ++_generation;
+    _pendingMention = null;
     _credentials = null;
     _pendingRenewal = null;
     reconnect?.cancel();
@@ -718,9 +1047,16 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 }
 
 class _PreparedSnapshot {
-  _PreparedSnapshot(this.storage, this.shell, this.consent, this.transport);
+  _PreparedSnapshot(
+    this.storage,
+    this.shell,
+    this.consent,
+    this.transport,
+    this.chatEntered,
+  );
   final FilePersistence storage;
   final ClientShellController shell;
   final ConversationConsentController consent;
   final HostConnection? transport;
+  final bool chatEntered;
 }
