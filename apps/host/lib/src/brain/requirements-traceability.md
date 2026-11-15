@@ -18,3 +18,17 @@ Source baseline: repository v4.2 FR-46, `docs/architecture/02-decisions.md` B-1/
 ## Deliberately not claimed
 
 No memoization, semantic/regex meme retrieval, AI/circle authorization, model binding, B1 metering, B2 degradation, host transport delivery, UI, persistence, real activity citation or downstream memory-candidate exclusion is implemented here. `source=s1` is preserved by the existing router but alone does not prove a downstream memory filter. No UI changed, so visual comparison is not applicable.
+
+## Meme-aware S1 responder (2026-11-15)
+
+Baseline: main `3ac8e9f589da87fc426250f6811067f7c2d7c831`. Sources: FR-46 (S1 接梗) and FR-47 (梗库), AC-34 (meme hits). Wires the existing `MemeLibrary` into the existing `S1Responder` port via a decorator; no router/interface change.
+
+| ID | Source / approval | Observable acceptance | Implementation | Evidence / status | Remaining gap |
+|---|---|---|---|---|---|
+| M07-S1-005 | FR-46 接梗 / FR-47 | An active meme hit is replayed as the S1 reply (empty activityRefs); personal beats general; simple hit answered by S1 with S2 calls=0 | `meme_s1_responder.dart` `MemeS1Responder` / `MemeLibrary` | `brain_meme_s1_responder_test.dart` hit/layer/router tests; focused pass | Regex/keyword matching only (optional semantic matcher not injected here); memes must be curated |
+| M07-S1-006 | FR-46/47 expiry + short bound | Expired memes are not used (Clock); padding stays neutral even on a match; over-long reply clamped to 30 Unicode code points without splitting a scalar | Same | expiry, padding, Unicode clamp tests; focused pass | Authoring must keep meme replies short/safe; clamp only caps length |
+| M07-S1-007 | AC-33 compose / safe fallback | No hit or empty text falls back to curated rules; complex question uses neutral padding then S2 | Same + `RulesS1Responder` fallback | no-hit, empty, and real-router complex tests; focused pass | No default-host assembly or model `chat.fast` health wiring |
+
+Verification: TDD absent-file then throwing-skeleton failures observed, then `dart test test/brain_meme_s1_responder_test.dart` 9/9 and existing brain suite 91/91; host `dart analyze --fatal-infos` clean. Exact-head CI recorded in the PR.
+
+Deliberate limits: no semantic/embedding retrieval wiring, no persistence, no network, no default-host assembly, no full AC-34 acceptance. S1 replays curated memes only and does not assert user/world facts or promises.
