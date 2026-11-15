@@ -110,8 +110,4 @@
 - 覆盖顺序/游标/默认50/上限100/终页、diff与原因/证据/快照、不可变历史、非owner/admin拒绝、旧凭据/账号或设备错配/撤销/过期、AI停用/归属转让/同owner不同profile、损坏sentinel不解密与选中行安全500、revert完整before恢复/当前锁保留/旧记录不变/重开持久化、并发CAS仅一项接受和输入拒绝无写入。
 - 局限：行数上限不是字节或延迟上限；现有适配器对重复query键归一为单值，不宣称重复键拒绝；无人格UI、模型自迭代触发或生产记忆授权，不计完整M06或端到端产品验收。
 
-## M07 S1 生活事件引用（2026-11-15，REQ-054）
-
-- REQ-054（B-1 规则 5–6 / M07 规则 2，AC-33 子集）：新增 `ActivityS1Responder implements S1Responder`，仅在状态类问句（如“你在干嘛”）时经注入的可信 activity 源查询该 AI 最近活动；有真实记录才回“刚在<摘要>”并把 `activity_log` id 写入 `activityRefs`，无记录回退且不编造；用户转述的事件不当作事实；衬垫始终中性且不查询；空白 id/摘要跳过。实现 `apps/host/lib/src/brain/activity_s1_responder.dart`；测试 `apps/host/test/brain_activity_s1_responder_test.dart`（7/7，真实路由简单路径 S2 调用为 0 且 activityRefs 传递）。基线 main `3ac8e9f`；`apps/host` analyze 无问题；exact-head CI 记于 PR。边界：状态问句短语为人工枚举；未生产 activity_log/调度/默认宿主；不构成完整 AC-33 验收。
-
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
