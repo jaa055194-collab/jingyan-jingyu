@@ -5,6 +5,7 @@
 library;
 
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
@@ -15,17 +16,62 @@ class OutboxItem {
     required this.conversationId,
     required this.clientMsgId,
     required this.kind,
-    required this.body,
+    required Map<String, Object?> body,
     required this.queuedAt,
     this.attempts = 0,
-  });
+  }) : body = _snapshotBody(body);
 
   final String conversationId;
   final String clientMsgId;
   final MessageKind kind;
+
+  /// Detached, recursively read-only JSON containers captured at construction.
+  /// Non-container custom leaves retain identity; serialization remains the
+  /// encoder's responsibility. Editing a queued payload requires a new item.
   final Map<String, Object?> body;
   final DateTime queuedAt;
   int attempts;
+}
+
+Map<String, Object?> _snapshotBody(Map<String, Object?> source) {
+  final copies = HashMap<Object, Object>.identity();
+  Object? copy(Object? value) {
+    if (value is Map) {
+      final known = copies[value];
+      if (known != null) return known;
+      if (value is Map<String, Object?>) {
+        final backing = <String, Object?>{};
+        final view = UnmodifiableMapView<String, Object?>(backing);
+        copies[value] = view;
+        for (final entry in value.entries) {
+          backing[entry.key] = copy(entry.value);
+        }
+        return view;
+      }
+      // Retain existing deferred JSON validation for non-string map keys.
+      final backing = <Object?, Object?>{};
+      final view = UnmodifiableMapView<Object?, Object?>(backing);
+      copies[value] = view;
+      for (final entry in value.entries) {
+        backing[entry.key] = copy(entry.value);
+      }
+      return view;
+    }
+    if (value is List) {
+      final known = copies[value];
+      if (known != null) return known;
+      final backing = <Object?>[];
+      final view = UnmodifiableListView<Object?>(backing);
+      copies[value] = view;
+      for (final element in value) {
+        backing.add(copy(element));
+      }
+      return view;
+    }
+    return value;
+  }
+
+  return copy(source) as Map<String, Object?>;
 }
 
 /// 提交函数：返回 Ok 表示服务端已接受（含幂等命中）。
