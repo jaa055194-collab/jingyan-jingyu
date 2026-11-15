@@ -139,6 +139,11 @@ class PluginManifest {
       throw const FormatException('assetCredits 必须是字符串数组');
     }
 
+    final rawLicense = json['license'];
+    if (rawLicense != null && rawLicense is! String) {
+      throw const FormatException('license 必须是字符串');
+    }
+
     return PluginManifest(
       id: id,
       name: str('name'),
@@ -147,7 +152,7 @@ class PluginManifest {
       capabilities: caps,
       platforms: {for (final p in rawPlatforms) p as String},
       hostOnly: json['hostOnly'] == true,
-      license: json['license'] as String?,
+      license: rawLicense as String?,
       assetCredits: [for (final c in credits) c as String],
     );
   }

@@ -175,6 +175,15 @@ PluginPackageValidation validatePluginPackage(
     return fail(null);
   }
 
+  // 解码前先按中央目录预扫：符号链接必须在 decode 前拒绝（archive 解码会即时
+  // 解压符号链接目标，早于任何限额，恶意小包可打爆内存）；同时用声明尺寸先做
+  // 条目数/单条/总量限额，超限直接拒绝，不进入解码。
+  final preScan = _preScanCentralDirectory(bytes, limits);
+  issues.addAll(preScan.issues);
+  if (!preScan.allowDecode) {
+    return fail(null);
+  }
+
   Archive archive;
   try {
     archive = ZipDecoder().decodeBytes(bytes);
@@ -254,23 +263,51 @@ PluginPackageValidation validatePluginPackage(
     return fail(null);
   }
 
+  // 头里声明的 size 可被伪造：绝不能“先完整 inflate 再复核”——伪造头（声明很小、
+  // 实际 DEFLATE 输出巨大）会在复核前就分配完整输出，构成内存 DoS。这里用有界
+  // 流式 inflate，在解压过程中按“真实输出字节”封顶，一旦超限立即中止（fail-closed）。
+  // 清单条目同时受单条上限与清单上限约束，取二者较小值作为硬上限。
+  final manifestCap = limits.maxManifestBytes < limits.maxEntryUncompressedBytes
+      ? limits.maxManifestBytes
+      : limits.maxEntryUncompressedBytes;
+  PluginPackageIssueCode manifestCapCode() =>
+      limits.maxManifestBytes <= limits.maxEntryUncompressedBytes
+          ? PluginPackageIssueCode.manifestTooLarge
+          : PluginPackageIssueCode.entryTooLarge;
+
   late final Uint8List manifestBytes;
   try {
-    final content = manifestFile.content;
-    manifestBytes = content is Uint8List
-        ? content
-        : Uint8List.fromList((content as List).cast<int>());
+    manifestBytes = _inflateManifestBounded(manifestFile, manifestCap);
+  } on _OutputLimitExceeded {
+    issues.add(PluginPackageIssue(manifestCapCode(),
+        'plugin.json 实际解压超过上限 $manifestCap 字节（伪造头/压缩炸弹，已在解压中中止）',
+        path: 'plugin.json'));
+    return fail(null);
   } catch (error) {
     issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestInvalidJson,
         'plugin.json 解压失败：$error',
         path: 'plugin.json'));
     return fail(null);
   }
-  // 头里声明的 size 可被伪造：解压后再按真实字节数复核一次（纵深防御）。
+  // 头里声明的 size 可被伪造：真实解压后再按真实字节数复核（纵深防御）。
   if (manifestBytes.length > limits.maxManifestBytes) {
     issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestTooLarge,
         'plugin.json 解压后 ${manifestBytes.length} 字节，超过上限 ${limits.maxManifestBytes}',
         path: 'plugin.json'));
+    return fail(null);
+  }
+  if (manifestBytes.length > limits.maxEntryUncompressedBytes) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.entryTooLarge,
+        'plugin.json 解压后 ${manifestBytes.length} 字节，超过单条上限 ${limits.maxEntryUncompressedBytes}',
+        path: 'plugin.json'));
+    return fail(null);
+  }
+  // 用真实清单字节修正“解压总量”，避免伪造头把总量少算而绕过 totalTooLarge。
+  final realTotal =
+      totalUncompressed + (manifestBytes.length - manifestFile.size);
+  if (realTotal > limits.maxTotalUncompressedBytes) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.totalTooLarge,
+        '解压后总量（按真实清单长度）$realTotal 字节，超过上限 ${limits.maxTotalUncompressedBytes}'));
     return fail(null);
   }
 
@@ -325,6 +362,13 @@ PluginPackageValidation validatePluginPackage(
         'plugin.json 不满足插件清单契约：${error.message}',
         path: 'plugin.json'));
     return fail(null);
+  } on Object catch (error) {
+    // 非字符串字段等会抛 TypeError 之类的非 FormatException；统一转成问题码，
+    // 不向调用方抛出未受控异常（例如 license 为非字符串）。
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestInvalid,
+        'plugin.json 不满足插件清单契约：$error',
+        path: 'plugin.json'));
+    return fail(null);
   }
 
   final ok = issues.isEmpty;
@@ -353,6 +397,12 @@ String? sanitizePackageEntryPath(String entryName) {
   for (final segment in normalized.split('/')) {
     if (segment.isEmpty || segment == '.') continue;
     if (segment == '..') return null;
+    // Windows 会去掉尾随的点/空格，可能与其它条目撞名或绕过检查，直接拒绝。
+    if (segment.endsWith('.') || segment.endsWith(' ')) return null;
+    // Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）不可作为文件名。
+    final dot = segment.indexOf('.');
+    final stem = (dot < 0 ? segment : segment.substring(0, dot)).toUpperCase();
+    if (_windowsReservedNames.contains(stem)) return null;
     for (final code in segment.codeUnits) {
       if (code == 0 || code == 0x3A) return null; // NUL 或 ':'
       if (code < 0x20) return null; // 控制字符
@@ -361,6 +411,211 @@ String? sanitizePackageEntryPath(String entryName) {
   }
   if (segments.isEmpty) return null;
   return segments.join('/');
+}
+
+/// Windows 保留设备名（不区分大小写）。
+const Set<String> _windowsReservedNames = {
+  'CON', 'PRN', 'AUX', 'NUL', 'CONIN\$', 'CONOUT\$', //
+  'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+  'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+};
+
+/// 中央目录预扫结论：[allowDecode] 为 false 时不得进入解码。
+class _PreScanResult {
+  const _PreScanResult(this.allowDecode, this.issues);
+  final bool allowDecode;
+  final List<PluginPackageIssue> issues;
+}
+
+/// 只读解析 zip 中央目录（不解压任何条目），在解码前完成：
+/// - 拒绝符号链接条目（archive 解码会即时解压符号链接目标，早于限额检查）；
+/// - 用声明的未压缩尺寸先做条目数/单条/总量限额（伪造尺寸的条目不会被解压，
+///   但可提前拒绝明显超限的包）。
+///
+/// 无法解析出 EOCD 时返回 allowDecode=true，交由 [ZipDecoder] 报 notZip；
+/// zip64（哨兵值）暂不支持，fail-closed 拒绝。
+_PreScanResult _preScanCentralDirectory(
+    Uint8List bytes, PluginPackageLimits limits) {
+  final issues = <PluginPackageIssue>[];
+  if (bytes.length < 22) return _PreScanResult(true, issues);
+  final data = ByteData.sublistView(bytes);
+  var eocd = -1;
+  for (var i = bytes.length - 22; i >= 0; i--) {
+    if (data.getUint32(i, Endian.little) == 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return _PreScanResult(true, issues);
+
+  final rawEntries = data.getUint16(eocd + 10, Endian.little);
+  final cdSize = data.getUint32(eocd + 12, Endian.little);
+  final cdOffset = data.getUint32(eocd + 16, Endian.little);
+  // zip64 触发与 archive 的 ZipDirectory.read 完全对齐：任一盘号/条目计数字段
+  // 为 0xFFFF，或 CD 大小/偏移为 0xFFFFFFFF，都视为 zip64（fail-closed 拒绝）。
+  if (data.getUint16(eocd + 4, Endian.little) == 0xFFFF ||
+      data.getUint16(eocd + 6, Endian.little) == 0xFFFF ||
+      data.getUint16(eocd + 8, Endian.little) == 0xFFFF ||
+      rawEntries == 0xFFFF ||
+      cdSize == 0xFFFFFFFF ||
+      cdOffset == 0xFFFFFFFF) {
+    issues.add(const PluginPackageIssue(
+        PluginPackageIssueCode.notZip, '暂不支持 zip64 插件包'));
+    return _PreScanResult(false, issues);
+  }
+  final cdEnd = cdOffset + cdSize;
+  if (cdOffset < 0 || cdEnd > bytes.length) {
+    // 合法 zip 的 cdEnd 必 ≤ EOCD 位置 ≤ 文件长度；越过 EOF 视为异常并 fail-closed。
+    // 不能“交由解码器报 notZip”：archive 的 subset/toUint8List 会截断而不报错，可能仍
+    // 解码出符号链接（解码期解压目标），从而绕过预扫。
+    issues.add(const PluginPackageIssue(
+        PluginPackageIssueCode.notZip, '中央目录超出文件边界'));
+    return _PreScanResult(false, issues);
+  }
+  if (cdOffset + 46 > cdEnd) {
+    // 空 / 超短中央目录（无条目）：交由解码器按 empty 处理。
+    return _PreScanResult(true, issues);
+  }
+
+  // 与 archive 的 ZipDirectory.read 一致：在中央目录尺寸窗口 [cdOffset, cdEnd)
+  // 内逐条解析，而不是相信 EOCD 的 16-bit 条目计数（该字段可被伪造）。
+  var off = cdOffset;
+  var count = 0;
+  var total = 0;
+  var blocking = false;
+  var malformed = false;
+  while (off + 46 <= cdEnd) {
+    if (data.getUint32(off, Endian.little) != 0x02014b50) {
+      malformed = true;
+      break;
+    }
+    final versionMadeBy = data.getUint16(off + 4, Endian.little);
+    final uncompressedSize = data.getUint32(off + 24, Endian.little);
+    final nameLen = data.getUint16(off + 28, Endian.little);
+    final extraLen = data.getUint16(off + 30, Endian.little);
+    final commentLen = data.getUint16(off + 32, Endian.little);
+    final externalAttrs = data.getUint32(off + 38, Endian.little);
+    final nameStart = off + 46;
+    final nameEnd = nameStart + nameLen;
+    final nextOff = nameEnd + extraLen + commentLen;
+    if (nameEnd > cdEnd || nextOff > cdEnd) {
+      malformed = true;
+      break;
+    }
+    final name =
+        utf8.decode(bytes.sublist(nameStart, nameEnd), allowMalformed: true);
+    count++;
+
+    // UNIX 符号链接：versionMadeBy 高字节 3 且 mode 类型位 0xA000。
+    if ((versionMadeBy >> 8) == 3 && ((externalAttrs >> 16) & 0xF000) == 0xA000) {
+      issues.add(PluginPackageIssue(PluginPackageIssueCode.symbolicLink,
+          '不允许的符号链接条目（解码前预扫）', path: name));
+      blocking = true;
+    }
+    if (!name.endsWith('/') &&
+        uncompressedSize > limits.maxEntryUncompressedBytes) {
+      issues.add(PluginPackageIssue(PluginPackageIssueCode.entryTooLarge,
+          '条目 $name 声明解压后 $uncompressedSize 字节，超过上限 ${limits.maxEntryUncompressedBytes}',
+          path: name));
+      blocking = true;
+    }
+    total += uncompressedSize;
+    off = nextOff;
+  }
+
+  // 预扫必须与解码器看到完全一样的中央目录：结构异常、条目数与 EOCD 不符、
+  // 或未恰好走完 cdSize 窗口时，一律 fail-closed，绝不进入解码。
+  if (malformed || count != rawEntries || off != cdEnd) {
+    issues.add(const PluginPackageIssue(PluginPackageIssueCode.notZip,
+        '中央目录结构异常或条目数与 EOCD 不一致'));
+    return _PreScanResult(false, issues);
+  }
+
+  if (count > limits.maxEntries) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.tooManyEntries,
+        '条目数 $count 超过上限 ${limits.maxEntries}'));
+    blocking = true;
+  } else if (total > limits.maxTotalUncompressedBytes) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.totalTooLarge,
+        '声明解压后总量 $total 字节，超过上限 ${limits.maxTotalUncompressedBytes}'));
+    blocking = true;
+  }
+  return _PreScanResult(!blocking, issues);
+}
+
+/// 有界解压在中途超过上限时抛出的内部信号（用于在解压过程中 fail-closed）。
+class _OutputLimitExceeded implements Exception {
+  const _OutputLimitExceeded(this.limit);
+  final int limit;
+
+  @override
+  String toString() => '解压输出超过上限 $limit 字节';
+}
+
+/// 带硬上限的输出流：任何一次写入会让累计长度超过 [limit] 时立即抛异常，
+/// 使 inflate 在解压过程中中止，而不是先完整分配再检查（防伪造头/zip 炸弹）。
+class _BoundedOutputStream extends OutputStream {
+  _BoundedOutputStream(this.limit)
+      : super(size: limit <= 0 ? 0 : (limit < 0x8000 ? limit : 0x8000));
+
+  /// 允许的最大累计输出字节数。
+  final int limit;
+
+  void _ensure(int extra) {
+    if (extra < 0 || length + extra > limit) {
+      throw _OutputLimitExceeded(limit);
+    }
+  }
+
+  @override
+  void writeByte(int value) {
+    _ensure(1);
+    super.writeByte(value);
+  }
+
+  @override
+  void writeBytes(List<int> bytes, [int? len]) {
+    _ensure(len ?? bytes.length);
+    super.writeBytes(bytes, len);
+  }
+
+  @override
+  void writeInputStream(InputStreamBase stream) {
+    _ensure(stream.length);
+    super.writeInputStream(stream);
+  }
+}
+
+/// 对清单条目做有界解压：STORE 直接取原始字节（仍按上限校验），DEFLATE 走纯 Dart
+/// 流式 inflate 在解压过程中按真实输出字节封顶；超过 [maxBytes] 抛
+/// [_OutputLimitExceeded]。不依赖中央目录里可伪造的“声明未压缩尺寸”。
+Uint8List _inflateManifestBounded(ArchiveFile file, int maxBytes) {
+  final cap = maxBytes < 0 ? 0 : maxBytes;
+  final compression = file.compressionType;
+  final raw = file.rawContent;
+  if (compression == null || compression == ArchiveFile.STORE) {
+    final stored = raw == null ? Uint8List(0) : raw.toUint8List();
+    if (stored.length > cap) {
+      throw _OutputLimitExceeded(cap);
+    }
+    return stored;
+  }
+  if (compression != ArchiveFile.DEFLATE) {
+    throw FormatException('不支持的清单压缩方式 $compression');
+  }
+  if (raw == null) {
+    throw const FormatException('清单缺少压缩数据');
+  }
+  return _inflateDeflateBounded(raw.toUint8List(), cap);
+}
+
+/// 纯 Dart 流式 inflate（raw DEFLATE）：输出字节数超过 [maxBytes] 时立即抛
+/// [_OutputLimitExceeded]，绝不完整展开后再检查。
+Uint8List _inflateDeflateBounded(Uint8List raw, int maxBytes) {
+  final out = _BoundedOutputStream(maxBytes);
+  Inflate.stream(InputStream(raw), out);
+  final bytes = out.getBytes();
+  return bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
 }
 
 bool _isAsciiLetter(int code) =>
