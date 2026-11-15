@@ -1,0 +1,397 @@
+/// 插件包（bundle zip）安全校验。
+///
+/// 纯 Dart、不读文件系统：调用方把插件包 zip 的字节交给 [validatePluginPackage]，
+/// 返回结构化结果。用于插件安装前做「条目 / 体积 / 压缩比 / 路径 / 清单 / 完整性」
+/// 校验，对齐插件方案 v3 §7（安全模型）与 §8（包校验落点）。
+///
+/// 依赖方向：只依赖 `archive`（zip 解码，MIT）与 `crypto`（sha256，BSD-3-Clause），
+/// 不引入 Flutter，也不 import `dart:io`，因此服务端与双端外壳都能直接复用。
+library;
+
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart' as crypto;
+
+import 'plugin.dart';
+
+/// 校验上限。默认值参考 v3 §7 与 FR-39（防 zip 炸弹、超大包与路径穿越）。
+///
+/// 全部字段可注入，便于测试与后续按平台/来源调整；关闭某项校验时把对应上限调大即可。
+class PluginPackageLimits {
+  const PluginPackageLimits({
+    this.maxEntries = 512,
+    this.maxTotalUncompressedBytes = 64 * 1024 * 1024,
+    this.maxEntryUncompressedBytes = 16 * 1024 * 1024,
+    this.maxCompressionRatio = 100,
+    this.maxManifestBytes = 256 * 1024,
+    this.maxJsonDepth = 32,
+  });
+
+  /// 允许的条目（含目录）数量上限。
+  final int maxEntries;
+
+  /// 解压后总字节数上限。
+  final int maxTotalUncompressedBytes;
+
+  /// 单条目解压后字节数上限。
+  final int maxEntryUncompressedBytes;
+
+  /// 解压后总字节 / 包字节 的最大比值，超过视为疑似 zip 炸弹。
+  final int maxCompressionRatio;
+
+  /// 根 `plugin.json` 允许的最大字节数。
+  final int maxManifestBytes;
+
+  /// `plugin.json` 允许的最大 JSON 嵌套深度（防深层递归解析 DoS）。
+  final int maxJsonDepth;
+}
+
+/// 校验问题代码。作为稳定字符串暴露，方便测试与 UI 映射文案。
+enum PluginPackageIssueCode {
+  /// 空字节或压缩包内没有任何条目。
+  empty,
+
+  /// 不是可解析的 zip。
+  notZip,
+
+  /// 条目数超过上限。
+  tooManyEntries,
+
+  /// 单条目解压后超过上限。
+  entryTooLarge,
+
+  /// 解压后总量超过上限。
+  totalTooLarge,
+
+  /// 解压/压缩比过高，疑似 zip 炸弹。
+  compressionRatioTooHigh,
+
+  /// 条目路径不安全（绝对路径、盘符或包含 `..`）。
+  unsafeEntryPath,
+
+  /// 重复条目（不区分大小写，按目标平台合并）。
+  duplicateEntry,
+
+  /// 包含符号链接条目（插件包不允许）。
+  symbolicLink,
+
+  /// 缺少根目录 `plugin.json`。
+  missingManifest,
+
+  /// `plugin.json` 超过体积上限。
+  manifestTooLarge,
+
+  /// `plugin.json` JSON 嵌套过深。
+  manifestTooDeep,
+
+  /// `plugin.json` 不是合法 JSON / UTF-8。
+  manifestInvalidJson,
+
+  /// `plugin.json` 结构不满足插件清单契约。
+  manifestInvalid,
+
+  /// sha256 完整性校验不通过。
+  integrityMismatch,
+}
+
+/// 一条校验问题。[path] 为相关条目路径（若适用）。
+class PluginPackageIssue {
+  const PluginPackageIssue(this.code, this.message, {this.path});
+
+  final PluginPackageIssueCode code;
+  final String message;
+  final String? path;
+
+  @override
+  String toString() =>
+      path == null ? '${code.name}: $message' : '${code.name}($path): $message';
+}
+
+/// 校验结果。任一步失败都会在 [issues] 中记录，并令 [ok] 为 false。
+class PluginPackageValidation {
+  const PluginPackageValidation._({
+    required this.ok,
+    required this.manifest,
+    required this.sha256Hex,
+    required this.issues,
+  });
+
+  /// 是否可以通过安装校验（无 issue 且清单解析成功）。
+  final bool ok;
+
+  /// 解析出的插件清单；仅当清单成功解析时非 null。
+  final PluginManifest? manifest;
+
+  /// 整个插件包字节的 sha256（小写十六进制，64 字符），用于完整性比对与登记。
+  final String sha256Hex;
+
+  /// 全部问题。空表示没有问题。
+  final List<PluginPackageIssue> issues;
+
+  bool get hasIssues => issues.isNotEmpty;
+
+  @override
+  String toString() =>
+      'PluginPackageValidation(ok=$ok, manifest=${manifest?.id}, sha256=$sha256Hex, '
+      'issues=${issues.length})';
+}
+
+/// 校验一个插件包 zip 的字节。
+///
+/// - [expectedSha256Hex]：可选。给定时与包字节的 sha256 比对，便于安装/发布时做完整性校验。
+/// - 纯函数：不读写文件、不联网；同一输入返回同一结果（sha256 亦稳定）。
+///
+/// 只做「包结构与清单结构」校验；`apiVersion` / `platforms` / `hostOnly` 是否可加载
+/// 仍由 [PluginHost.load] 判定（关注点分离），避免两处重复策略。
+PluginPackageValidation validatePluginPackage(
+  Uint8List bytes, {
+  PluginPackageLimits limits = const PluginPackageLimits(),
+  String? expectedSha256Hex,
+}) {
+  final issues = <PluginPackageIssue>[];
+  final sha256Hex = crypto.sha256.convert(bytes).toString();
+
+  final expected = expectedSha256Hex?.trim().toLowerCase();
+  if (expected != null && expected.isNotEmpty && expected != sha256Hex) {
+    issues.add(PluginPackageIssue(
+      PluginPackageIssueCode.integrityMismatch,
+      '插件包 sha256 与期望值不一致：实际 $sha256Hex，期望 $expected',
+    ));
+  }
+
+  PluginPackageValidation fail(PluginManifest? manifest) =>
+      PluginPackageValidation._(
+        ok: false,
+        manifest: manifest,
+        sha256Hex: sha256Hex,
+        issues: issues,
+      );
+
+  if (bytes.isEmpty) {
+    issues.add(
+        const PluginPackageIssue(PluginPackageIssueCode.empty, '插件包为空'));
+    return fail(null);
+  }
+
+  Archive archive;
+  try {
+    archive = ZipDecoder().decodeBytes(bytes);
+  } catch (error) {
+    issues.add(PluginPackageIssue(
+        PluginPackageIssueCode.notZip, '不是有效的 zip 插件包：$error'));
+    return fail(null);
+  }
+
+  final files = archive.files;
+  if (files.isEmpty) {
+    issues.add(const PluginPackageIssue(
+        PluginPackageIssueCode.empty, '插件包里没有任何条目'));
+    return fail(null);
+  }
+  if (files.length > limits.maxEntries) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.tooManyEntries,
+        '条目数 ${files.length} 超过上限 ${limits.maxEntries}'));
+  }
+
+  var totalUncompressed = 0;
+  final seen = <String>{};
+  ArchiveFile? manifestFile;
+  for (final file in files) {
+    final rawName = file.name;
+    if (file.isSymbolicLink) {
+      issues.add(PluginPackageIssue(
+          PluginPackageIssueCode.symbolicLink, '不允许的符号链接条目',
+          path: rawName));
+      continue;
+    }
+    final safe = sanitizePackageEntryPath(rawName);
+    if (safe == null) {
+      issues.add(PluginPackageIssue(
+          PluginPackageIssueCode.unsafeEntryPath, '不安全的条目路径（绝对路径、盘符或包含 ..）',
+          path: rawName));
+      continue;
+    }
+    if (!seen.add(safe.toLowerCase())) {
+      issues.add(PluginPackageIssue(
+          PluginPackageIssueCode.duplicateEntry, '重复条目（不区分大小写）',
+          path: rawName));
+    }
+    if (!file.isFile) continue;
+    if (file.size > limits.maxEntryUncompressedBytes) {
+      issues.add(PluginPackageIssue(PluginPackageIssueCode.entryTooLarge,
+          '单条目解压后 ${file.size} 字节，超过上限 ${limits.maxEntryUncompressedBytes}',
+          path: rawName));
+    }
+    totalUncompressed += file.size;
+    if (safe == 'plugin.json' && manifestFile == null) {
+      manifestFile = file;
+    }
+  }
+
+  if (totalUncompressed > limits.maxTotalUncompressedBytes) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.totalTooLarge,
+        '解压后总量 $totalUncompressed 字节，超过上限 ${limits.maxTotalUncompressedBytes}'));
+  } else if (totalUncompressed > 0) {
+    final ratio = totalUncompressed / bytes.length;
+    if (ratio > limits.maxCompressionRatio) {
+      issues.add(PluginPackageIssue(
+          PluginPackageIssueCode.compressionRatioTooHigh,
+          '解压/压缩比 ${ratio.toStringAsFixed(1)} 超过上限 ${limits.maxCompressionRatio}（疑似 zip 炸弹）'));
+    }
+  }
+
+  if (manifestFile == null) {
+    issues.add(const PluginPackageIssue(
+        PluginPackageIssueCode.missingManifest, '缺少根目录 plugin.json'));
+    return fail(null);
+  }
+  if (manifestFile.size > limits.maxManifestBytes) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestTooLarge,
+        'plugin.json ${manifestFile.size} 字节，超过上限 ${limits.maxManifestBytes}',
+        path: 'plugin.json'));
+    return fail(null);
+  }
+
+  late final Uint8List manifestBytes;
+  try {
+    final content = manifestFile.content;
+    manifestBytes = content is Uint8List
+        ? content
+        : Uint8List.fromList((content as List).cast<int>());
+  } catch (error) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestInvalidJson,
+        'plugin.json 解压失败：$error',
+        path: 'plugin.json'));
+    return fail(null);
+  }
+  // 头里声明的 size 可被伪造：解压后再按真实字节数复核一次（纵深防御）。
+  if (manifestBytes.length > limits.maxManifestBytes) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestTooLarge,
+        'plugin.json 解压后 ${manifestBytes.length} 字节，超过上限 ${limits.maxManifestBytes}',
+        path: 'plugin.json'));
+    return fail(null);
+  }
+
+  late final String manifestText;
+  try {
+    manifestText = utf8.decode(manifestBytes);
+  } on FormatException catch (error) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestInvalidJson,
+        'plugin.json 不是合法 UTF-8：${error.message}',
+        path: 'plugin.json'));
+    return fail(null);
+  }
+
+  if (_jsonNestingDepth(manifestText) > limits.maxJsonDepth) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestTooDeep,
+        'plugin.json 嵌套深度超过上限 ${limits.maxJsonDepth}',
+        path: 'plugin.json'));
+    return fail(null);
+  }
+
+  Object? decoded;
+  try {
+    decoded = jsonDecode(manifestText);
+  } on FormatException catch (error) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestInvalidJson,
+        'plugin.json 不是合法 JSON：${error.message}',
+        path: 'plugin.json'));
+    return fail(null);
+  }
+
+  if (decoded is! Map) {
+    issues.add(const PluginPackageIssue(PluginPackageIssueCode.manifestInvalid,
+        'plugin.json 顶层必须是对象', path: 'plugin.json'));
+    return fail(null);
+  }
+  final json = <String, Object?>{};
+  for (final entry in decoded.entries) {
+    final key = entry.key;
+    if (key is! String) {
+      issues.add(const PluginPackageIssue(PluginPackageIssueCode.manifestInvalid,
+          'plugin.json 的键必须是字符串', path: 'plugin.json'));
+      return fail(null);
+    }
+    json[key] = entry.value;
+  }
+
+  PluginManifest manifest;
+  try {
+    manifest = PluginManifest.fromJson(json);
+  } on FormatException catch (error) {
+    issues.add(PluginPackageIssue(PluginPackageIssueCode.manifestInvalid,
+        'plugin.json 不满足插件清单契约：${error.message}',
+        path: 'plugin.json'));
+    return fail(null);
+  }
+
+  final ok = issues.isEmpty;
+  return PluginPackageValidation._(
+    ok: ok,
+    manifest: manifest,
+    sha256Hex: sha256Hex,
+    issues: issues,
+  );
+}
+
+/// 把压缩包条目路径规范化为安全的相对路径（以 `/` 分隔、去掉 `.` 与空段）。
+///
+/// 不安全时返回 null：空串、绝对路径（`/` 开头）、盘符（`C:`）、包含 `..` 段、
+/// 或段内含控制字符 / `:`（NTFS 备用数据流）。用于拦截 Zip Slip 与越界写入。
+String? sanitizePackageEntryPath(String entryName) {
+  if (entryName.isEmpty) return null;
+  final normalized = entryName.replaceAll('\\', '/');
+  if (normalized.startsWith('/')) return null;
+  if (normalized.length >= 2 &&
+      normalized[1] == ':' &&
+      _isAsciiLetter(normalized.codeUnitAt(0))) {
+    return null;
+  }
+  final segments = <String>[];
+  for (final segment in normalized.split('/')) {
+    if (segment.isEmpty || segment == '.') continue;
+    if (segment == '..') return null;
+    for (final code in segment.codeUnits) {
+      if (code == 0 || code == 0x3A) return null; // NUL 或 ':'
+      if (code < 0x20) return null; // 控制字符
+    }
+    segments.add(segment);
+  }
+  if (segments.isEmpty) return null;
+  return segments.join('/');
+}
+
+bool _isAsciiLetter(int code) =>
+    (code >= 0x41 && code <= 0x5A) || (code >= 0x61 && code <= 0x7A);
+
+/// 计算 JSON 文本的最大嵌套深度，忽略字符串字面量与转义。
+/// 只读扫描，不真正解析，用于在 jsonDecode 前拒绝过深结构。
+int _jsonNestingDepth(String text) {
+  var depth = 0;
+  var maxDepth = 0;
+  var inString = false;
+  var escaped = false;
+  for (final code in text.codeUnits) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (code == 0x5C) {
+        escaped = true;
+      } else if (code == 0x22) {
+        inString = false;
+      }
+      continue;
+    }
+    if (code == 0x22) {
+      inString = true;
+    } else if (code == 0x7B || code == 0x5B) {
+      depth++;
+      if (depth > maxDepth) maxDepth = depth;
+    } else if (code == 0x7D || code == 0x5D) {
+      if (depth > 0) depth--;
+    }
+  }
+  return maxDepth;
+}
