@@ -18,3 +18,16 @@ Source baseline: repository v4.2 FR-46, `docs/architecture/02-decisions.md` B-1/
 ## Deliberately not claimed
 
 No memoization, semantic/regex meme retrieval, AI/circle authorization, model binding, B1 metering, B2 degradation, host transport delivery, UI, persistence, real activity citation or downstream memory-candidate exclusion is implemented here. `source=s1` is preserved by the existing router but alone does not prove a downstream memory filter. No UI changed, so visual comparison is not applicable.
+
+## S1 activity citation (2026-11-15)
+
+Baseline: main `3ac8e9f589da87fc426250f6811067f7c2d7c831`. Sources: `02-decisions.md` B-1 rules 5–6, M07 rule 2. Adds the S1 side of "may mention her own life event only with a real `activity_log` id", using a trusted injected activity source; it does not produce records (M06 life engine owns that).
+
+| ID | Source / approval | Observable acceptance | Implementation | Evidence / status | Remaining gap |
+|---|---|---|---|---|---|
+| M07-S1-008 | B-1 rule 5 / M07 rule 2 | A status query with a real activity replies with its summary and carries the activity id; no record → fallback with no event claim | `activity_s1_responder.dart` `ActivityS1Responder` | `brain_activity_s1_responder_test.dart` with/without-activity tests; focused pass | Source is a trusted port; actual `activity_log` production not wired |
+| M07-S1-009 | B-1 rules 5–6 | Non-status text and user-quoted events never cite an activity; padding is neutral and does no lookup; blank id/summary skipped; real router simple path S2 calls=0 and activityRefs carried | Same + existing router | quoted-event, non-status, padding, blank, and router tests; focused pass | Status-query phrase set is curated; not a general intent detector |
+
+Verification: TDD absent-file then throwing-skeleton failures observed, then `dart test test/brain_activity_s1_responder_test.dart` 7/7 and existing brain suite 91/91; host `dart analyze --fatal-infos` clean. Exact-head CI recorded in the PR.
+
+Deliberate limits: no activity-log production/scheduler, no default-host assembly, no model call; no full AC-33 acceptance. S1 only formats a trusted activity's summary and never asserts user/world facts or promises.
