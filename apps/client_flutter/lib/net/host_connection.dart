@@ -7,9 +7,14 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 /// HTTP adapter for the currently implemented host routes. WebSocket frames use
 /// the shared strict codec, while HTTP sync is retained when stream is absent.
 class HostConnection {
-  HostConnection(this.base, this.token);
+  HostConnection(this.base, this._token, {this.onUnauthorized});
   final Uri base;
-  final String token;
+  String _token;
+  final Future<bool> Function()? onUnauthorized;
+  void updateAccessToken(String token) {
+    _token = token;
+  }
+
   final HttpClient client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 10);
   WebSocket? socket;
@@ -20,11 +25,14 @@ class HostConnection {
     String path, {
     Map<String, Object?>? body,
     Map<String, String>? query,
+    bool retryAuthentication = true,
   }) async {
+    final attemptedToken = _token;
     final req = await client
         .openUrl(method, route(path, query))
         .timeout(const Duration(seconds: 15));
-    req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    req.followRedirects = false;
+    req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $attemptedToken');
     req.headers.contentType = ContentType.json;
     if (body != null) req.write(jsonEncode(body));
     final response = await req.close().timeout(const Duration(seconds: 15));
@@ -32,6 +40,20 @@ class HostConnection {
         .transform(utf8.decoder)
         .join()
         .timeout(const Duration(seconds: 15));
+    if (response.statusCode == 401 &&
+        retryAuthentication &&
+        onUnauthorized != null) {
+      final renewed = _token != attemptedToken || await onUnauthorized!();
+      if (renewed) {
+        return request(
+          method,
+          path,
+          body: body,
+          query: query,
+          retryAuthentication: false,
+        );
+      }
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       ErrorCode? code;
       try {
@@ -75,6 +97,9 @@ class HostConnection {
       );
       return const Ok(null);
     } on HostRequestException catch (error) {
+      if (error.failure.code == FailureCode.unauthenticated) {
+        return const Err(Failure(FailureCode.unavailable, '需要重新验证登录，消息保留待发送'));
+      }
       return Err(error.failure);
     } on HttpException {
       return const Err(Failure(FailureCode.unavailable, '宿主暂不可用'));
@@ -134,7 +159,7 @@ class HostConnection {
         .replace(scheme: base.scheme == 'https' ? 'wss' : 'ws');
     socket = await WebSocket.connect(
       uri.toString(),
-      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $_token'},
     ).timeout(const Duration(seconds: 10));
     socket!.pingInterval = const Duration(seconds: 20);
     socket!.listen(

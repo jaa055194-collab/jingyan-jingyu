@@ -12,6 +12,11 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final address = TextEditingController();
   final invite = TextEditingController();
+  final displayName = TextEditingController();
+  final accountId = TextEditingController();
+  final deviceName = TextEditingController();
+  final password = TextEditingController();
+  bool existingAccount = false;
   int step = 0;
   String character = 'whale';
   String preset = 'quiet';
@@ -21,22 +26,55 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void dispose() {
     address.dispose();
     invite.dispose();
+    displayName.dispose();
+    accountId.dispose();
+    deviceName.dispose();
+    password.dispose();
     super.dispose();
   }
 
   Future<void> connect() async {
+    if (widget.model.busy) return;
     final uri = Uri.tryParse(address.text.trim());
+    String? problem;
     if (uri == null ||
         !uri.hasAuthority ||
-        !['http', 'https'].contains(uri.scheme) ||
-        invite.text.trim().isEmpty) {
-      setState(() => validation = '请输入完整的 http(s) 宿主地址和邀请码');
-      return;
+        uri.host.isEmpty ||
+        !['http', 'https'].contains(uri.scheme)) {
+      problem = '请输入完整的 http(s) 宿主地址';
+    } else if (existingAccount && accountId.text.trim().isEmpty) {
+      problem = '请输入已有账户 ID';
+    } else if (!existingAccount &&
+        (invite.text.trim().isEmpty || displayName.text.trim().isEmpty)) {
+      problem = '创建新账户需要邀请码和显示名称';
+    } else if (!existingAccount && displayName.text.trim().length > 100) {
+      problem = '显示名称不能超过 100 个字符';
+    } else if (deviceName.text.trim().isEmpty) {
+      problem = '请输入设备名称';
+    } else if (deviceName.text.trim().length > 100) {
+      problem = '设备名称不能超过 100 个字符';
+    } else if (password.text.isEmpty) {
+      problem = '请输入账户密码';
+    } else if (password.text.length > 1024 ||
+        (!existingAccount && password.text.length < 12)) {
+      problem = existingAccount ? '账户密码不能超过 1024 个字符' : '新账户密码需要 12–1024 个字符';
     }
-    setState(() => validation = null);
+    setState(() => validation = problem);
+    if (problem != null) return;
     widget.model.clearError();
-    await widget.model.connectHost(address.text.trim(), invite.text.trim());
-    if (mounted && widget.model.error == null) setState(() => step = 1);
+    await widget.model.connectHost(
+      address.text.trim(),
+      existingAccount ? '' : invite.text.trim(),
+      displayName: existingAccount ? '' : displayName.text.trim(),
+      password: password.text,
+      deviceName: deviceName.text.trim(),
+      accountId: existingAccount ? accountId.text.trim() : '',
+    );
+    if (!mounted) return;
+    if (widget.model.error == null) {
+      password.clear();
+      setState(() => step = 1);
+    }
   }
 
   @override
@@ -61,8 +99,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
               const SizedBox(height: 24),
+              if (step >= 1 && model.connectedAccountId != null) ...[
+                SelectableText('账号 ID：${model.connectedAccountId}'),
+                const SizedBox(height: 8),
+                const Text('保存账号ID可用于已有账号登录'),
+                const SizedBox(height: 24),
+              ],
               if (step == 0) ...[
-                const Text('填写宿主提供的地址和邀请码。接入结果以宿主实际响应为准。'),
+                const Text('填写宿主地址，创建新账户或登录已有账户。接入结果以宿主实际响应为准。'),
                 const SizedBox(height: 24),
                 TextField(
                   key: const Key('host-address'),
@@ -76,13 +120,91 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('新建账户'),
+                      selected: !existingAccount,
+                      onSelected: model.busy
+                          ? null
+                          : (_) => setState(() {
+                              existingAccount = false;
+                              validation = null;
+                            }),
+                    ),
+                    ChoiceChip(
+                      label: const Text('已有账户'),
+                      selected: existingAccount,
+                      onSelected: model.busy
+                          ? null
+                          : (_) => setState(() {
+                              existingAccount = true;
+                              validation = null;
+                            }),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                if (existingAccount)
+                  TextField(
+                    key: const Key('host-account-id'),
+                    controller: accountId,
+                    enabled: !model.busy,
+                    decoration: const InputDecoration(
+                      labelText: '账户 ID',
+                      border: OutlineInputBorder(),
+                    ),
+                  )
+                else ...[
+                  TextField(
+                    key: const Key('host-invite'),
+                    controller: invite,
+                    enabled: !model.busy,
+                    decoration: const InputDecoration(
+                      labelText: '邀请码',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    key: const Key('host-display-name'),
+                    controller: displayName,
+                    enabled: !model.busy,
+                    decoration: const InputDecoration(
+                      labelText: '显示名称',
+                      helperText: '最多 100 个字符',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
                 TextField(
-                  key: const Key('host-invite'),
-                  controller: invite,
+                  key: const Key('host-device-name'),
+                  controller: deviceName,
                   enabled: !model.busy,
                   decoration: const InputDecoration(
-                    labelText: '邀请码',
+                    labelText: '设备名称',
+                    helperText: '最多 100 个字符',
+                    hintText: '例如：我的电脑',
                     border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  key: const Key('host-password'),
+                  controller: password,
+                  enabled: !model.busy,
+                  obscureText: true,
+                  enableSuggestions: false,
+                  autocorrect: false,
+                  decoration: InputDecoration(
+                    labelText: '账户密码',
+                    helperText: existingAccount
+                        ? '输入已有密码，最多 1024 个字符'
+                        : '新账户密码需要 12–1024 个字符',
+                    helperMaxLines: 2,
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 if (validation != null)

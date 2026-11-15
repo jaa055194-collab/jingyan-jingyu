@@ -45,10 +45,33 @@ class TestShellModel extends ShellViewModel {
   double fontScale = 1;
   @override
   String? roomPreview;
-  bool failConnect = false;
   @override
-  Future<void> connectHost(String address, String invite) async {
+  String? connectedAccountId;
+  bool failConnect = false;
+  int connectCalls = 0;
+  Map<String, String>? suppliedCredentials;
+  @override
+  Future<void> connectHost(
+    String address,
+    String invite, {
+    String displayName = '',
+    String password = '',
+    String deviceName = '',
+    String accountId = '',
+  }) async {
+    connectCalls++;
+    suppliedCredentials = {
+      'address': address,
+      'invite': invite,
+      'displayName': displayName,
+      'password': password,
+      'deviceName': deviceName,
+      'accountId': accountId,
+    };
     error = failConnect ? '宿主尚未开放账户接入' : null;
+    if (!failConnect) {
+      connectedAccountId = accountId.isEmpty ? 'created-account-42' : accountId;
+    }
     notifyListeners();
   }
 
@@ -148,6 +171,37 @@ class TestShellModel extends ShellViewModel {
   }
 }
 
+Future<void> enterOnboardingField(
+  WidgetTester tester,
+  String key,
+  String value,
+) async {
+  final field = find.byKey(Key(key));
+  expect(field, findsOneWidget);
+  await tester.ensureVisible(field);
+  await tester.enterText(field, value);
+  await tester.pumpAndSettle();
+}
+
+Future<void> fillNewAccountCredentials(WidgetTester tester) async {
+  await enterOnboardingField(tester, 'host-display-name', '小鲸用户');
+  await enterOnboardingField(tester, 'host-device-name', '我的电脑');
+  await enterOnboardingField(tester, 'host-password', ' secret password ');
+}
+
+Future<void> submitHostConnection(WidgetTester tester) async {
+  await tester.scrollUntilVisible(
+    find.text('连接宿主'),
+    200,
+    scrollable: find.byType(Scrollable).first,
+  );
+  await tester.pumpAndSettle();
+  await tester.ensureVisible(find.text('连接宿主'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('连接宿主'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   test('settings persistence failure is exposed through model error', () async {
     final runtime = ClientRuntime();
@@ -160,6 +214,256 @@ void main() {
     await expectLater(runtime.setHideNotificationBody(false), completes);
     expect(runtime.error, isNotNull);
   });
+  testWidgets(
+    'onboarding rejects host and invite without required credentials',
+    (tester) async {
+      final model = TestShellModel()..onboarded = false;
+      await tester.pumpWidget(WhaleChatApp(model: model));
+      await tester.enterText(
+        find.byKey(const Key('host-address')),
+        'http://localhost:8080',
+      );
+      await tester.enterText(find.byKey(const Key('host-invite')), 'invite');
+      await submitHostConnection(tester);
+      expect(model.connectCalls, 0);
+      expect(find.text('选择你的形象'), findsNothing);
+    },
+  );
+
+  testWidgets('new account credentials are obscured and forwarded on success', (
+    tester,
+  ) async {
+    final model = TestShellModel()..onboarded = false;
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await enterOnboardingField(
+      tester,
+      'host-address',
+      ' https://host.example ',
+    );
+    await enterOnboardingField(tester, 'host-invite', ' invite-code ');
+    await fillNewAccountCredentials(tester);
+    final password = tester.widget<TextField>(
+      find.byKey(const Key('host-password')),
+    );
+    final passwordController = password.controller!;
+    expect(password.obscureText, isTrue);
+    expect(password.enableSuggestions, isFalse);
+    expect(password.autocorrect, isFalse);
+    await submitHostConnection(tester);
+    expect(model.suppliedCredentials, {
+      'address': 'https://host.example',
+      'invite': 'invite-code',
+      'displayName': '小鲸用户',
+      'password': ' secret password ',
+      'deviceName': '我的电脑',
+      'accountId': '',
+    });
+    expect(find.text('选择你的形象'), findsOneWidget);
+    expect(passwordController.text, isEmpty);
+  });
+
+  testWidgets('existing account signs in without invite or display name', (
+    tester,
+  ) async {
+    final model = TestShellModel()..onboarded = false;
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await enterOnboardingField(tester, 'host-address', 'https://host.example');
+    await tester.ensureVisible(find.text('已有账户'));
+    await tester.tap(find.text('已有账户'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('host-invite')), findsNothing);
+    expect(find.byKey(const Key('host-display-name')), findsNothing);
+    await enterOnboardingField(tester, 'host-account-id', ' account-7 ');
+    await enterOnboardingField(tester, 'host-device-name', ' 手机 ');
+    await enterOnboardingField(tester, 'host-password', 'existing-secret');
+    await submitHostConnection(tester);
+    expect(model.suppliedCredentials, {
+      'address': 'https://host.example',
+      'invite': '',
+      'displayName': '',
+      'password': 'existing-secret',
+      'deviceName': '手机',
+      'accountId': 'account-7',
+    });
+    expect(find.text('选择你的形象'), findsOneWidget);
+  });
+
+  for (final existing in [false, true]) {
+    testWidgets(
+      'connected account ID is selectable on character and room steps existing=$existing',
+      (tester) async {
+        final model = TestShellModel()..onboarded = false;
+        await tester.pumpWidget(WhaleChatApp(model: model));
+        await enterOnboardingField(
+          tester,
+          'host-address',
+          'https://host.example',
+        );
+        if (existing) {
+          await tester.ensureVisible(find.text('已有账户'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('已有账户'));
+          await tester.pumpAndSettle();
+          await enterOnboardingField(
+            tester,
+            'host-account-id',
+            'existing-account-7',
+          );
+          await enterOnboardingField(tester, 'host-device-name', '手机');
+          await enterOnboardingField(tester, 'host-password', 'short');
+        } else {
+          await enterOnboardingField(tester, 'host-invite', 'invite');
+          await fillNewAccountCredentials(tester);
+        }
+        expect(find.textContaining('账号 ID：'), findsNothing);
+        await submitHostConnection(tester);
+        final expectedId = existing
+            ? 'existing-account-7'
+            : 'created-account-42';
+        final selectableId = find.byWidgetPredicate(
+          (widget) =>
+              widget is SelectableText && widget.data == '账号 ID：$expectedId',
+        );
+        expect(selectableId, findsOneWidget);
+        expect(
+          tester
+              .widget<SelectableText>(selectableId)
+              .enableInteractiveSelection,
+          isTrue,
+        );
+        expect(find.text('保存账号ID可用于已有账号登录'), findsOneWidget);
+        await tester.ensureVisible(find.text('下一步'));
+        await tester.tap(find.text('下一步'));
+        await tester.pumpAndSettle();
+        expect(selectableId, findsOneWidget);
+        expect(find.text('保存账号ID可用于已有账号登录'), findsOneWidget);
+      },
+    );
+  }
+
+  for (final missing in [
+    'host-address',
+    'host-invite',
+    'host-display-name',
+    'host-device-name',
+    'host-password',
+  ]) {
+    testWidgets('new account never connects with missing $missing', (
+      tester,
+    ) async {
+      final model = TestShellModel()..onboarded = false;
+      await tester.pumpWidget(WhaleChatApp(model: model));
+      await enterOnboardingField(
+        tester,
+        'host-address',
+        'https://host.example',
+      );
+      await enterOnboardingField(tester, 'host-invite', 'invite');
+      await fillNewAccountCredentials(tester);
+      await enterOnboardingField(
+        tester,
+        missing,
+        missing == 'host-password' ? '' : '   ',
+      );
+      await submitHostConnection(tester);
+      expect(model.connectCalls, 0);
+      expect(find.text('选择你的形象'), findsNothing);
+    });
+  }
+
+  for (final invalid in [
+    ('host-password', 'p' * 11),
+    ('host-password', 'p' * 1025),
+    ('host-display-name', 'n' * 101),
+    ('host-device-name', 'd' * 101),
+  ]) {
+    testWidgets(
+      'new account rejects host limit ${invalid.$1} ${invalid.$2.length}',
+      (tester) async {
+        final model = TestShellModel()..onboarded = false;
+        await tester.pumpWidget(WhaleChatApp(model: model));
+        await enterOnboardingField(
+          tester,
+          'host-address',
+          'https://host.example',
+        );
+        await enterOnboardingField(tester, 'host-invite', 'invite');
+        await fillNewAccountCredentials(tester);
+        await enterOnboardingField(tester, invalid.$1, invalid.$2);
+        await submitHostConnection(tester);
+        expect(model.connectCalls, 0);
+        expect(find.text('选择你的形象'), findsNothing);
+      },
+    );
+  }
+
+  for (final length in [12, 1024]) {
+    testWidgets(
+      'new account accepts host boundary password $length and names100',
+      (tester) async {
+        final model = TestShellModel()..onboarded = false;
+        await tester.pumpWidget(WhaleChatApp(model: model));
+        await enterOnboardingField(
+          tester,
+          'host-address',
+          'https://host.example',
+        );
+        await enterOnboardingField(tester, 'host-invite', 'invite');
+        await enterOnboardingField(tester, 'host-display-name', 'n' * 100);
+        await enterOnboardingField(tester, 'host-device-name', 'd' * 100);
+        await enterOnboardingField(tester, 'host-password', 'p' * length);
+        await submitHostConnection(tester);
+        expect(model.connectCalls, 1);
+        expect(model.suppliedCredentials!['password'], 'p' * length);
+      },
+    );
+  }
+
+  testWidgets(
+    'existing password allows short value but rejects above host maximum',
+    (tester) async {
+      final model = TestShellModel()..onboarded = false;
+      await tester.pumpWidget(WhaleChatApp(model: model));
+      await enterOnboardingField(
+        tester,
+        'host-address',
+        'https://host.example',
+      );
+      await tester.ensureVisible(find.text('已有账户'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('已有账户'));
+      await tester.pumpAndSettle();
+      await enterOnboardingField(tester, 'host-account-id', 'account-7');
+      await enterOnboardingField(tester, 'host-device-name', '手机');
+      await enterOnboardingField(tester, 'host-password', 'p' * 1025);
+      await submitHostConnection(tester);
+      expect(model.connectCalls, 0);
+      await enterOnboardingField(tester, 'host-password', 'short');
+      await submitHostConnection(tester);
+      expect(model.connectCalls, 1);
+      expect(model.suppliedCredentials!['password'], 'short');
+    },
+  );
+
+  testWidgets('invalid host and blank existing account never connect', (
+    tester,
+  ) async {
+    final model = TestShellModel()..onboarded = false;
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await enterOnboardingField(tester, 'host-address', 'https:///missing-host');
+    await enterOnboardingField(tester, 'host-invite', 'invite');
+    await fillNewAccountCredentials(tester);
+    await submitHostConnection(tester);
+    expect(model.connectCalls, 0);
+    await enterOnboardingField(tester, 'host-address', 'https://host.example');
+    await tester.ensureVisible(find.text('已有账户'));
+    await tester.tap(find.text('已有账户'));
+    await tester.pumpAndSettle();
+    await enterOnboardingField(tester, 'host-account-id', '   ');
+    await submitHostConnection(tester);
+    expect(model.connectCalls, 0);
+  });
+
   testWidgets('host failure remains on connection step with actionable error', (
     tester,
   ) async {
@@ -172,11 +476,21 @@ void main() {
       'http://localhost:8080',
     );
     await tester.enterText(find.byKey(const Key('host-invite')), 'invite');
-    await tester.tap(find.text('连接宿主'));
-    await tester.pumpAndSettle();
+    await fillNewAccountCredentials(tester);
+    final passwordController = tester
+        .widget<TextField>(find.byKey(const Key('host-password')))
+        .controller!;
+    await submitHostConnection(tester);
     expect(find.text('宿主尚未开放账户接入'), findsOneWidget);
     expect(find.text('连接宿主'), findsOneWidget);
     expect(find.text('选择你的形象'), findsNothing);
+    expect(passwordController.text, ' secret password ');
+    model.failConnect = false;
+    await submitHostConnection(tester);
+    expect(model.connectCalls, 2);
+    expect(model.error, isNull);
+    expect(find.text('选择你的形象'), findsOneWidget);
+    expect(passwordController.text, isEmpty);
   });
 
   testWidgets('onboarding requires room preview before confirmation', (
@@ -189,8 +503,8 @@ void main() {
       'http://localhost:8080',
     );
     await tester.enterText(find.byKey(const Key('host-invite')), 'invite');
-    await tester.tap(find.text('连接宿主'));
-    await tester.pumpAndSettle();
+    await fillNewAccountCredentials(tester);
+    await submitHostConnection(tester);
     expect(find.text('选择你的形象'), findsOneWidget);
     await tester.tap(find.text('下一步'));
     await tester.pumpAndSettle();
@@ -323,6 +637,30 @@ void main() {
     },
   );
   for (final width in [375.0, 768.0, 1280.0]) {
+    testWidgets('onboarding credentials fit viewport $width at enlarged font', (
+      tester,
+    ) async {
+      tester.view.physicalSize = Size(width, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final model = TestShellModel()
+        ..onboarded = false
+        ..fontScale = 1.5;
+      await tester.pumpWidget(WhaleChatApp(model: model));
+      await enterOnboardingField(
+        tester,
+        'host-address',
+        'https://host.example',
+      );
+      await enterOnboardingField(tester, 'host-invite', 'invite');
+      await fillNewAccountCredentials(tester);
+      await submitHostConnection(tester);
+      expect(model.connectCalls, 1);
+      expect(find.text('选择你的形象'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('chat fits viewport $width at enlarged font', (tester) async {
       tester.view.physicalSize = Size(width, 900);
       tester.view.devicePixelRatio = 1;

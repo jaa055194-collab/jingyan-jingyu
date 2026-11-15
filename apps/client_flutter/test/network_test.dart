@@ -60,6 +60,86 @@ void main() {
     },
   );
 
+  test(
+    'expired credentials preserve queued message for later authentication',
+    () async {
+      server.listen((request) async {
+        await request.drain<void>();
+        request.response.statusCode = 401;
+        request.response.write('{"error":"unauthenticated"}');
+        await request.response.close();
+      });
+      final outbox = Outbox();
+      final id = outbox.enqueue('conversation-a', MessageKind.text, {
+        'text': 'private',
+      });
+      final report = await outbox.flush(
+        (item) => connection.submit(
+          OutboxSubmission(item.conversationId, {
+            'clientMsgId': item.clientMsgId,
+          }),
+        ),
+      );
+      expect(report.remaining, 1);
+      expect(outbox.items.single.clientMsgId, id);
+    },
+  );
+
+  test('401 renews once and retries request with rotated bearer', () async {
+    var renewals = 0;
+    final headers = <String?>[];
+    connection = HostConnection(
+      Uri.parse('http://127.0.0.1:${server.port}'),
+      'expired',
+      onUnauthorized: () async {
+        renewals++;
+        connection.updateAccessToken('rotated');
+        return true;
+      },
+    );
+    server.listen((request) async {
+      headers.add(request.headers.value(HttpHeaders.authorizationHeader));
+      await request.drain<void>();
+      request.response.statusCode = headers.length == 1 ? 401 : 200;
+      request.response.write(
+        headers.length == 1 ? '{"error":"unauthenticated"}' : '{}',
+      );
+      await request.response.close();
+    });
+    expect(
+      (await connection.submit(
+        const OutboxSubmission('a', {'clientMsgId': 'same'}),
+      )).isOk,
+      isTrue,
+    );
+    expect(renewals, 1);
+    expect(headers, ['Bearer expired', 'Bearer rotated']);
+  });
+  test('refresh does not loop when retry remains unauthorized', () async {
+    var renewals = 0, requests = 0;
+    connection = HostConnection(
+      Uri.parse('http://127.0.0.1:${server.port}'),
+      'expired',
+      onUnauthorized: () async {
+        renewals++;
+        return true;
+      },
+    );
+    server.listen((request) async {
+      requests++;
+      await request.drain<void>();
+      request.response.statusCode = 401;
+      request.response.write('{"error":"unauthenticated"}');
+      await request.response.close();
+    });
+    final result = await connection.submit(
+      const OutboxSubmission('a', {'clientMsgId': 'same'}),
+    );
+    expect(result.failureOrNull?.code, FailureCode.unavailable);
+    expect(renewals, 1);
+    expect(requests, 2);
+  });
+
   for (final fixture in [
     (
       status: 400,

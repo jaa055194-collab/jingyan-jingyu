@@ -20,7 +20,15 @@ abstract class ShellViewModel extends ChangeNotifier {
   ThemeMode get themeMode;
   double get fontScale;
   String? get roomPreview;
-  Future<void> connectHost(String address, String invite);
+  String? get connectedAccountId => null;
+  Future<void> connectHost(
+    String address,
+    String invite, {
+    String displayName = '',
+    String password = '',
+    String deviceName = '',
+    String accountId = '',
+  });
   Future<void> chooseCharacter(String characterId);
   Future<void> generateRoom(String preset);
   Future<void> confirmRoom();
