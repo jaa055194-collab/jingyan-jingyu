@@ -1,4 +1,6 @@
-import 'package:jingyu_client_kit/src/draft_store.dart';
+import 'dart:convert';
+
+import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 import 'package:test/test.dart';
 
 final DateTime t0 = DateTime.utc(2026, 11, 15, 10);
@@ -146,6 +148,63 @@ void main() {
         () => store.save('acc-1', 'bad id', 'x', updatedAt: t0),
         throwsFormatException,
       );
+    });
+
+    test('ConversationDraft.fromJson returns null for an invalid id', () {
+      final ConversationDraft? d = ConversationDraft.fromJson(
+        <Object?, Object?>{
+          'conversationId': 'bad id',
+          'text': 'x',
+          'updatedAt': t0.toIso8601String(),
+        },
+      );
+      expect(d, isNull);
+    });
+
+    test('json string round-trip restores drafts', () {
+      final DraftStore store = DraftStore();
+      store.save('acc-1', 'conv-1', '你好 😀', updatedAt: t1);
+      final String encoded = jsonEncode(store.exportAccount('acc-1'));
+      final Map<String, Object?> decoded =
+          jsonDecode(encoded) as Map<String, Object?>;
+      final DraftStore restored = DraftStore();
+      restored.importAccount('acc-1', decoded);
+      expect(restored.draftText('acc-1', 'conv-1'), '你好 😀');
+      expect(restored.draft('acc-1', 'conv-1')!.updatedAt, t1);
+    });
+
+    test('import replaces (not merges) and is account-isolated', () {
+      final DraftStore store = DraftStore();
+      store.save('acc-1', 'keep-out', 'x', updatedAt: t0);
+      store.save('acc-2', 'other', 'y', updatedAt: t0);
+      // Snapshot for acc-1 with a fresh set; existing acc-1 drafts replaced.
+      store.importAccount('acc-1', <String, Object?>{
+        'version': 1,
+        'drafts': <Object?>[
+          <String, Object?>{
+            'conversationId': 'new',
+            'text': 'z',
+            'updatedAt': t0.toIso8601String(),
+          },
+        ],
+      });
+      expect(store.draftText('acc-1', 'keep-out'), isNull);
+      expect(store.draftText('acc-1', 'new'), 'z');
+      expect(store.draftText('acc-2', 'other'), 'y'); // untouched
+      // Empty snapshot clears only that account.
+      store.importAccount('acc-1', <String, Object?>{
+        'version': 1,
+        'drafts': <Object?>[],
+      });
+      expect(store.drafts('acc-1'), isEmpty);
+      expect(store.draftText('acc-2', 'other'), 'y');
+    });
+
+    test('exporting an unknown account yields an empty draft list', () {
+      final DraftStore store = DraftStore();
+      final Map<String, Object?> snap = store.exportAccount('acc-none');
+      expect(snap['version'], 1);
+      expect(snap['drafts'], isEmpty);
     });
   });
 }
