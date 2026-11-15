@@ -152,6 +152,495 @@ void main() {
     await directory.delete(recursive: true);
   });
 
+  Future<void> editStyle(int version, String style) async {
+    expect(
+      (await call(
+        'PATCH',
+        body: {
+          'expectedVersion': version,
+          'reason': 'Style adjustment $style',
+          'diff': {
+            'p1': {'style': style},
+          },
+        },
+      )).status,
+      200,
+    );
+  }
+
+  List<Map<String, Object?>> changes(Map<String, Object?> page) =>
+      (page['changes'] as List)
+          .map((e) => (e as Map).cast<String, Object?>())
+          .toList();
+
+  test(
+    'history pages expose ordered changes with reasons and immutable snapshots',
+    () async {
+      expect((await call('GET', suffix: '/history')).status, 404);
+      await initialize();
+      await editStyle(1, 'brief');
+      await editStyle(2, 'playful');
+      final first = json(
+        await call('GET', suffix: '/history', query: {'limit': '2'}),
+      );
+      expect(changes(first).map((c) => c['version']), [1, 2]);
+      expect(first['nextAfterVersion'], 2);
+      final edit = changes(first)[1];
+      expect(edit['kind'], 'edit');
+      expect(edit['actorAccountId'], ids['owner']!.value);
+      expect(edit['before'], initial());
+      expect((edit['after'] as Map)['p1'], {'style': 'brief'});
+      expect(edit['diff'], {
+        'p0': {},
+        'p1': {'style': 'brief'},
+        'p2': {},
+      });
+      expect(edit['reason'], 'Style adjustment brief');
+      expect(edit['evidenceIds'], []);
+      expect(DateTime.parse(edit['at'] as String), clock.now());
+      expect(edit['lockedBefore'], false);
+      expect(edit['lockedAfter'], false);
+      expect(edit['revertsChangeId'], null);
+      expect(edit['id'], isNotEmpty);
+      final last = json(
+        await call(
+          'GET',
+          suffix: '/history',
+          query: {'afterVersion': '2', 'limit': '2'},
+        ),
+      );
+      expect(changes(last).map((c) => c['version']), [3]);
+      expect(last['nextAfterVersion'], null);
+      expect(
+        changes(
+          json(
+            await call('GET', suffix: '/history', query: {'afterVersion': '3'}),
+          ),
+        ),
+        isEmpty,
+      );
+      await db.close();
+      await open();
+      expect(
+        changes(
+          json(await call('GET', suffix: '/history')),
+        ).map((c) => c['version']),
+        [1, 2, 3],
+      );
+    },
+  );
+
+  test(
+    'history pagination validates bounds and does not decrypt outside its returned page',
+    () async {
+      await initialize();
+      await editStyle(1, 'brief');
+      for (final query in <Map<String, String>>[
+        {'limit': '0'},
+        {'limit': '101'},
+        {'limit': '-1'},
+        {'limit': '1.0'},
+        {'limit': '+1'},
+        {'limit': ' 1'},
+        {'limit': '0x10'},
+        {'limit': '1\n'},
+        {'limit': '１'},
+        {'afterVersion': ''},
+        {'afterVersion': '+1'},
+        {'limit': ''},
+        {'afterVersion': '-1'},
+        {'afterVersion': '1e2'},
+        {'afterVersion': '9' * 100},
+        {'ownerId': ids['owner']!.value},
+      ]) {
+        expect(
+          (await call('GET', suffix: '/history', query: query)).status,
+          400,
+          reason: '$query',
+        );
+      }
+      expect((await call('GET', query: {'limit': '1'})).status, 400);
+      await db.execute('DROP TRIGGER persona_history_no_update');
+      await db.execute(
+        'UPDATE persona_history SET encrypted_reason=? WHERE version=2',
+        ['damaged'],
+      );
+      final first = json(
+        await call('GET', suffix: '/history', query: {'limit': '1'}),
+      );
+      expect(changes(first).map((c) => c['version']), [1]);
+      expect(first['nextAfterVersion'], 1);
+      final damaged = await call(
+        'GET',
+        suffix: '/history',
+        query: {'afterVersion': '1'},
+      );
+      expect(damaged.status, 500);
+      expect(damaged.json, {'error': 'internal'});
+    },
+  );
+
+  test(
+    'history rejects other owners admin stale identity transferred and disabled AI',
+    () async {
+      await initialize();
+      for (final actor in ['other', 'admin']) {
+        expect(
+          (await call('GET', suffix: '/history', actor: actor)).status,
+          404,
+        );
+      }
+      expect(
+        (await call('GET', suffix: '/history', anonymous: true)).status,
+        401,
+      );
+      final principal = (await accounts.authenticate(
+        tokens['owner']!.accessToken,
+      ))!;
+      final spoofed = Pipeline(
+        router: router,
+        authenticate: (_) async => principal,
+      );
+      expect(
+        (await call(
+          'GET',
+          suffix: '/history',
+          actor: 'other',
+          through: spoofed,
+        )).status,
+        401,
+      );
+      await accounts.refresh(tokens['owner']!.refreshToken);
+      expect((await call('GET', suffix: '/history')).status, 401);
+      tokens['owner'] = (await accounts.login(
+        ids['owner']!,
+        password,
+        deviceName: 'new',
+      )).value;
+      await db.execute('UPDATE account SET disabled=1 WHERE id=?', [
+        aiAccount.value,
+      ]);
+      expect((await call('GET', suffix: '/history')).status, 404);
+      await db.execute('UPDATE account SET disabled=0 WHERE id=?', [
+        aiAccount.value,
+      ]);
+      await db.execute('UPDATE ai_operator SET operator_id=? WHERE ai_id=?', [
+        ids['other']!.value,
+        aiAccount.value,
+      ]);
+      expect((await call('GET', suffix: '/history')).status, 404);
+      expect(
+        (await call('GET', suffix: '/history', actor: 'other')).status,
+        404,
+      );
+    },
+  );
+
+  test(
+    'new routes reject mismatched devices revoked sessions and cross-profile targets',
+    () async {
+      await initialize();
+      await editStyle(1, 'brief');
+      final change = (await db.query(
+        'SELECT id FROM persona_history WHERE version=2',
+      )).single['id'];
+      final body = {
+        'changeId': change,
+        'expectedVersion': 2,
+        'reason': 'Restore',
+      };
+      final principal = (await accounts.authenticate(
+        tokens['owner']!.accessToken,
+      ))!;
+      final wrongDevice = Pipeline(
+        router: router,
+        authenticate: (_) async =>
+            Principal(accountId: principal.accountId, deviceId: 'wrong'),
+      );
+      Future<void> rejected(
+        int status, {
+        Pipeline? through,
+        String? bearer,
+        String? profile,
+      }) async {
+        expect(
+          (await call(
+            'GET',
+            suffix: '/history',
+            through: through,
+            bearer: bearer,
+            profile: profile,
+          )).status,
+          status,
+        );
+        expect(
+          (await call(
+            'POST',
+            suffix: '/revert',
+            body: body,
+            through: through,
+            bearer: bearer,
+            profile: profile,
+          )).status,
+          status,
+        );
+      }
+
+      await rejected(401, through: wrongDevice);
+      await rejected(404, profile: aiAccount.value);
+      expect(
+        (await call(
+          'POST',
+          suffix: '/revert',
+          body: body,
+          query: {'limit': '1'},
+        )).status,
+        400,
+      );
+      final ownerScope = (await accounts.scope(
+        tokens['owner']!.accessToken,
+      )).value;
+      final siblingAccount = (await ownerScope.accounts.createAi(
+        operator: ids['owner']!,
+        displayName: 'Sibling',
+      )).value;
+      final sibling = (await AiIdentityResolver.forOwner(
+        ownerId: ids['owner']!.value,
+        db: db,
+      ).register(siblingAccount)).value.profileId;
+      expect(
+        (await call(
+          'POST',
+          profile: sibling.value,
+          suffix: '/initialize',
+          body: initial(),
+        )).status,
+        200,
+      );
+      expect(
+        (await call(
+          'POST',
+          profile: sibling.value,
+          suffix: '/revert',
+          body: {...body, 'expectedVersion': 1},
+        )).status,
+        404,
+      );
+      await ownerScope.devices.revoke(ids['owner']!, tokens['owner']!.deviceId);
+      await rejected(401);
+      tokens['owner'] = (await accounts.login(
+        ids['owner']!,
+        password,
+        deviceName: 'fresh',
+      )).value;
+      clock.advance(const Duration(hours: 1));
+      await rejected(401);
+      expect(
+        await db.query('SELECT * FROM persona_history WHERE ai_profile_id=?', [
+          ai.value,
+        ]),
+        hasLength(2),
+      );
+    },
+  );
+
+  test(
+    'revert restores selected before snapshot undoes later edits and retains current lock',
+    () async {
+      await initialize();
+      await editStyle(1, 'brief');
+      await editStyle(2, 'playful');
+      expect(
+        (await call(
+          'PUT',
+          suffix: '/lock',
+          body: {'expectedVersion': 3, 'locked': true},
+        )).status,
+        200,
+      );
+      final original = await db.query(
+        'SELECT * FROM persona_history ORDER BY version',
+      );
+      final changeId = original[1]['id'] as String;
+      final reverted = json(
+        await call(
+          'POST',
+          suffix: '/revert',
+          body: {
+            'changeId': changeId,
+            'expectedVersion': 4,
+            'reason': 'Restore original style',
+          },
+        ),
+      );
+      expect(reverted['version'], 5);
+      expect(reverted['locked'], true);
+      expect(reverted['layers'], initial());
+      expect(
+        (await db.query(
+          'SELECT * FROM persona_history ORDER BY version',
+        )).take(4).toList(),
+        original,
+      );
+      final history = changes(json(await call('GET', suffix: '/history')));
+      expect(history.last['kind'], 'revert');
+      expect(history.last['revertsChangeId'], changeId);
+      expect(history.last['reason'], 'Restore original style');
+      expect(history.last['version'], 5);
+      await db.close();
+      await open();
+      expect(json(await call('GET')), reverted);
+      expect(
+        (await call(
+          'POST',
+          suffix: '/revert',
+          body: {
+            'changeId': changeId,
+            'expectedVersion': 5,
+            'reason': 'Already restored',
+          },
+        )).status,
+        409,
+      );
+    },
+  );
+
+  test(
+    'revert input authorization non-content and stale targets never append changes',
+    () async {
+      await initialize();
+      await editStyle(1, 'brief');
+      expect(
+        (await call(
+          'PUT',
+          suffix: '/lock',
+          body: {'expectedVersion': 2, 'locked': true},
+        )).status,
+        200,
+      );
+      final records = await db.query(
+        'SELECT id FROM persona_history ORDER BY version',
+      );
+      final valid = <String, Object?>{
+        'changeId': records[1]['id'],
+        'expectedVersion': 3,
+        'reason': 'Restore',
+      };
+      for (final body in <Object?>[
+        {},
+        {...valid, 'expectedVersion': 3.0},
+        {...valid, 'expectedVersion': 0},
+        {...valid, 'reason': ''},
+        {...valid, 'changeId': 'bad id'},
+        {...valid, 'changeId': 7},
+        {...valid, 'actorId': ids['owner']!.value},
+        {...valid, 'ownerId': ids['owner']!.value},
+        {...valid, 'reason': 'x' * ((1 << 20) + 1)},
+        {...valid, 'changeId': records.first['id']},
+        {...valid, 'changeId': records.last['id']},
+      ]) {
+        expect((await call('POST', suffix: '/revert', body: body)).status, 400);
+      }
+      expect(
+        (await call(
+          'POST',
+          suffix: '/revert',
+          body: {...valid, 'expectedVersion': 2},
+        )).status,
+        409,
+      );
+      expect(
+        (await call(
+          'POST',
+          suffix: '/revert',
+          body: {...valid, 'changeId': 'unknown'},
+        )).status,
+        404,
+      );
+      for (final actor in ['other', 'admin']) {
+        expect(
+          (await call(
+            'POST',
+            suffix: '/revert',
+            body: valid,
+            actor: actor,
+          )).status,
+          404,
+        );
+      }
+      expect(
+        (await call(
+          'POST',
+          suffix: '/revert',
+          body: valid,
+          anonymous: true,
+        )).status,
+        401,
+      );
+      expect(json(await call('GET'))['version'], 3);
+      expect(
+        await db.query('SELECT id FROM persona_history ORDER BY version'),
+        records,
+      );
+    },
+  );
+
+  test(
+    'concurrent revert and edit accept exactly one expected version',
+    () async {
+      await initialize();
+      await editStyle(1, 'brief');
+      final target = (await db.query(
+        'SELECT id FROM persona_history WHERE version=2',
+      )).single['id'];
+      final responses = await Future.wait([
+        call(
+          'POST',
+          suffix: '/revert',
+          body: {'changeId': target, 'expectedVersion': 2, 'reason': 'Restore'},
+        ),
+        call(
+          'PATCH',
+          body: {
+            'expectedVersion': 2,
+            'reason': 'New edit',
+            'diff': {
+              'p1': {'style': 'new'},
+            },
+          },
+        ),
+      ]);
+      expect(responses.map((r) => r.status).toList()..sort(), [200, 409]);
+      expect(json(await call('GET'))['version'], 3);
+      expect(await db.query('SELECT * FROM persona_history'), hasLength(3));
+    },
+  );
+
+  test(
+    'corrupt revert target fails safely without mutating current card',
+    () async {
+      await initialize();
+      await editStyle(1, 'brief');
+      final target = (await db.query(
+        'SELECT id FROM persona_history WHERE version=2',
+      )).single['id'];
+      await db.execute('DROP TRIGGER persona_history_no_update');
+      await db.execute(
+        'UPDATE persona_history SET encrypted_before=? WHERE version=2',
+        ['damaged'],
+      );
+      final response = await call(
+        'POST',
+        suffix: '/revert',
+        body: {'changeId': target, 'expectedVersion': 2, 'reason': 'Restore'},
+      );
+      expect(response.status, 500);
+      expect(response.json, {'error': 'internal'});
+      expect(json(await call('GET'))['version'], 2);
+      expect(await db.query('SELECT * FROM persona_history'), hasLength(2));
+    },
+  );
+
   test(
     'read does not initialize; explicit complete initialization persists encrypted card/history',
     () async {

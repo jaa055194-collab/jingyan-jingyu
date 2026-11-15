@@ -169,6 +169,12 @@ abstract final class Routes {
       '$prefix/ai-profiles/{aiId}/persona/initialize';
   static const String aiPersonaLock = '$prefix/ai-profiles/{aiId}/persona/lock';
 
+  /// Current operator's bounded change history and full-snapshot restoration.
+  static const String aiPersonaHistory =
+      '$prefix/ai-profiles/{aiId}/persona/history';
+  static const String aiPersonaRevert =
+      '$prefix/ai-profiles/{aiId}/persona/revert';
+
   /// WebSocket 长连接（通知与实时事件）。
   static const String stream = '$prefix/stream';
 }
