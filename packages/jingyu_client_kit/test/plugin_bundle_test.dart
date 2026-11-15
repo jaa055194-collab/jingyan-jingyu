@@ -256,4 +256,60 @@ void main() {
       expect(b.isApiCompatible(2), isFalse);
     });
   });
+
+  group('路径安全（复审修复）', () {
+    Map<String, Object?> base() => {
+          'id': 'jingyu.a.b',
+          'name': 'a',
+          'version': '1.0.0',
+          'apiVersion': 1,
+          'plugins': [
+            {'runtime': 'webview', 'entry': 'index.html'},
+          ],
+        };
+
+    test('icon / entry / configSchema / locales 不安全路径被拒', () {
+      expect(
+          () => PluginBundle.fromJson({...base(), 'icon': '../evil.svg'}),
+          throwsFormatException);
+      expect(
+          () => PluginBundle.fromJson({
+                ...base(),
+                'locales': {'zh': '/abs.json'},
+              }),
+          throwsFormatException);
+      expect(
+          () => PluginBundle.fromJson({
+                ...base(),
+                'plugins': [
+                  {'runtime': 'webview', 'entry': '../e.html'},
+                ],
+              }),
+          throwsFormatException);
+      expect(
+          () => PluginBundle.fromJson({
+                ...base(),
+                'plugins': [
+                  {
+                    'runtime': 'webview',
+                    'entry': 'index.html',
+                    'configSchema': 'C:/x.json',
+                  },
+                ],
+              }),
+          throwsFormatException);
+    });
+
+    test('plugins[].id 大小写不敏感去重', () {
+      expect(
+          () => PluginBundle.fromJson({
+                ...base(),
+                'plugins': [
+                  {'runtime': 'webview', 'entry': 'a.html', 'id': 'Abc'},
+                  {'runtime': 'webview', 'entry': 'b.html', 'id': 'abc'},
+                ],
+              }),
+          throwsFormatException);
+    });
+  });
 }

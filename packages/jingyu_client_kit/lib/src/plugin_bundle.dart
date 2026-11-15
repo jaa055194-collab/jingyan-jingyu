@@ -10,6 +10,8 @@ library;
 
 import 'package:pub_semver/pub_semver.dart';
 
+import 'plugin_package.dart';
+
 /// 插件运行档位（v3 三档信任）。
 enum PluginRuntime {
   /// 客户端 WebView / JS 沙箱插件。
@@ -79,12 +81,18 @@ class PluginBundleEntry {
     if (runtime != PluginRuntime.declarative && (entry is! String || entry.isEmpty)) {
       throw FormatException('${runtime.name} 插件必须提供 entry');
     }
+    if (entry is String) {
+      _requireSafeRelativePath(entry, 'plugins[].entry');
+    }
 
     final slots = _stringList(json['slots'], 'slots');
     final permissions = _stringList(json['permissions'], 'permissions');
     final configSchema = json['configSchema'];
-    if (configSchema != null && configSchema is! String) {
-      throw const FormatException('plugins[].configSchema 必须是字符串');
+    if (configSchema != null) {
+      if (configSchema is! String) {
+        throw const FormatException('plugins[].configSchema 必须是字符串');
+      }
+      _requireSafeRelativePath(configSchema, 'plugins[].configSchema');
     }
 
     final network = json['network'] ?? 'deny';
@@ -252,8 +260,9 @@ class PluginBundle {
     }
 
     final icon = json['icon'];
-    if (icon != null && icon is! String) {
-      throw const FormatException('icon 必须是字符串');
+    if (icon != null) {
+      if (icon is! String) throw const FormatException('icon 必须是字符串');
+      _requireSafeRelativePath(icon, 'icon');
     }
 
     final locales = <String, String>{};
@@ -266,6 +275,7 @@ class PluginBundle {
         if (k is! String || k.isEmpty || v is! String || v.isEmpty) {
           throw const FormatException('locales 的键与值都必须是非空字符串');
         }
+        _requireSafeRelativePath(v, 'locales.$k');
         locales[k] = v;
       }
     }
@@ -281,8 +291,8 @@ class PluginBundle {
       final entry = PluginBundleEntry.fromJson(
           raw.map((k, v) => MapEntry(k.toString(), v)));
       final entryId = entry.id;
-      if (entryId != null && !seenIds.add(entryId)) {
-        throw FormatException('bundle 内插件 id 重复', entryId);
+      if (entryId != null && !seenIds.add(entryId.toLowerCase())) {
+        throw FormatException('bundle 内插件 id 重复（不区分大小写）', entryId);
       }
       plugins.add(entry);
     }
@@ -371,4 +381,15 @@ List<String> _stringList(Object? value, String field) {
     out.add(element);
   }
   return out;
+}
+
+/// 要求一个相对、可安全解压的路径（复用包校验的路径规则）；否则抛 [FormatException]。
+/// 拦截绝对路径、盘符、`..`、Windows 尾点/尾空格与保留设备名。
+String _requireSafeRelativePath(String raw, String field) {
+  final safe = sanitizePackageEntryPath(raw);
+  if (safe == null) {
+    throw FormatException(
+        '$field 路径不安全（绝对路径/盘符/.. /Windows 保留名）', raw);
+  }
+  return safe;
 }
