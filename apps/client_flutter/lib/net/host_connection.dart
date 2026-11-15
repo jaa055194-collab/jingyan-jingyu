@@ -26,6 +26,8 @@ class HostConnection {
     Map<String, Object?>? body,
     Map<String, String>? query,
     bool retryAuthentication = true,
+    // Opt in only for routes whose successful response has no JSON entity.
+    bool allowEmptySuccess = false,
   }) async {
     final attemptedToken = _token;
     final req = await client
@@ -51,6 +53,7 @@ class HostConnection {
           body: body,
           query: query,
           retryAuthentication: false,
+          allowEmptySuccess: allowEmptySuccess,
         );
       }
     }
@@ -80,6 +83,7 @@ class HostConnection {
         Failure(failureCode, '宿主请求失败 (${response.statusCode})'),
       );
     }
+    if (allowEmptySuccess && text.isEmpty) return <String, Object?>{};
     final decoded = jsonDecode(text);
     if (decoded is! Map<String, dynamic>) throw const FormatException('宿主响应无效');
     return decoded.cast<String, Object?>();

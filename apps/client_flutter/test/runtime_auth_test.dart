@@ -96,6 +96,23 @@ class Fixture {
   }
 }
 
+Future<void> initializeAndSettleRefresh(ClientRuntime runtime) async {
+  final refreshed = Completer<void>();
+  void listener() {
+    if (runtime.online && !refreshed.isCompleted) refreshed.complete();
+  }
+
+  runtime.addListener(listener);
+  try {
+    await runtime.initialize();
+    if (runtime.authenticated) {
+      await refreshed.future.timeout(const Duration(seconds: 5));
+    }
+  } finally {
+    runtime.removeListener(listener);
+  }
+}
+
 Future<void> nativeLogout() async {
   final done = Completer<void>();
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -293,20 +310,78 @@ void main() {
     }
   });
   test('transient rotation store failure retries the same pair without refreshing invalidated token', () async {
-    final f=await Fixture.create();f.secure=jsonEncode(f.session());final listed=Completer<void>();var refreshes=0,stores=0;final sent=<String>[];
-    f.beforeStore=()async{stores++;if(stores==1)throw PlatformException(code:'temporary_store_failure');};
-    f.serve=(r)async{final path=r.uri.path;final text=await utf8.decoder.bind(r).join();
-      if(path.endsWith('/auth/refresh')){refreshes++;if(refreshes==1){await f.reply(r,{'deviceId':'phone','accessToken':'rotated-access','refreshToken':'rotated-refresh'});}else{await f.reply(r,{'error':'unauthenticated'},status:401);}return;}
-      if(path.endsWith('/messages')){
-        if(r.headers.value(HttpHeaders.authorizationHeader)=='Bearer rotated-access'){sent.add((jsonDecode(text) as Map)['clientMsgId'] as String);await f.reply(r,{});}else{await f.reply(r,{'error':'unauthenticated'},status:401);}return;
-      }
-      if(path.endsWith('/host')){await f.reply(r,{'error':'forbidden'},status:403);}else{await f.reply(r,{'conversations':[]});if(path.endsWith('/direct-conversations')&&!listed.isCompleted)listed.complete();}
+    final f = await Fixture.create();
+    f.secure = jsonEncode(f.session());
+    final listed = Completer<void>();
+    var refreshes = 0, stores = 0;
+    final sent = <String>[];
+    f.beforeStore = () async {
+      stores++;
+      if (stores == 1) throw PlatformException(code: 'temporary_store_failure');
     };
-    final runtime=ClientRuntime();try{await runtime.initialize();await listed.future.timeout(const Duration(seconds:5));final id=await runtime.shell.enqueue('conversation-a',MessageKind.text,{'text':'private'});
-      expect((await runtime.shell.flush()).remaining,1);
-      expect((await runtime.shell.flush()).remaining,0);
-      expect(refreshes,1);expect(stores,2);expect(sent,[id]);expect(f.secure,contains('rotated-refresh'));
-    }finally{runtime.dispose();await f.cleanup();}
+    f.serve = (r) async {
+      final path = r.uri.path;
+      final text = await utf8.decoder.bind(r).join();
+      if (path.endsWith('/auth/refresh')) {
+        refreshes++;
+        if (refreshes == 1) {
+          await f.reply(r, {
+            'deviceId': 'phone',
+            'accessToken': 'rotated-access',
+            'refreshToken': 'rotated-refresh',
+          });
+        } else {
+          await f.reply(r, {'error': 'unauthenticated'}, status: 401);
+        }
+        return;
+      }
+      if (path.endsWith('/messages')) {
+        if (r.headers.value(HttpHeaders.authorizationHeader) ==
+            'Bearer rotated-access') {
+          sent.add((jsonDecode(text) as Map)['clientMsgId'] as String);
+          await f.reply(r, {});
+        } else {
+          await f.reply(r, {'error': 'unauthenticated'}, status: 401);
+        }
+        return;
+      }
+      if (path.endsWith('/host')) {
+        await f.reply(r, {'error': 'forbidden'}, status: 403);
+      } else {
+        await f.reply(r, {'conversations': []});
+        if (path.endsWith('/direct-conversations') && !listed.isCompleted) {
+          listed.complete();
+        }
+      }
+    };
+    final runtime = ClientRuntime();
+    final initialRefresh = Completer<void>();
+    runtime.addListener(() {
+      if (runtime.online && !initialRefresh.isCompleted) {
+        initialRefresh.complete();
+      }
+    });
+    try {
+      await runtime.initialize();
+      await listed.future.timeout(const Duration(seconds: 5));
+      // The HTTP response closes before the runtime's initial background flush.
+      // Wait for its completion notification before testing manual retries.
+      await initialRefresh.future.timeout(const Duration(seconds: 5));
+      final id = await runtime.shell.enqueue(
+        'conversation-a',
+        MessageKind.text,
+        {'text': 'private'},
+      );
+      expect((await runtime.shell.flush()).remaining, 1);
+      expect((await runtime.shell.flush()).remaining, 0);
+      expect(refreshes, 1);
+      expect(stores, 2);
+      expect(sent, [id]);
+      expect(f.secure, contains('rotated-refresh'));
+    } finally {
+      runtime.dispose();
+      await f.cleanup();
+    }
   });
   test('failed token refresh preserves outbox id instead of dropping private message', () async {
     final f = await Fixture.create();
@@ -388,4 +463,151 @@ void main() {
       }
     },
   );
+  test(
+    'enterChat persists chat access without marking world setup complete',
+    () async {
+      final f = await Fixture.create();
+      f.secure = jsonEncode({
+        ...f.session(),
+        'onboarded': false,
+        'chatEntered': false,
+      });
+      final runtime = ClientRuntime();
+      try {
+        await initializeAndSettleRefresh(runtime);
+        expect(runtime.chatEntered, isFalse);
+        expect(runtime.onboarded, isFalse);
+        final protectedBefore = f.secure;
+        await runtime.enterChat();
+        expect(runtime.error, isNull);
+        expect(runtime.chatEntered, isTrue);
+        expect(runtime.onboarded, isFalse);
+        expect(f.secure, protectedBefore);
+        expect((await runtime.storage.read())['chatEntered'], isTrue);
+      } finally {
+        runtime.dispose();
+        await f.cleanup();
+      }
+    },
+  );
+  test(
+    'locked session cannot defer world setup or change protected session',
+    () async {
+      final f = await Fixture.create();
+      f.secure = jsonEncode({...f.session(), 'onboarded': false});
+      final runtime = ClientRuntime();
+      try {
+        await initializeAndSettleRefresh(runtime);
+        await runtime.appLock.enable('1234');
+        runtime.appLock.lock();
+        final before = f.secure;
+        await runtime.enterChat();
+        expect(runtime.chatEntered, isFalse);
+        expect(f.secure, before);
+        expect(runtime.error, isNotNull);
+      } finally {
+        runtime.dispose();
+        await f.cleanup();
+      }
+    },
+  );
+  test('restored deferred session keeps world setup pending', () async {
+    final f = await Fixture.create();
+    f.secure = jsonEncode({...f.session(), 'onboarded': false});
+    final snapshot = await AccountSnapshots(f.root)
+        .open(Uri.parse(f.origin), 'alice', 'phone');
+    await snapshot.write({'chatEntered': true});
+    final runtime = ClientRuntime();
+    try {
+      await initializeAndSettleRefresh(runtime);
+      expect(runtime.authenticated, isTrue);
+      expect(runtime.chatEntered, isTrue);
+      expect(runtime.onboarded, isFalse);
+    } finally {
+      runtime.dispose();
+      await f.cleanup();
+    }
+  });
+  test('deferred chat choice is isolated by host account and device', () async {
+    final f = await Fixture.create();
+    final snapshots = AccountSnapshots(f.root);
+    final selected = await snapshots.open(
+      Uri.parse(f.origin),
+      'alice',
+      'phone',
+    );
+    await selected.write({'chatEntered': true});
+    final otherHost = await snapshots.open(
+      Uri.parse('http://localhost:${f.server.port}'),
+      'alice',
+      'phone',
+    );
+    expect((await otherHost.read())['chatEntered'], isNull);
+    for (final identity in [
+      (Uri.parse(f.origin), 'bob', 'phone'),
+      (Uri.parse(f.origin), 'alice', 'tablet'),
+    ]) {
+      f.secure = jsonEncode({
+        ...f.session(),
+        'host': identity.$1.toString(),
+        'accountId': identity.$2,
+        'deviceId': identity.$3,
+        'onboarded': false,
+      });
+      final runtime = ClientRuntime();
+      try {
+        await initializeAndSettleRefresh(runtime);
+        expect(runtime.chatEntered, isFalse);
+      } finally {
+        runtime.dispose();
+      }
+    }
+    await f.cleanup();
+  });
+  test(
+    'terminal rejected refresh cannot defer or persist chat access',
+    () async {
+      final f = await Fixture.create();
+      f.secure = jsonEncode({...f.session(), 'onboarded': false});
+      final rejected = Completer<void>();
+      f.serve = (request) async {
+        await request.drain<void>();
+        if (request.uri.path.endsWith('/auth/refresh')) {
+          await f.reply(request, {'error': 'unauthenticated'}, status: 401);
+        } else {
+          await f.reply(request, {'error': 'unauthenticated'}, status: 401);
+        }
+      };
+      final runtime = ClientRuntime();
+      runtime.addListener(() {
+        if (runtime.error != null && !rejected.isCompleted) rejected.complete();
+      });
+      try {
+        await runtime.initialize();
+        await rejected.future.timeout(const Duration(seconds: 5));
+        final before = f.secure;
+        await runtime.enterChat();
+        expect(runtime.authenticated, isFalse);
+        expect(runtime.chatEntered, isFalse);
+        expect((await runtime.storage.read())['chatEntered'], isNot(true));
+        expect(f.secure, before);
+      } finally {
+        runtime.dispose();
+        await f.cleanup();
+      }
+    },
+  );
+  test('enterChat without a session stays gated', () async {
+    final f = await Fixture.create();
+    final runtime = ClientRuntime();
+    try {
+      await initializeAndSettleRefresh(runtime);
+      await runtime.enterChat();
+      expect(runtime.error, isNotNull);
+      expect(runtime.chatEntered, isFalse);
+    } finally {
+      runtime.dispose();
+      await f.cleanup();
+    }
+  });
 }

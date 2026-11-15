@@ -25,7 +25,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Future<void> _secureTail = Future<void>.value();
   ClientCredentials? _credentials;
   ({int generation, ClientCredentials source, ClientCredentials rotated})?
-      _pendingRenewal;
+  _pendingRenewal;
   int _generation = 0;
   bool _disposed = false;
   bool _switching = false;
@@ -39,6 +39,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Map<String, Object?> preferences = {};
   List<ShellConversation> _conversations = [];
   bool _ready = false, _busy = false, _online = false, _onboarded = false;
+  bool _chatEntered = false;
+  bool _sessionRejected = false;
   bool _controllersReady = false;
   String? _error, _selected, _preview;
   String _draft = '';
@@ -47,9 +49,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   @override
   bool get busy => _busy;
   @override
-  bool get onboarded => _onboarded;
+  bool get onboarded => _onboarded && !_sessionRejected;
   @override
-  String? get connectedAccountId => _credentials?.accountId;
+  bool get chatEntered => _chatEntered;
+  @override
+  String? get connectedAccountId =>
+      _sessionRejected ? null : _credentials?.accountId;
   @override
   bool get locked => _controllersReady && appLock.isLocked;
   @override
@@ -162,6 +167,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           _publishSnapshot(prepared);
           connection = _newConnection(credentials, generation);
           _onboarded = decoded['onboarded'] == true;
+          _chatEntered = _chatEntered || _onboarded;
         } on FormatException {
           // Old unscoped credentials are not paired with private legacy data.
           _error = '旧登录记录缺少账号或设备身份，请重新登录；本地旧数据保持不变';
@@ -291,7 +297,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   ) async {
     try {
       final pending = _pendingRenewal;
-      final rotated = pending != null &&
+      final rotated =
+          pending != null &&
               pending.generation == generation &&
               identical(pending.source, current)
           ? pending.rotated
@@ -301,8 +308,16 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       }
       // The host already rotated its pair. Retain it in memory if protected
       // storage temporarily fails; refreshing the previous token cannot recover.
-      _pendingRenewal = (generation: generation, source: current, rotated: rotated);
-      if (!await _storeCredentials(rotated, generation, onboarded: _onboarded)) {
+      _pendingRenewal = (
+        generation: generation,
+        source: current,
+        rotated: rotated,
+      );
+      if (!await _storeCredentials(
+        rotated,
+        generation,
+        onboarded: _onboarded,
+      )) {
         return false;
       }
       if (!_current(generation) || !identical(_credentials, current)) {
@@ -313,8 +328,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       connection?.updateAccessToken(rotated.accessToken);
       _submissionTransport?.updateAccessToken(rotated.accessToken);
       return true;
-    } catch (_) {
+    } catch (error) {
       if (_current(generation)) {
+        if (error is HostRequestException &&
+            error.failure.code == FailureCode.unauthenticated) {
+          _sessionRejected = true;
+          _chatEntered = false;
+        }
         _online = false;
         _error = '登录验证失败，请重新登录；待发送消息已保留';
         notifyListeners();
@@ -357,7 +377,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     try {
       await next.initialize();
       await nextConsent.initialize();
-      return _PreparedSnapshot(snapshot, next, nextConsent, transport);
+      final saved = await snapshot.read();
+      return _PreparedSnapshot(
+        snapshot,
+        next,
+        nextConsent,
+        transport,
+        credentials != null && saved['chatEntered'] == true,
+      );
     } catch (_) {
       await transport?.close();
       rethrow;
@@ -369,6 +396,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     storage = prepared.storage;
     shell = prepared.shell;
     consent = prepared.consent;
+    _chatEntered = prepared.chatEntered;
     _controllersReady = true;
   }
 
@@ -387,6 +415,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     connection = null;
     _submissionTransport = null;
     _onboarded = false;
+    _chatEntered = false;
     _online = false;
     _conversations = [];
     _selected = null;
@@ -569,6 +598,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       final oldPlugins = plugins;
       ++_generation;
       _credentials = credentials;
+      _sessionRejected = false;
       _pendingRenewal = null;
       _renewWork = null;
       _refreshWork = null;
@@ -591,6 +621,26 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _switching = false;
     }
     await _refresh();
+  });
+
+  /// Enter the existing chat shell before optional world setup. Requires a
+  /// published authenticated session; it never marks world setup complete.
+  @override
+  Future<void> enterChat() => _run(() async {
+    final credentials = _credentials;
+    if (credentials == null || _sessionRejected || locked) {
+      throw const FormatException('请先解锁应用并连接宿主登录');
+    }
+    final generation = _generation;
+    final sessionStorage = storage;
+    await writeClientSection(sessionStorage, 'chatEntered', true);
+    if (!_current(generation) ||
+        locked ||
+        !identical(storage, sessionStorage)) {
+      return;
+    }
+    _chatEntered = true;
+    notifyListeners();
   });
   @override
   Future<void> chooseCharacter(String characterId) => _run(() async {
@@ -718,9 +768,16 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 }
 
 class _PreparedSnapshot {
-  _PreparedSnapshot(this.storage, this.shell, this.consent, this.transport);
+  _PreparedSnapshot(
+    this.storage,
+    this.shell,
+    this.consent,
+    this.transport,
+    this.chatEntered,
+  );
   final FilePersistence storage;
   final ClientShellController shell;
   final ConversationConsentController consent;
   final HostConnection? transport;
+  final bool chatEntered;
 }

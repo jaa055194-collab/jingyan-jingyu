@@ -5,6 +5,12 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get ready;
   bool get busy;
   bool get onboarded;
+
+  /// True when an authenticated host session is available.
+  bool get authenticated => connectedAccountId != null;
+
+  /// True once the user chose to use chat before optional world setup.
+  bool get chatEntered;
   bool get locked;
   bool get online;
   String? get error;
@@ -29,6 +35,9 @@ abstract class ShellViewModel extends ChangeNotifier {
     String deviceName = '',
     String accountId = '',
   });
+
+  /// Enter the existing chat shell without completing world setup.
+  Future<void> enterChat();
   Future<void> chooseCharacter(String characterId);
   Future<void> generateRoom(String preset);
   Future<void> confirmRoom();

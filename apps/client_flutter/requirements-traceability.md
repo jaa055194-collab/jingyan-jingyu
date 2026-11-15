@@ -26,6 +26,12 @@ Source: Issue #5, `docs/modules/M11-client-shell.md`, v4.2 FR-09/11/13/18/61. Ow
 - Logout invalidates in-flight login/refresh generations, closes both transports, unloads plugins, and orders protected clearing after earlier writes. Dispose prevents live activation; a valid already-in-flight protected save may finish for next launch.
 - A401 is retried after at most one single-flight refresh. If authentication remains unavailable, the outbox retains its original message ID. A transient secure-store failure retains the rotated pair in memory for a later persistence attempt on the same device, rather than reusing an invalidated refresh token.
 
+## Approved temporary chat-first workflow
+
+The owner approved deferring unavailable character/room setup: after real host authentication, an unlocked user can explicitly enter the existing chat shell. This is a local app flow increment atop PR #8, not a merge/release of that held draft. Character/room screens remain accessible from the World tab and still report unavailable host contracts honestly; `onboarded` is never set by deferral.
+
+The separate `chatEntered` choice is persisted only in the existing host/account/device snapshot. It does not rewrite credentials or change token rotation. New widget/runtime regressions cover the defer route, optional return to setup, unauthenticated and locked denial, credential nonmutation, restart, and identity isolation. See [harness evidence and limitations](evidence/chat-first-harness.md): the current PNGs are headless renders, not native exact-baseline captures; visual and actual-host acceptance remain incomplete.
+
 ## Remaining integration
 
 1. Complete character/room host contracts and RoomGenerator persistence; do not mark onboarding complete before then.
