@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -469,6 +470,143 @@ void main() {
         attachmentId: attachmentId,
       );
       expect(again.failureOrNull?.code, FailureCode.notFound);
+    });
+
+    Future<List<Result<Map<String, Object?>>>> raceInitiations(
+      String account,
+    ) async {
+      const attempts = 8;
+      var probes = 0;
+      final ready = Completer<void>();
+      Future<({int freeBytes, int totalBytes})> synchronizedDisk() async {
+        if (++probes == attempts) ready.complete();
+        // Align requests before admission without replacing the real database.
+        await ready.future;
+        return ampleDisk();
+      }
+
+      final services = List.generate(
+        2,
+        (_) => AttachmentService(
+          database: db,
+          cipher: cipher,
+          mediaDir: mediaDir,
+          clock: clock,
+          diskSpace: synchronizedDisk,
+        ),
+      );
+      return Future.wait([
+        for (var i = 0; i < attempts; i++)
+          services[i % services.length].initiateUpload(
+            ownerAccountId: account,
+            mime: 'text/plain',
+            size: 1,
+            kind: 'text',
+          ),
+      ]);
+    }
+
+    test('B-6 concurrent service instances admit only three pending uploads',
+        () async {
+      final results = await raceInitiations(owner);
+      expect(results.where((result) => result.isOk), hasLength(3));
+      expect(
+        results.where(
+          (result) => result.failureOrNull?.code == FailureCode.rateLimited,
+        ),
+        hasLength(5),
+      );
+      final pending = await db.query(
+        "SELECT id FROM attachment_uploads "
+        "WHERE owner_account_id = ? AND status = 'pending'",
+        [owner],
+      );
+      expect(pending, hasLength(3));
+      expect(
+        results
+            .where((result) => result.isOk)
+            .map((result) => result.value['uploadId'])
+            .toSet(),
+        hasLength(3),
+      );
+    });
+
+    test('B-6 a full owner does not consume another accounts upload slots',
+        () async {
+      for (var i = 0; i < 3; i++) {
+        final result = await service.initiateUpload(
+          ownerAccountId: owner,
+          mime: 'text/plain',
+          size: 1,
+          kind: 'text',
+        );
+        expect(result.isOk, isTrue);
+      }
+      final results = await raceInitiations('acct-other');
+      expect(results.where((result) => result.isOk), hasLength(3));
+      expect(
+        results.where(
+          (result) => result.failureOrNull?.code == FailureCode.rateLimited,
+        ),
+        hasLength(5),
+      );
+      for (final account in [owner, 'acct-other']) {
+        expect(
+          await db.query(
+            "SELECT id FROM attachment_uploads "
+            "WHERE owner_account_id = ? AND status = 'pending'",
+            [account],
+          ),
+          hasLength(3),
+        );
+      }
+    });
+
+    test('B-6 completing an upload makes exactly one slot reusable', () async {
+      final uploadIds = <String>[];
+      for (var i = 0; i < 3; i++) {
+        final result = await service.initiateUpload(
+          ownerAccountId: owner,
+          mime: 'text/plain',
+          size: 1,
+          kind: 'text',
+        );
+        expect(result.isOk, isTrue);
+        uploadIds.add(result.value['uploadId'] as String);
+      }
+      final chunk = await service.uploadChunk(
+        ownerAccountId: owner,
+        uploadId: uploadIds.first,
+        index: 0,
+        bytes: [120],
+      );
+      expect(chunk.isOk, isTrue);
+      final completed = await service.completeUpload(
+        ownerAccountId: owner,
+        uploadId: uploadIds.first,
+      );
+      expect(completed.isOk, isTrue);
+      final results = await raceInitiations(owner);
+      expect(results.where((result) => result.isOk), hasLength(1));
+      expect(
+        results.where(
+          (result) => result.failureOrNull?.code == FailureCode.rateLimited,
+        ),
+        hasLength(7),
+      );
+      expect(
+        await db.query(
+          "SELECT id FROM attachment_uploads "
+          "WHERE owner_account_id = ? AND status = 'pending'",
+          [owner],
+        ),
+        hasLength(3),
+      );
+      final status = await db.query(
+        'SELECT status FROM attachment_uploads WHERE id = ?',
+        [uploadIds.first],
+      );
+      expect(status.single['status'], 'completed');
     });
 
     test('quota rejection returns budgetExhausted', () async {

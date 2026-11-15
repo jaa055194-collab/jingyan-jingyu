@@ -153,36 +153,40 @@ class AttachmentService {
     );
     if (decision.isErr) return Err(decision.failureOrNull!);
 
-    final pending = await _database.query(
-      "SELECT COUNT(*) AS c FROM attachment_uploads "
-      "WHERE owner_account_id = ? AND status = 'pending'",
-      [ownerAccountId],
-    );
-    if ((pending.single['c'] as int) >= _maxPendingUploadsPerAccount) {
-      return err(FailureCode.rateLimited, 'too many pending uploads');
-    }
+    // Reserve the slot atomically across requests and service instances. Keep
+    // the disk probe outside this transaction so it does not hold the DB lock.
+    return _database.transaction((tx) async {
+      final pending = await tx.query(
+        "SELECT COUNT(*) AS c FROM attachment_uploads "
+        "WHERE owner_account_id = ? AND status = 'pending'",
+        [ownerAccountId],
+      );
+      if ((pending.single['c'] as int) >= _maxPendingUploadsPerAccount) {
+        return err(FailureCode.rateLimited, 'too many pending uploads');
+      }
 
-    final id = validateId(_newId(), kind: 'upload');
-    await _database.execute(
-      'INSERT INTO attachment_uploads('
-      'id, owner_account_id, conversation_id, kind, mime, declared_size, '
-      'received_bytes, next_chunk, status, created_at'
-      ') VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)',
-      [
-        id,
-        ownerAccountId,
-        conversationId,
-        kind,
-        trimmedMime,
-        size,
-        'pending',
-        clock.now().toUtc().toIso8601String(),
-      ],
-    );
-    final advertised = decision.value.chunkSizeBytes < _transportChunkBytes
-        ? decision.value.chunkSizeBytes
-        : _transportChunkBytes;
-    return Ok(<String, Object?>{'uploadId': id, 'chunkSize': advertised});
+      final id = validateId(_newId(), kind: 'upload');
+      await tx.execute(
+        'INSERT INTO attachment_uploads('
+        'id, owner_account_id, conversation_id, kind, mime, declared_size, '
+        'received_bytes, next_chunk, status, created_at'
+        ') VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)',
+        [
+          id,
+          ownerAccountId,
+          conversationId,
+          kind,
+          trimmedMime,
+          size,
+          'pending',
+          clock.now().toUtc().toIso8601String(),
+        ],
+      );
+      final advertised = decision.value.chunkSizeBytes < _transportChunkBytes
+          ? decision.value.chunkSizeBytes
+          : _transportChunkBytes;
+      return Ok(<String, Object?>{'uploadId': id, 'chunkSize': advertised});
+    });
   }
 
   /// 上传一个分片。index 必须等于 next_chunk；重发 next_chunk-1 且大小一致为
