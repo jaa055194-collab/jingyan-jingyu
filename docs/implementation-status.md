@@ -8,6 +8,10 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 
 ## 本分支增量
 
+- Outbox.flush增加每实例single-flight：重叠调用共享首调用的submit/onDropped和report/error，不再并发读取同一head然后删错队首；transient保持显式下一次重试，throw后释放guard。原FIFO/永久失败drop/追加期间继续drain语义不变。12个确定性并发/错误/reentry测试与全client44通过；未接真实持久化/Flutter，callback不得await自身阻塞的flight。
+- OutboxItem构造时为JSON map/list建立独立只读容器快照，调用方后改source或试图改items/submit看到的容器不再改变相同clientMsgId的重试内容。ID/time/attempts/restoreidentity保留；custom非容器leaf仍同对象，序列化与校验仍交既有encoder；非JSONcycle用memo保持有限构造，不冒称可序列化。7项snapshot与全client39通过，未接持久化/Flutter/并发flight改动。
+- protocol整数解码在double转换前拒绝非finite值，合法JSON `1e999`解析为Infinity后不再toInt抛异常，而返既有invalidArgument。有限整值double仍兼容，不扩展数值范围/序号/schema规则；13新增+原9=22项protocol测试与分析通过。当前无生产decoder调用点，不宣称已证明远程host攻击路径。
+
 - 插件激活期复用受限上下文，保持私有内存状态；能力不可变快照，失败激活/停用后上下文失效。并发激活按实例隔离贡献并预留ID；停用立即撤销上下文，未结束的激活完成后清理资源并防止复活。若激活永不结束，宿主无法强制执行其清理。公开签名不变，不承诺跨重启保存。
 - M12 配额与并发许可纯策略，边界测试覆盖；未接入真实上传、清理或备份。
 - Migration 200 与 `SqliteMessageStore`：正文 AES-GCM（AAD含消息id）、事务 seq/幂等、分页、设备ack、重启持久化。MessageStore仍是内部可信仓储，权限由服务器成员策略执行。
@@ -33,6 +37,12 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 - 客户端本地消息缓存：`jingyu_client_kit` 新增纯 Dart `LocalMessageCache`（按账号/会话/seq 有序、同身份编辑覆盖、冲突身份拒绝、深不可变正文、撤回终态、分页、账号隔离、版本化快照原子导入导出）；旧页和旧快照不复活已知撤回正文，损坏快照不清空现有数据。不落盘，加密持久化与服务端授权由外壳负责。
 - 插件包安全校验：`jingyu_client_kit` 新增纯 Dart `validatePluginPackage`（基于 archive 解压校验 + crypto sha256 完整性；zip-slip/zip-bomb/条目数/体积/压缩比/重复/符号链接/清单严格解析/JSON 深度；不读文件系统、不改既有插件接口），附契约测试；未接入 M11 安装 UI 与真实签名。
 
+## 管理员审计envelope读取
+
+默认AdminAuditModule提供`GET /api/v1/admin/audit?afterId=0&limit=50`，每页最多100，升序主键游标与ID以十进制字符串返回。Access.admin之外，在同一Tx中重新验证hash对应的当前设备、账号、access expiry、refresh行存在及active human admin，然后只选择id/at/actorId/action/targetKind/targetId；不选择meta、不读取旧正文、不更改审计写入接口或schema。默认真实宿主已认证smoke、权限失效/同Tx撤销、边界分页/精度/错误参数/不改审计与重启测试已覆盖。
+
+这是FR07全局审计的有限后端子集，不是完整管理UI/全部来源/筛选导出或删除保留政策；既有A8历史正文路由与此分开。游标只遍历当前记录（INTEGER PRIMARY KEY可被删除后重用），不是永久复制/防篡改保证。正常认证仍会更新设备last_used_at，既有账号鉴权加载行为和BEGIN IMMEDIATE事务锁未改。
+
 ## 验证
 
 局部31项持久消息/成员/路由/历史/迁移测试已通过。独立审查未发现本增量的严重问题，确认同Tx历史边界、服务器过滤及M02差异行持久化不会覆盖消息/社交数据。默认宿主端到端和最终全仓证据在PR描述及需求追踪中更新；旧版本的测试结果不代表后续提交通过。
@@ -40,6 +50,8 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 ## M05 模型配置与内部调用链
 
 `GET /api/v1/ai-profiles/{aiId}/usage` 为当前operator返回AI今日已记录token按层/能力汇总。拥有关系、显式offset与账本同Tx读取，计数用BigInt并以十进制字符串输出；旧日期未结算usage单独按能力标未知。即使额度耗尽或有pending仍可读，不作为模型放行凭据；不含周趋势、UI、费用、余额或provider历史归因，无新网络调用/账本写入。未配置/legacy空offset要求配置，不推断UTC。
+`GET /api/v1/ai-profiles/{aiId}/usage/trend` 为当前operator返回滚动七个已记录预算日（今日+前6日）token趋势。响应明确window=rolling7/basis=recordedBudgetDay，不冒充calendar/ISO本周；当前显式offset与服务端时钟定范围，不重分历史记录日；BigInt十进制字符串分层汇总并标日内/所有历史pending。无新模型调用或账本/配置/审计写入（正常认证仍可更新设备last_used_at）。无周趋势UI、费用/provider归因或历史预算利用率。
+管理员`GET /api/v1/admin/usage`返回basis=allRecordedLedgerRows累计已记录token、完整layer/capability decimal-string汇总与unknown标记。不含owner/profile/request IDs/正文/keys/费用；历史disabled或转归属记录仍计入，无budget/timezone依赖。同Tx实时hash/账号设备/expiry/refresh行/admin资格先于账本读。精确BigInt聚合需扫描materialize全账本（O(N)内存与工作），现有单连接BEGIN IMMEDIATE会占用DB队列；不是执行有界、计费、lifetime-ever或全平台用量保证。未改meter/schema/来源，正常鉴权仍touch设备。
 
 按认证账号隔离的provider CRUD与加密key存储（Migration500）仅返回掩码视图；501显式映射AiId档案与AI账号。502保存独立chat/chatFast绑定，禁用不改配置，有绑定provider删除返回conflict。503持久预算/usage账本，504原子配置显式时区；旧null时区要求配置，不默认UTC。认证注册已有AI、绑定、预算路由已挂默认宿主。
 
@@ -65,7 +77,13 @@ Migration301记录双向好友同意与拉黑；人类拉黑关系按canonical o
 
 Migration302独立私聊固定成员与canonical唯一账户对；好友同意后可打开私聊、发送及同步。拉黑后双方仍可读历史但不能发送，解除后重新同意才恢复。群与私聊策略按持久实体类型选择，共享ID歧义时全部拒绝，防消息仓储串读。真实HTTP/SQLite回归覆盖上述链路；Social启用好友时显式依赖accounts，注册重排不丢路由。
 
+## 会话置顶偏好（FR18后端子集）
+
+独立Migration306与GET/PUT `/api/v1/conversations/{conversationId}/preferences`保存当前账号自己的pinned bool。GET缺省false不建行，PUT只收pinned；账号活跃性、唯一group/direct类型、当前成员与读写同Tx，非成员/admin无越权，operator不能通过payload替AI改偏好。私聊沿固定成员读历史权限，不因拉黑/禁发帖剥夺自己偏好管理；退出群后保留不可读行，再次成为同一会话成员时恢复。既有会话列表payload与排序不变，无UI/免打扰/分组/主题，不能当完整FR18验收。
+
 ## 群管理与AI发言设置
+
+`PUT /api/v1/conversations/{conversationId}/name`仅当前active human群主且仍为成员时可改已有群名；认证账号/设备复核后，owner/member/active-kind与name-only UPDATE同Tx。沿create原始Dart长度≤100且trim非空，存trim值，无admin/operator绕过，legacy AI owner拒绝。原成员列表回读即见新名，无新migration/UI/头像/角色/通知。成功审计只记actor/group/action，不含旧新名字；审计仍是既有独立post-commit写，不保证与rename原子。
 
 群主可将所有权转给现有有效人类成员；非群主成员可退出，群主须先转让；群主可移除成员，operator可退出其当前持有的AI。成员身份撤销立即阻止群消息读写，joined历史群重新加入从新边界开始。认证群管理路由校验当前bearer账号与设备，非成员不获管理员越权。
 

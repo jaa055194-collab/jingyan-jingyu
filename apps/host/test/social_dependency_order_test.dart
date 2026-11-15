@@ -51,6 +51,7 @@ void main() {
         401,
       );
       for (final route in [
+        Routes.groupName,
         Routes.groupOwner,
         Routes.groupLeave,
         Routes.groupMember,
