@@ -314,4 +314,35 @@ void main() {
       expect(sanitizePackageEntryPath('a:b'), isNull);
     });
   });
+
+  group('安全加固（复审修复）', () {
+    test('Windows 尾点 / 保留设备名被拒', () {
+      for (final name in ['a.', 'dir/b.', 'CON', 'aux.txt', 'sub/NUL', 'com1']) {
+        expect(sanitizePackageEntryPath(name), isNull, reason: name);
+      }
+      expect(sanitizePackageEntryPath('console.txt'), 'console.txt');
+      expect(sanitizePackageEntryPath('assets/icon.svg'), 'assets/icon.svg');
+    });
+
+    test('plugin.json 的 license 为非字符串时返回 manifestInvalid 而非抛异常', () {
+      final r = validatePluginPackage(_zip([
+        _textFile(
+            'plugin.json',
+            '{"id":"a.b","name":"x","version":"1.0.0","apiVersion":1,"license":123}'),
+      ]));
+      expect(r.ok, isFalse);
+      expect(_has(r, PluginPackageIssueCode.manifestInvalid), isTrue);
+    });
+
+    test('符号链接在解码前被预扫拒绝（不进入解压）', () {
+      final link = ArchiveFile(
+          'evil-link', 0, Uint8List.fromList(utf8.encode('/etc/passwd')))
+        ..mode = 0xA1FF;
+      final bytes = _asUnixMade(
+          _zip([_textFile('plugin.json', _validManifest), link]), 'evil-link');
+      final r = validatePluginPackage(bytes);
+      expect(r.ok, isFalse);
+      expect(_has(r, PluginPackageIssueCode.symbolicLink), isTrue);
+    });
+  });
 }
