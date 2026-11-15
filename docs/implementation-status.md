@@ -32,6 +32,12 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 - 群成员列表：认证 `GET /conversations/{id}/members` 供当前成员列出成员（accountId、是否群主、加入时间）；非成员 404、匿名 401；身份只取 principal。
 - 客户端本地消息缓存：`jingyu_client_kit` 新增纯 Dart `LocalMessageCache`（按账号/会话/seq 有序、同身份编辑覆盖、冲突身份拒绝、深不可变正文、撤回终态、分页、账号隔离、版本化快照原子导入导出）；旧页和旧快照不复活已知撤回正文，损坏快照不清空现有数据。不落盘，加密持久化与服务端授权由外壳负责。
 
+## 管理员审计envelope读取
+
+默认AdminAuditModule提供`GET /api/v1/admin/audit?afterId=0&limit=50`，每页最多100，升序主键游标与ID以十进制字符串返回。Access.admin之外，在同一Tx中重新验证hash对应的当前设备、账号、access expiry、refresh行存在及active human admin，然后只选择id/at/actorId/action/targetKind/targetId；不选择meta、不读取旧正文、不更改审计写入接口或schema。默认真实宿主已认证smoke、权限失效/同Tx撤销、边界分页/精度/错误参数/不改审计与重启测试已覆盖。
+
+这是FR07全局审计的有限后端子集，不是完整管理UI/全部来源/筛选导出或删除保留政策；既有A8历史正文路由与此分开。游标只遍历当前记录（INTEGER PRIMARY KEY可被删除后重用），不是永久复制/防篡改保证。正常认证仍会更新设备last_used_at，既有账号鉴权加载行为和BEGIN IMMEDIATE事务锁未改。
+
 ## 验证
 
 局部31项持久消息/成员/路由/历史/迁移测试已通过。独立审查未发现本增量的严重问题，确认同Tx历史边界、服务器过滤及M02差异行持久化不会覆盖消息/社交数据。默认宿主端到端和最终全仓证据在PR描述及需求追踪中更新；旧版本的测试结果不代表后续提交通过。

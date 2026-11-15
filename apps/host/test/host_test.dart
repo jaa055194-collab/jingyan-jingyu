@@ -210,6 +210,7 @@ void main() {
         'system',
         'storage',
         'accounts',
+        'admin_audit',
         'messages',
         'attachments',
         'social',
