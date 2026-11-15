@@ -27,6 +27,20 @@
 - 上游：<https://github.com/dart-lang/path>
 - 用途：`archive` 的运行时传递依赖（路径处理），非本项目直接依赖。
 
+### pub_semver
+
+- 版本：2.2.1
+- 许可证：BSD-3-Clause
+- 上游：<https://github.com/dart-lang/tools/tree/main/pkgs/pub_semver>
+- 用途：解析插件 bundle 的语义化版本与依赖版本区间（`PluginBundle` / `PluginDependency`）。
+
+### collection（传递依赖）
+
+- 版本：随依赖解析（1.19.x）
+- 许可证：BSD-3-Clause
+- 上游：<https://github.com/dart-lang/collection>
+- 用途：`pub_semver` 的运行时传递依赖，非本项目直接依赖。
+
 ## 说明
 
 - 上述组件均以 Dart package 依赖方式使用，未修改其源代码。

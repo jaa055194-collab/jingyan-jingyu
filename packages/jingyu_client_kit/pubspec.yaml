@@ -9,6 +9,7 @@ environment:
 dependencies:
   archive: ^3.6.1
   crypto: ^3.0.3
+  pub_semver: ^2.2.1
   jingyu_core:
     path: ../jingyu_core
   jingyu_protocol:
