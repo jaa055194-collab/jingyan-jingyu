@@ -12,6 +12,7 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../audit/audit_log.dart';
 import 'attachments.dart';
+import 'accepted_message_observer.dart';
 import 'blind_index.dart';
 import 'favorites.dart';
 import 'message_store.dart';
@@ -671,6 +672,34 @@ class MessagesModule extends HostModule {
       );
     }
 
+    if (content.containsKey('mentionAccountIds')) {
+      final mentions = content['mentionAccountIds'];
+      var valid =
+          kind == MessageKind.text && mentions is List && mentions.length <= 1;
+      if (valid) {
+        for (final mention in mentions) {
+          try {
+            if (mention is! String) {
+              valid = false;
+              break;
+            }
+            AccountId.parse(mention);
+          } on FormatException {
+            valid = false;
+            break;
+          }
+        }
+      }
+      if (!valid) {
+        return HostResponse.failure(
+          const Failure(
+            FailureCode.invalidArgument,
+            'Invalid mention metadata',
+          ),
+        );
+      }
+    }
+
     // A message may reference an attachment (image/file/audio/…). The reference
     // is accepted only for the sender's own attachment uploaded to this same
     // conversation; membership for posting was already checked above.
@@ -714,6 +743,15 @@ class MessagesModule extends HostModule {
         );
       } catch (_) {
         // Search indexing must not fail an accepted send; a rebuild can repair it.
+      }
+    }
+    if (result.isOk && !result.value.duplicate) {
+      try {
+        await _services.maybeGet<AcceptedMessageObserver>()?.onAccepted(
+          result.value.message,
+        );
+      } catch (_) {
+        // Input is already committed. Optional local observers cannot undo it.
       }
     }
     return HostResponse.fromResult(
