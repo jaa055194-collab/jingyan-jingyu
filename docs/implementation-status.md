@@ -71,6 +71,10 @@ Migration301记录双向好友同意与拉黑；人类拉黑关系按canonical o
 
 Migration302独立私聊固定成员与canonical唯一账户对；好友同意后可打开私聊、发送及同步。拉黑后双方仍可读历史但不能发送，解除后重新同意才恢复。群与私聊策略按持久实体类型选择，共享ID歧义时全部拒绝，防消息仓储串读。真实HTTP/SQLite回归覆盖上述链路；Social启用好友时显式依赖accounts，注册重排不丢路由。
 
+## 会话置顶偏好（FR18后端子集）
+
+独立Migration306与GET/PUT `/api/v1/conversations/{conversationId}/preferences`保存当前账号自己的pinned bool。GET缺省false不建行，PUT只收pinned；账号活跃性、唯一group/direct类型、当前成员与读写同Tx，非成员/admin无越权，operator不能通过payload替AI改偏好。私聊沿固定成员读历史权限，不因拉黑/禁发帖剥夺自己偏好管理；退出群后保留不可读行，再次成为同一会话成员时恢复。既有会话列表payload与排序不变，无UI/免打扰/分组/主题，不能当完整FR18验收。
+
 ## 群管理与AI发言设置
 
 群主可将所有权转给现有有效人类成员；非群主成员可退出，群主须先转让；群主可移除成员，operator可退出其当前持有的AI。成员身份撤销立即阻止群消息读写，joined历史群重新加入从新边界开始。认证群管理路由校验当前bearer账号与设备，非成员不获管理员越权。
