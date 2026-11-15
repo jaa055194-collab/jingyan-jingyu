@@ -256,6 +256,62 @@ void main() {
     );
   });
 
+  final ownerStates = {
+    'disabled': "UPDATE account SET disabled = 1 WHERE id = 'alice'",
+    'nonhuman':
+        "UPDATE account SET kind = 'ai', password_hash = NULL WHERE id = 'alice'",
+  };
+  final ownerOperations = <String, Future<Result<Object?>> Function()>{
+    'get': () => alice.get(ai, chat),
+    'list': () => alice.list(ai),
+    'resolve': () => alice.resolve(ai, chat),
+    'set': () =>
+        alice.set(ai, chat, providerId: 'provider', model: 'replacement'),
+    'clear': () => alice.clear(ai, chat),
+  };
+  for (final state in ownerStates.entries) {
+    for (final operation in ownerOperations.entries) {
+      test('${state.key} owner cannot ${operation.key} bindings', () async {
+        await alice.set(ai, chat, providerId: 'provider', model: 'original');
+        final before = await db.query('SELECT * FROM model_bindings');
+        await db.execute(state.value);
+
+        final result = await operation.value();
+
+        expect(result.failureOrNull?.code, FailureCode.notFound);
+        expect(await db.query('SELECT * FROM model_bindings'), before);
+      });
+    }
+  }
+
+  test(
+    're-enabled human owner regains binding access without data loss',
+    () async {
+      await alice.set(ai, chat, providerId: 'provider', model: 'original');
+      await db.execute("UPDATE account SET disabled = 1 WHERE id = 'alice'");
+      expect(
+        (await alice.get(ai, chat)).failureOrNull?.code,
+        FailureCode.notFound,
+      );
+      await db.execute("UPDATE account SET disabled = 0 WHERE id = 'alice'");
+
+      expect((await alice.get(ai, chat)).value.model, 'original');
+      expect((await alice.resolve(ai, chat)).value.model, 'original');
+      expect((await alice.list(ai)).value.single.model, 'original');
+      expect(
+        (await alice.set(
+          ai,
+          chat,
+          providerId: 'provider',
+          model: 'updated',
+        )).value.model,
+        'updated',
+      );
+      expect((await alice.clear(ai, chat)).isOk, isTrue);
+      expect(await db.query('SELECT * FROM model_bindings'), isEmpty);
+    },
+  );
+
   test('missing mappings never implicitly register accounts', () async {
     final missing = AiId.parse('ai-account');
     expect(
