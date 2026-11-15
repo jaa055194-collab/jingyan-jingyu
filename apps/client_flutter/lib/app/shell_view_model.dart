@@ -14,6 +14,12 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get locked;
   bool get online;
   String? get error;
+  List<ShellOwnedAi> get ownAiAccounts;
+  String? get ownAiNotice;
+  Object? get ownAiSessionContext;
+  bool get ownAiLoaded;
+  Future<void> loadOwnAi();
+  Future<void> createOwnAi(String displayName);
   String? get selectedConversationId;
   List<ShellConversation> get conversations;
   List<ShellMessage> get messages;
@@ -63,6 +69,17 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> setThemeMode(ThemeMode value);
   Future<void> setFontScale(double value);
   void clearError();
+}
+
+class ShellOwnedAi {
+  const ShellOwnedAi({
+    required this.accountId,
+    required this.displayName,
+    required this.disabled,
+  });
+  final String accountId;
+  final String displayName;
+  final bool disabled;
 }
 
 class ShellConversation {

@@ -68,6 +68,63 @@ class SettingsScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            Text('我的 AI', style: Theme.of(context).textTheme.titleMedium),
+            const Text('仅管理你拥有的 AI 账户。回复仍需宿主配置；创建不会自动配置模型、社交等级或授权。'),
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton.icon(
+                  key: const Key('own-ai-refresh'),
+                  onPressed:
+                      model.authenticated &&
+                          model.online &&
+                          !model.locked &&
+                          !model.busy
+                      ? model.loadOwnAi
+                      : null,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('刷新我的 AI'),
+                ),
+                FilledButton.icon(
+                  key: const Key('own-ai-create'),
+                  onPressed:
+                      model.authenticated &&
+                          model.online &&
+                          !model.locked &&
+                          !model.busy
+                      ? () => showDialog<void>(
+                          context: context,
+                          builder: (_) => _CreateOwnAiDialog(model: model),
+                        )
+                      : null,
+                  icon: const Icon(Icons.add),
+                  label: const Text('创建 AI 账户'),
+                ),
+              ],
+            ),
+            if (model.authenticated && !model.locked) ...[
+              if (model.ownAiNotice != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: SelectableText(model.ownAiNotice!),
+                ),
+              if (model.ownAiAccounts.isEmpty)
+                Text(model.ownAiLoaded ? '你还没有 AI 账户。' : '尚未加载，请刷新我的 AI。'),
+              for (final ai in model.ownAiAccounts)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${ai.displayName} · ${ai.disabled ? "已停用" : "未停用"}',
+                      ),
+                      SelectableText(ai.accountId),
+                    ],
+                  ),
+                ),
+            ],
+            const Divider(height: 32),
             Text('隐私与安全', style: Theme.of(context).textTheme.titleMedium),
             SwitchListTile(
               title: const Text('应用锁'),
@@ -138,6 +195,131 @@ class SettingsScreen extends StatelessWidget {
         ),
       ),
     ],
+  );
+}
+
+class _CreateOwnAiDialog extends StatefulWidget {
+  const _CreateOwnAiDialog({required this.model});
+  final ShellViewModel model;
+  @override
+  State<_CreateOwnAiDialog> createState() => _CreateOwnAiDialogState();
+}
+
+class _CreateOwnAiDialogState extends State<_CreateOwnAiDialog> {
+  final input = TextEditingController();
+  final form = GlobalKey<FormState>();
+  late final String? account;
+  late final Object? sessionContext;
+  bool invalidated = false, saving = false;
+  @override
+  void initState() {
+    super.initState();
+    account = widget.model.connectedAccountId;
+    sessionContext = widget.model.ownAiSessionContext;
+  }
+
+  @override
+  void dispose() {
+    input.dispose();
+    super.dispose();
+  }
+
+  Future<void> submit() async {
+    final model = widget.model;
+    if (invalidated ||
+        saving ||
+        model.busy ||
+        model.ownAiSessionContext != sessionContext ||
+        !model.authenticated ||
+        model.locked ||
+        !model.online ||
+        form.currentState?.validate() != true) {
+      return;
+    }
+    setState(() => saving = true);
+    await model.createOwnAi(input.text);
+    if (!mounted || invalidated) return;
+    if (model.error == null && model.authenticated && !model.locked) {
+      Navigator.of(context).pop();
+    } else {
+      setState(() => saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: widget.model,
+    builder: (context, _) {
+      final model = widget.model;
+      if (!model.authenticated ||
+          model.locked ||
+          model.connectedAccountId != account ||
+          model.ownAiSessionContext != sessionContext) {
+        invalidated = true;
+      }
+      if (invalidated) {
+        return AlertDialog(
+          title: const Text('登录已变化或应用已锁定'),
+          content: const Text('已隐藏输入，请关闭后重新操作。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        );
+      }
+      return PopScope(
+        canPop: !saving,
+        child: AlertDialog(
+          title: const Text('创建 AI 账户'),
+          content: SingleChildScrollView(
+            child: Form(
+              key: form,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('仅创建当前账号拥有的独立 AI 账户，不自动开启回复。'),
+                  TextFormField(
+                    key: const Key('own-ai-name'),
+                    controller: input,
+                    autofocus: true,
+                    enabled: !saving && model.online,
+                    decoration: const InputDecoration(labelText: '显示名称'),
+                    validator: (value) =>
+                        value == null ||
+                            value.trim().isEmpty ||
+                            value.length > 100
+                        ? '请输入1–100个字符'
+                        : null,
+                    onFieldSubmitted: (_) => submit(),
+                  ),
+                  if (model.error != null)
+                    Text(
+                      model.error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  if (saving) const LinearProgressIndicator(),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              key: const Key('own-ai-confirm'),
+              onPressed: !saving && !model.busy && model.online ? submit : null,
+              child: const Text('创建'),
+            ),
+          ],
+        ),
+      );
+    },
   );
 }
 

@@ -12,6 +12,7 @@ import '../data/account_snapshots.dart';
 import '../net/account_auth.dart';
 import '../net/host_connection.dart';
 import '../net/group_api.dart';
+import '../net/own_ai_api.dart';
 import '../platform/native_platform.dart';
 import 'conversation_mapping.dart';
 import 'shell_view_model.dart';
@@ -39,6 +40,17 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Timer? reconnect;
   Map<String, Object?> preferences = {};
   List<ShellConversation> _conversations = [];
+  List<ShellOwnedAi> _ownAiAccounts = [];
+  String? _ownAiNotice;
+  bool _ownAiLoaded = false;
+  @override
+  Object? get ownAiSessionContext => authenticated ? _generation : null;
+  @override
+  bool get ownAiLoaded => _ownAiLoaded;
+  @override
+  List<ShellOwnedAi> get ownAiAccounts => List.unmodifiable(_ownAiAccounts);
+  @override
+  String? get ownAiNotice => _ownAiNotice;
   bool _ready = false, _busy = false, _online = false, _onboarded = false;
   bool _chatEntered = false;
   bool _sessionRejected = false;
@@ -351,6 +363,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         if (error is HostRequestException &&
             error.failure.code == FailureCode.unauthenticated) {
           _sessionRejected = true;
+          _ownAiAccounts = [];
+          _ownAiNotice = null;
           _chatEntered = false;
         }
         _online = false;
@@ -437,6 +451,9 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _chatEntered = false;
     _online = false;
     _conversations = [];
+    _ownAiAccounts = [];
+    _ownAiNotice = null;
+    _ownAiLoaded = false;
     _selected = null;
     _draft = '';
     appLock.lock();
@@ -631,6 +648,9 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _selected = null;
       _draft = '';
       _conversations = [];
+      _ownAiAccounts = [];
+      _ownAiNotice = null;
+      _ownAiLoaded = false;
       await Future.wait<void>([
         if (previous != null) previous.close(),
         if (submission != null) submission.close(),
@@ -715,6 +735,106 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       notifyListeners();
     }
   }
+
+  bool _ownAiContext(int generation, HostConnection session) =>
+      _current(generation) &&
+      authenticated &&
+      !locked &&
+      !_switching &&
+      identical(connection, session);
+
+  void _publishOwnAi(List<OwnedAiAccount> rows) {
+    _ownAiLoaded = true;
+    _ownAiAccounts = [
+      for (final row in rows)
+        ShellOwnedAi(
+          accountId: row.accountId,
+          displayName: row.displayName,
+          disabled: row.disabled,
+        ),
+    ];
+  }
+
+  void _ownAiFailure(
+    Object error,
+    int generation,
+    HostConnection session, {
+    bool creating = false,
+  }) {
+    if (!_ownAiContext(generation, session)) return;
+    if (error is HostRequestException) {
+      if (error.failure.code == FailureCode.unauthenticated) {
+        if (error.failure.details['authenticationRenewalFailed'] == true) {
+          _error = '登录续期暂不可用，请稍后重试';
+          return;
+        }
+        _sessionRejected = true;
+        _online = false;
+        _ownAiAccounts = [];
+        _ownAiNotice = null;
+        _ownAiLoaded = false;
+        _error = '登录验证已失效，请重新登录';
+        return;
+      }
+      if (const {
+        FailureCode.invalidArgument,
+        FailureCode.forbidden,
+        FailureCode.rateLimited,
+        FailureCode.notFound,
+        FailureCode.conflict,
+      }.contains(error.failure.code)) {
+        _error = error.failure.message;
+        return;
+      }
+    }
+    _error = creating ? 'AI账户创建未确认，可能已创建；请先刷新我的AI，勿重复创建' : '我的AI列表读取失败，请重试刷新';
+  }
+
+  @override
+  Future<void> loadOwnAi() => _run(() async {
+    _requireOnlineGroupSession();
+    final generation = _generation;
+    final session = connection!;
+    try {
+      final rows = await OwnAiApi(session).list();
+      if (!_ownAiContext(generation, session)) return;
+      _publishOwnAi(rows);
+      _ownAiNotice = null;
+    } catch (error) {
+      _ownAiFailure(error, generation, session);
+    }
+  });
+
+  @override
+  Future<void> createOwnAi(String displayName) => _run(() async {
+    _requireOnlineGroupSession();
+    if (displayName.trim().isEmpty || displayName.length > 100) {
+      throw const FormatException('名称须为1–100个字符');
+    }
+    final generation = _generation;
+    final session = connection!;
+    final String id;
+    try {
+      id = await OwnAiApi(session).create(displayName);
+    } catch (error) {
+      _ownAiFailure(error, generation, session, creating: true);
+      return;
+    }
+    if (!_ownAiContext(generation, session)) return;
+    _ownAiNotice = 'AI账户已创建：$id。仅创建账户，回复仍需宿主配置。';
+    notifyListeners();
+    try {
+      final rows = await OwnAiApi(session).list();
+      if (_ownAiContext(generation, session)) _publishOwnAi(rows);
+    } catch (error) {
+      if (error is HostRequestException &&
+          error.failure.code == FailureCode.unauthenticated) {
+        _ownAiFailure(error, generation, session);
+      } else if (_ownAiContext(generation, session)) {
+        _ownAiNotice = 'AI账户已创建：$id；列表刷新失败，请刷新我的AI。';
+      }
+    }
+  });
 
   @override
   Future<void> createGroup(String name) => _run(() async {

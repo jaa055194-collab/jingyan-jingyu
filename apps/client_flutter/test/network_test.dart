@@ -22,6 +22,67 @@ void main() {
     await server.close(force: true);
   });
 
+  test('failed transient renewal marks 401 safe detail instead of terminal session', () async {
+    await connection.close();
+    connection = HostConnection(
+      Uri.parse('http://127.0.0.1:${server.port}'),
+      'expired',
+      onUnauthorized: () async => false,
+    );
+    server.listen((r) async {
+      await r.drain<void>();
+      r.response.statusCode = 401;
+      r.response.write('{"error":"unauthenticated"}');
+      await r.response.close();
+    });
+    await expectLater(
+      connection.request('GET', '/private'),
+      throwsA(
+        isA<HostRequestException>().having(
+          (e) => e.failure.details['authenticationRenewalFailed'],
+          'flag',
+          isTrue,
+        ),
+      ),
+    );
+  });
+
+  test(
+    'strict list response shares auth refresh while map request stays strict',
+    () async {
+      await connection.close();
+      var calls = 0, renewals = 0;
+      connection = HostConnection(
+        Uri.parse('http://127.0.0.1:${server.port}'),
+        'expired',
+        onUnauthorized: () async {
+          renewals++;
+          connection.updateAccessToken('fresh');
+          return true;
+        },
+      );
+      server.listen((r) async {
+        calls++;
+        await r.drain<void>();
+        if (calls == 1) {
+          r.response.statusCode = 401;
+          r.response.write('{"error":"unauthenticated"}');
+        } else {
+          r.response.write('[{"accountId":"ai"}]');
+        }
+        await r.response.close();
+      });
+      expect(await (connection as dynamic).requestList('GET', '/owned'), [
+        {'accountId': 'ai'},
+      ]);
+      expect(renewals, 1);
+      await expectLater(
+        connection.request('GET', '/owned'),
+        throwsFormatException,
+      );
+    },
+  );
+
   for (final status in [200, 204]) {
     test('explicit empty-success option accepts HTTP $status', () async {
       server.listen((request) async {
@@ -39,105 +100,119 @@ void main() {
     });
   }
 
-  test('default map-response mode still rejects empty successful body', () async {
-    server.listen((request) async {
-      await request.drain<void>();
-      await request.response.close();
-    });
-    await expectLater(
-      connection.request('GET', '/map-response'),
-      throwsFormatException,
-    );
-  });
-
-  test('empty-success option still strictly parses every nonempty response',
-      () async {
-    final bodies = [' ', 'not-json', 'null', '[]', '{"ok":true}'];
-    var next = 0;
-    server.listen((request) async {
-      await request.drain<void>();
-      request.response.write(bodies[next++]);
-      await request.response.close();
-    });
-    for (var i = 0; i < 4; i++) {
+  test(
+    'default map-response mode still rejects empty successful body',
+    () async {
+      server.listen((request) async {
+        await request.drain<void>();
+        await request.response.close();
+      });
       await expectLater(
-        connection.request('POST', '/membership', allowEmptySuccess: true),
+        connection.request('GET', '/map-response'),
         throwsFormatException,
       );
-    }
-    expect(
-      await connection.request('POST', '/membership', allowEmptySuccess: true),
-      {'ok': true},
-    );
-  });
+    },
+  );
 
-  test('401 retry preserves empty-success option and original request data',
-      () async {
-    await connection.close();
-    var renewals = 0;
-    final requests = <({String? bearer, String method, String uri, Object? body})>[];
-    connection = HostConnection(
-      Uri.parse('http://127.0.0.1:${server.port}'),
-      'expired',
-      onUnauthorized: () async {
-        renewals++;
-        connection.updateAccessToken('rotated');
-        return true;
-      },
-    );
-    server.listen((request) async {
-      requests.add((
-        bearer: request.headers[HttpHeaders.authorizationHeader]?.single,
-        method: request.method,
-        uri: request.uri.toString(),
-        body: jsonDecode(await utf8.decoder.bind(request).join()),
-      ));
-      request.response.statusCode = requests.length == 1 ? 401 : 200;
-      if (requests.length == 1) {
-        request.response.write('{"error":"unauthenticated"}');
+  test(
+    'empty-success option still strictly parses every nonempty response',
+    () async {
+      final bodies = [' ', 'not-json', 'null', '[]', '{"ok":true}'];
+      var next = 0;
+      server.listen((request) async {
+        await request.drain<void>();
+        request.response.write(bodies[next++]);
+        await request.response.close();
+      });
+      for (var i = 0; i < 4; i++) {
+        await expectLater(
+          connection.request('POST', '/membership', allowEmptySuccess: true),
+          throwsFormatException,
+        );
       }
-      await request.response.close();
-    });
-    expect(
-      await connection.request(
-        'POST',
-        '/membership',
-        query: {'fixture': 'value'},
-        body: {'accountId': 'member'},
-        allowEmptySuccess: true,
-      ),
-      isEmpty,
-    );
-    expect(renewals, 1);
-    expect(requests.map((request) => request.bearer), [
-      'Bearer expired',
-      'Bearer rotated',
-    ]);
-    for (final request in requests) {
-      expect(request.method, 'POST');
-      expect(request.uri, '/membership?fixture=value');
-      expect(request.body, {'accountId': 'member'});
-    }
-  });
-
-  test('empty-success option never accepts an unsuccessful empty response',
-      () async {
-    server.listen((request) async {
-      await request.drain<void>();
-      request.response.statusCode = 404;
-      await request.response.close();
-    });
-    await expectLater(
-      connection.request('POST', '/membership', allowEmptySuccess: true),
-      throwsA(
-        isA<HostRequestException>().having(
-          (error) => error.failure.code,
-          'failure code',
-          FailureCode.notFound,
+      expect(
+        await connection.request(
+          'POST',
+          '/membership',
+          allowEmptySuccess: true,
         ),
-      ),
-    );
-  });
+        {'ok': true},
+      );
+    },
+  );
+
+  test(
+    '401 retry preserves empty-success option and original request data',
+    () async {
+      await connection.close();
+      var renewals = 0;
+      final requests =
+          <({String? bearer, String method, String uri, Object? body})>[];
+      connection = HostConnection(
+        Uri.parse('http://127.0.0.1:${server.port}'),
+        'expired',
+        onUnauthorized: () async {
+          renewals++;
+          connection.updateAccessToken('rotated');
+          return true;
+        },
+      );
+      server.listen((request) async {
+        requests.add((
+          bearer: request.headers[HttpHeaders.authorizationHeader]?.single,
+          method: request.method,
+          uri: request.uri.toString(),
+          body: jsonDecode(await utf8.decoder.bind(request).join()),
+        ));
+        request.response.statusCode = requests.length == 1 ? 401 : 200;
+        if (requests.length == 1) {
+          request.response.write('{"error":"unauthenticated"}');
+        }
+        await request.response.close();
+      });
+      expect(
+        await connection.request(
+          'POST',
+          '/membership',
+          query: {'fixture': 'value'},
+          body: {'accountId': 'member'},
+          allowEmptySuccess: true,
+        ),
+        isEmpty,
+      );
+      expect(renewals, 1);
+      expect(requests.map((request) => request.bearer), [
+        'Bearer expired',
+        'Bearer rotated',
+      ]);
+      for (final request in requests) {
+        expect(request.method, 'POST');
+        expect(request.uri, '/membership?fixture=value');
+        expect(request.body, {'accountId': 'member'});
+      }
+    },
+  );
+
+  test(
+    'empty-success option never accepts an unsuccessful empty response',
+    () async {
+      server.listen((request) async {
+        await request.drain<void>();
+        request.response.statusCode = 404;
+        await request.response.close();
+      });
+      await expectLater(
+        connection.request('POST', '/membership', allowEmptySuccess: true),
+        throwsA(
+          isA<HostRequestException>().having(
+            (error) => error.failure.code,
+            'failure code',
+            FailureCode.notFound,
+          ),
+        ),
+      );
+    },
+  );
 
   test(
     'permanently rejected queue head is dropped and next message sends',

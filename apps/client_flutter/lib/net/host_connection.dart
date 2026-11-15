@@ -29,6 +29,44 @@ class HostConnection {
     // Opt in only for routes whose successful response has no JSON entity.
     bool allowEmptySuccess = false,
   }) async {
+    final decoded = await _requestJson(
+      method,
+      path,
+      body: body,
+      query: query,
+      retryAuthentication: retryAuthentication,
+      allowEmptySuccess: allowEmptySuccess,
+    );
+    if (decoded is! Map<String, dynamic>) throw const FormatException('宿主响应无效');
+    return decoded.cast<String, Object?>();
+  }
+
+  Future<List<Object?>> requestList(
+    String method,
+    String path, {
+    Map<String, Object?>? body,
+    Map<String, String>? query,
+    bool retryAuthentication = true,
+  }) async {
+    final decoded = await _requestJson(
+      method,
+      path,
+      body: body,
+      query: query,
+      retryAuthentication: retryAuthentication,
+    );
+    if (decoded is! List) throw const FormatException('宿主列表响应无效');
+    return List<Object?>.unmodifiable(decoded);
+  }
+
+  Future<Object?> _requestJson(
+    String method,
+    String path, {
+    Map<String, Object?>? body,
+    Map<String, String>? query,
+    bool retryAuthentication = true,
+    bool allowEmptySuccess = false,
+  }) async {
     final attemptedToken = _token;
     final req = await client
         .openUrl(method, route(path, query))
@@ -42,12 +80,14 @@ class HostConnection {
         .transform(utf8.decoder)
         .join()
         .timeout(const Duration(seconds: 15));
+    var renewalFailed = false;
     if (response.statusCode == 401 &&
         retryAuthentication &&
         onUnauthorized != null) {
       final renewed = _token != attemptedToken || await onUnauthorized!();
+      renewalFailed = !renewed;
       if (renewed) {
-        return request(
+        return _requestJson(
           method,
           path,
           body: body,
@@ -80,13 +120,17 @@ class HostConnection {
             }
           : FailureCode.values.byName(code.name);
       throw HostRequestException(
-        Failure(failureCode, '宿主请求失败 (${response.statusCode})'),
+        Failure(
+          failureCode,
+          '宿主请求失败 (${response.statusCode})',
+          details: renewalFailed && failureCode == FailureCode.unauthenticated
+              ? const {'authenticationRenewalFailed': true}
+              : const {},
+        ),
       );
     }
     if (allowEmptySuccess && text.isEmpty) return <String, Object?>{};
-    final decoded = jsonDecode(text);
-    if (decoded is! Map<String, dynamic>) throw const FormatException('宿主响应无效');
-    return decoded.cast<String, Object?>();
+    return jsonDecode(text);
   }
 
   Future<Result<void>> submit(OutboxSubmission item) async {
