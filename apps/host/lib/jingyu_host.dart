@@ -9,6 +9,8 @@ import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
 import 'src/ai/persona/persona_migrations.dart';
 import 'src/ai/persona/persona_module.dart';
+import 'src/audit/admin_audit_module.dart';
+import 'src/audit/admin_audit_reader.dart';
 import 'src/accounts/accounts_module.dart';
 import 'src/accounts/db_authenticator.dart';
 import 'src/accounts/password_hasher.dart';
@@ -16,6 +18,8 @@ import 'src/accounts/accounts_sql_store.dart';
 import 'src/accounts/accounts_migrations.dart';
 import 'src/messages/messages_migrations.dart';
 import 'src/models/models_migrations.dart';
+import 'src/models/admin_usage_module.dart';
+import 'src/models/admin_usage_reader.dart';
 import 'src/models/ai_identity.dart';
 import 'src/models/binding_migrations.dart';
 import 'src/models/usage_migrations.dart';
@@ -26,6 +30,7 @@ import 'src/security/url_guard.dart';
 import 'src/messages/sqlite_message_store.dart';
 import 'src/social/conversation_service.dart';
 import 'src/social/social_migrations.dart';
+import 'src/social/conversation_preferences_migration.dart';
 import 'src/social/group_ai_migrations.dart';
 import 'src/social/topic_migrations.dart';
 import 'src/social/friendship_migrations.dart';
@@ -81,6 +86,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       privateConversationMigration,
       groupAiMigration,
       topicMigration,
+      conversationPreferencesMigration,
       ...modelsMigrations,
       aiIdentityMigration,
       bindingMigration,
@@ -167,6 +173,8 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     ),
     storage,
     AccountsModule(domain: accounts),
+    AdminAuditModule(reader: AdminAuditReader(database: storage.database, clock: clock)),
+    AdminUsageModule(reader: AdminUsageReader(database: storage.database, clock: clock)),
     MessagesModule(
       store: messages,
       authenticate: DbAuthenticator(accounts).call,
