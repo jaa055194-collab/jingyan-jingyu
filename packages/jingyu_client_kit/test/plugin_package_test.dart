@@ -314,4 +314,111 @@ void main() {
       expect(sanitizePackageEntryPath('a:b'), isNull);
     });
   });
+
+  group('安全加固（复审修复）', () {
+    test('Windows 尾点 / 保留设备名被拒', () {
+      for (final name in ['a.', 'dir/b.', 'CON', 'aux.txt', 'sub/NUL', 'com1']) {
+        expect(sanitizePackageEntryPath(name), isNull, reason: name);
+      }
+      expect(sanitizePackageEntryPath('console.txt'), 'console.txt');
+      expect(sanitizePackageEntryPath('assets/icon.svg'), 'assets/icon.svg');
+    });
+
+    test('plugin.json 的 license 为非字符串时返回 manifestInvalid 而非抛异常', () {
+      final r = validatePluginPackage(_zip([
+        _textFile(
+            'plugin.json',
+            '{"id":"a.b","name":"x","version":"1.0.0","apiVersion":1,"license":123}'),
+      ]));
+      expect(r.ok, isFalse);
+      expect(_has(r, PluginPackageIssueCode.manifestInvalid), isTrue);
+    });
+
+    test('符号链接在解码前被预扫拒绝（不进入解压）', () {
+      final link = ArchiveFile(
+          'evil-link', 0, Uint8List.fromList(utf8.encode('/etc/passwd')))
+        ..mode = 0xA1FF;
+      final bytes = _asUnixMade(
+          _zip([_textFile('plugin.json', _validManifest), link]), 'evil-link');
+      final r = validatePluginPackage(bytes);
+      expect(r.ok, isFalse);
+      final sym = r.issues
+          .where((i) => i.code == PluginPackageIssueCode.symbolicLink)
+          .toList();
+      expect(sym, isNotEmpty);
+      // 必须是“解码前预扫”发现（而非解码后才发现）。
+      expect(sym.any((i) => i.message.contains('预扫')), isTrue);
+    });
+
+    test('伪造 EOCD 条目数不能绕过解码前符号链接预扫', () {
+      final link = ArchiveFile(
+          'evil-link', 0, Uint8List.fromList(utf8.encode('/etc/passwd')))
+        ..mode = 0xA1FF;
+      final bytes = _asUnixMade(
+          _zip([_textFile('plugin.json', _validManifest), link]), 'evil-link');
+      final patched = Uint8List.fromList(bytes);
+      final bd = ByteData.sublistView(patched);
+      var eocd = -1;
+      for (var i = patched.length - 22; i >= 0; i--) {
+        if (bd.getUint32(i, Endian.little) == 0x06054b50) {
+          eocd = i;
+          break;
+        }
+      }
+      expect(eocd >= 0, isTrue);
+      // 谎报条目数为 1（中央目录尺寸不变）——朴素的按计数遍历会漏掉符号链接。
+      bd.setUint16(eocd + 10, 1, Endian.little);
+      final r = validatePluginPackage(patched);
+      expect(r.ok, isFalse);
+      expect(_has(r, PluginPackageIssueCode.symbolicLink), isTrue);
+      expect(
+          r.issues
+              .where((i) => i.code == PluginPackageIssueCode.symbolicLink)
+              .any((i) => i.message.contains('预扫')),
+          isTrue);
+    });
+
+    test('cdSize 越过文件边界必须 fail-closed（不解码）', () {
+      final link = ArchiveFile(
+          'evil-link', 0, Uint8List.fromList(utf8.encode('/etc/passwd')))
+        ..mode = 0xA1FF;
+      final bytes = _asUnixMade(
+          _zip([_textFile('plugin.json', _validManifest), link]), 'evil-link');
+      final patched = Uint8List.fromList(bytes);
+      final bd = ByteData.sublistView(patched);
+      var eocd = -1;
+      for (var i = patched.length - 22; i >= 0; i--) {
+        if (bd.getUint32(i, Endian.little) == 0x06054b50) {
+          eocd = i;
+          break;
+        }
+      }
+      expect(eocd >= 0, isTrue);
+      // 把 cdSize 改成整个文件长度 → cdEnd 越过 EOF；archive 会截断而非报错。
+      bd.setUint32(eocd + 12, patched.length, Endian.little);
+      final r = validatePluginPackage(patched);
+      expect(r.ok, isFalse);
+      expect(_has(r, PluginPackageIssueCode.notZip), isTrue);
+      // 必须未进入解码：不应出现任何 symbolicLink 诊断。
+      expect(_has(r, PluginPackageIssueCode.symbolicLink), isFalse);
+    });
+
+    test('zip64 触发字段被 fail-closed 拒绝', () {
+      final patched =
+          Uint8List.fromList(_zip([_textFile('plugin.json', _validManifest)]));
+      final bd = ByteData.sublistView(patched);
+      var eocd = -1;
+      for (var i = patched.length - 22; i >= 0; i--) {
+        if (bd.getUint32(i, Endian.little) == 0x06054b50) {
+          eocd = i;
+          break;
+        }
+      }
+      expect(eocd >= 0, isTrue);
+      bd.setUint16(eocd + 8, 0xFFFF, Endian.little); // entries-on-this-disk
+      final r = validatePluginPackage(patched);
+      expect(r.ok, isFalse);
+      expect(_has(r, PluginPackageIssueCode.notZip), isTrue);
+    });
+  });
 }
