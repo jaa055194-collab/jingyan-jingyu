@@ -119,6 +119,51 @@ void main() {
       );
       expect(reply.activityRefs, isEmpty);
     });
+
+    test('blank first record is skipped and a valid second is cited', () async {
+      final Source source = Source(<S1Activity>[
+        const S1Activity(id: '  ', summary: '旧记录'),
+        const S1Activity(id: 'act-9', summary: '看书'),
+      ]);
+      final r = ActivityS1Responder(activities: source.lookup);
+      final S1Reply reply = await r.replyTo(
+        ai,
+        message('你在干嘛'),
+        padding: false,
+      );
+      expect(reply.text, '刚在看书');
+      expect(reply.activityRefs, <String>['act-9']);
+    });
+
+    test(
+      'an embedded/quoted status phrase is not treated as a query',
+      () async {
+        final Source source = Source(<S1Activity>[
+          const S1Activity(id: 'act-7', summary: '浇花'),
+        ]);
+        final r = ActivityS1Responder(activities: source.lookup);
+        final S1Reply reply = await r.replyTo(
+          ai,
+          message('他问你在干嘛'),
+          padding: false,
+        );
+        expect(reply.activityRefs, isEmpty);
+        expect(source.calls, 0);
+      },
+    );
+
+    test('a lookup error falls back instead of aborting the reply', () async {
+      final r = ActivityS1Responder(
+        activities: (AiId _) async => throw StateError('db down'),
+      );
+      final S1Reply reply = await r.replyTo(
+        ai,
+        message('你在干嘛'),
+        padding: false,
+      );
+      expect(reply.text, '愿意多说一点吗？');
+      expect(reply.activityRefs, isEmpty);
+    });
   });
 
   group('ActivityS1Responder through the real router (AC-33)', () {
@@ -142,6 +187,28 @@ void main() {
         expect(out.single.text, '刚在浇花');
         expect(out.single.activityRefs, <String>['act-7']);
         expect(s2.calls, 0);
+      },
+    );
+
+    test(
+      'a question-marked status phrasing routes to S2 and does not cite (documented limit)',
+      () async {
+        final FakeS2 s2 = FakeS2();
+        final Source source = Source(<S1Activity>[
+          const S1Activity(id: 'act-7', summary: '浇花'),
+        ]);
+        final router = RulesFirstBrainRouter(
+          s1: ActivityS1Responder(activities: source.lookup),
+          s2: s2,
+        );
+        final m = message('你在干嘛？');
+        final d = await router.decide(ai, m, inGroup: false);
+        expect(d.complexity, Complexity.complex);
+        final out = await router.respond(ai, m, d).toList();
+        expect(out.map((p) => p.source), <String>['s1', 's2', 's2']);
+        expect(out.first.text, '嗯……'); // neutral padding, no activity
+        expect(out.expand((p) => p.activityRefs), isEmpty);
+        expect(source.calls, 0);
       },
     );
   });
