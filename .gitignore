@@ -5,3 +5,11 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# Local deployment credentials and private redaction mappings (never commit).
+.env
+.env.*
+!.env.example
+!.env.*.example
+secrets.local/
+.privacy-local/
