@@ -111,6 +111,15 @@ class TestShellModel extends ShellViewModel {
   }
 
   @override
+  bool get canAddMembersToSelectedGroup => false;
+  @override
+  Future<void> createGroup(String name) async {}
+  @override
+  Future<void> refreshConversations() async {}
+  @override
+  Future<void> addGroupMember(String groupId, String accountId) async {}
+
+  @override
   Future<void> sendMessage() async {
     messages = [
       ...messages,

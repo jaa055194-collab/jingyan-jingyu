@@ -11,6 +11,7 @@ import '../data/file_persistence.dart';
 import '../data/account_snapshots.dart';
 import '../net/account_auth.dart';
 import '../net/host_connection.dart';
+import '../net/group_api.dart';
 import '../platform/native_platform.dart';
 import 'conversation_mapping.dart';
 import 'shell_view_model.dart';
@@ -656,6 +657,110 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Future<void> confirmRoom() => _run(() async {
     throw const HttpException('宿主房间保存接口尚未提供');
   });
+  @override
+  bool get canAddMembersToSelectedGroup =>
+      authenticated &&
+      _conversations.any(
+        (conversation) =>
+            conversation.id == _selected &&
+            conversation.kind == 'group' &&
+            conversation.ownerAccountId == connectedAccountId,
+      );
+
+  void _requireOnlineGroupSession() {
+    if (!authenticated ||
+        _sessionRejected ||
+        connection == null ||
+        locked ||
+        !_online ||
+        _switching) {
+      throw const FormatException('请先解锁并连接宿主，群操作需要在线完成');
+    }
+  }
+
+  @override
+  Future<void> refreshConversations() async {
+    if (_busy || !authenticated || _sessionRejected || locked || _switching) {
+      return;
+    }
+    final generation = _generation;
+    final previousError = _error;
+    await _refresh();
+    if (_current(generation) &&
+        authenticated &&
+        !locked &&
+        !_busy &&
+        _online &&
+        _error == previousError) {
+      _error = null;
+      notifyListeners();
+    }
+  }
+
+  @override
+  Future<void> createGroup(String name) => _run(() async {
+    _requireOnlineGroupSession();
+    final generation = _generation;
+    final sessionConnection = connection!;
+    final sessionShell = shell;
+    // Finish any already-running list refresh before publishing the new group;
+    // periodic refresh does not start while _run holds busy.
+    await _refreshWork;
+    if (!_current(generation) ||
+        locked ||
+        !authenticated ||
+        !identical(connection, sessionConnection)) {
+      return;
+    }
+    _requireOnlineGroupSession();
+    if (_selected != null) await sessionShell.saveDraft(_selected!, _draft);
+    if (!_current(generation) || locked || !authenticated) return;
+    if (name.trim().isEmpty || name.length > 100) {
+      throw const FormatException('群名须为1–100个字符');
+    }
+    final HostGroup group;
+    try {
+      group = await GroupApi(sessionConnection).createGroup(name);
+    } catch (_) {
+      throw const FormatException('群聊创建未确认，可能已创建；请刷新会话后再重试');
+    }
+    if (!_current(generation) ||
+        locked ||
+        !authenticated ||
+        !identical(connection, sessionConnection)) {
+      return;
+    }
+    _conversations = [
+      ..._conversations.where((conversation) => conversation.id != group.id),
+      ShellConversation(
+        id: group.id,
+        title: group.name,
+        kind: 'group',
+        ownerAccountId: group.ownerAccountId,
+      ),
+    ]..sort((left, right) => left.title.compareTo(right.title));
+    _selected = group.id;
+    _draft = sessionShell.draftFor(group.id);
+  });
+
+  @override
+  Future<void> addGroupMember(String groupId, String accountId) =>
+      _run(() async {
+        _requireOnlineGroupSession();
+        if (_selected != groupId || !canAddMembersToSelectedGroup) {
+          throw const FormatException('仅当前群主可添加成员');
+        }
+        final generation = _generation;
+        final sessionConnection = connection!;
+        await GroupApi(sessionConnection).addMember(groupId, accountId);
+        if (!_current(generation) ||
+            locked ||
+            !authenticated ||
+            !identical(connection, sessionConnection)) {
+          return;
+        }
+      });
+
   @override
   Future<void> selectConversation(String id) async {
     _selected = id;

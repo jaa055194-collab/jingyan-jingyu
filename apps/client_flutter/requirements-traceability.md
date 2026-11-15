@@ -30,7 +30,17 @@ Source: Issue #5, `docs/modules/M11-client-shell.md`, v4.2 FR-09/11/13/18/61. Ow
 
 The owner approved deferring unavailable character/room setup: after real host authentication, an unlocked user can explicitly enter the existing chat shell. This is a local app flow increment atop PR #8, not a merge/release of that held draft. Character/room screens remain accessible from the World tab and still report unavailable host contracts honestly; `onboarded` is never set by deferral.
 
-The separate `chatEntered` choice is persisted only in the existing host/account/device snapshot. It does not rewrite credentials or change token rotation. New widget/runtime regressions cover the defer route, optional return to setup, unauthenticated and locked denial, credential nonmutation, restart, and identity isolation. See [harness evidence and limitations](evidence/chat-first-harness.md): the current PNGs are headless renders, not native exact-baseline captures; visual and actual-host acceptance remain incomplete.
+The separate `chatEntered` choice is persisted only in the existing host/account/device snapshot. It does not rewrite credentials or change token rotation. New widget/runtime regressions cover the defer route, optional return to setup, unauthenticated and locked denial, credential nonmutation, restart, and identity isolation. See [actual native comparison](evidence/public-comparison.md): matched before/after Windows HWND captures use the real app/public authentication and identical capture-only native state isolation. Baseline is7c5405f; changed four-file patch6231F493 is a source subset ofb53655d, not its entire tree. Capture-only tray/hotkey/autostart are disabled and model image input was unavailable, so native integration acceptance and independent visual inspection remain incomplete. Earlier [harness evidence](evidence/chat-first-harness.md) is explicitly intermediate and not final visual evidence.
+
+## Ordinary group-chat client increment
+
+Authenticated online users can create a named group from the conversation list, select the server-confirmed group, and separately add a known account ID when the host's canonical group metadata identifies the current owner. Existing outbox/send/sync and draft persistence are reused. Unconfirmed creation is not automatically replayed; explicit refresh recovers the authoritative list and clears obsolete recovery guidance after success. Dialog input is hidden after lock/logout. No account enumeration, friendship grant, or AI-consent shortcut is introduced.
+
+Final focused group/mapping/authentication tests:36 passed. Lead full Flutter suite:181 passed,1 evidence-generation skipped; final Flutter analysis clean. Independent source-review follow-up found no remaining actionable blocker after the refresh-recovery regression. Actual default-host two-human helper smoke passed creation, membership, duplicate-clientMsgId deduplication, exact text sync and durable host restart; this is not the UI acceptance result. Native group UI capture and final Android build are still being collected. No automatic AI reply is delivered by this increment.
+
+## Tray-unavailable startup fallback
+
+Windows native initialization now reports the actual `tray:false` capability instead of aborting the entire client solely because the notification-area icon could not be created. Real registration is still attempted; other native initialization failures are unchanged. A separate actual native integration kept `Shell_NotifyIconW` intact, observed its false result, and verified real DPAPI session restoration with ready/authenticated true and no startup error. This is not full tray/hotkey/autostart or AC-16 acceptance.
 
 ## Remaining integration
 

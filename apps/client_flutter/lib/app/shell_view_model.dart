@@ -42,6 +42,10 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> generateRoom(String preset);
   Future<void> confirmRoom();
   Future<void> selectConversation(String id);
+  Future<void> createGroup(String name);
+  Future<void> refreshConversations();
+  Future<void> addGroupMember(String groupId, String accountId);
+  bool get canAddMembersToSelectedGroup;
   void updateDraft(String value);
   Future<void> sendMessage();
   Future<void> setAiConsent(bool allowed);
@@ -61,11 +65,15 @@ class ShellConversation {
     required this.title,
     this.preview = '',
     this.unread = 0,
+    this.kind = 'unknown',
+    this.ownerAccountId,
   });
   final String id;
   final String title;
   final String preview;
   final int unread;
+  final String kind;
+  final String? ownerAccountId;
 }
 
 class ShellMessage {

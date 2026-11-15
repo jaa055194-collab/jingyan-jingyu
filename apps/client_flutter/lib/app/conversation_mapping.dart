@@ -20,7 +20,14 @@ List<ShellConversation> mapConversations({
         : direct
         ? '私聊'
         : '会话';
-    byId[id] = ShellConversation(id: id, title: title);
+    byId[id] = ShellConversation(
+      id: id,
+      title: title,
+      kind: direct ? 'direct' : 'group',
+      ownerAccountId: !direct && raw['ownerAccountId'] is String
+          ? raw['ownerAccountId'] as String
+          : null,
+    );
   }
 
   if (groups is List) {
