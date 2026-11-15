@@ -342,7 +342,53 @@ void main() {
           _zip([_textFile('plugin.json', _validManifest), link]), 'evil-link');
       final r = validatePluginPackage(bytes);
       expect(r.ok, isFalse);
+      final sym = r.issues
+          .where((i) => i.code == PluginPackageIssueCode.symbolicLink)
+          .toList();
+      expect(sym, isNotEmpty);
+      // 必须是“解码前预扫”发现（而非解码后才发现）。
+      expect(sym.any((i) => i.message.contains('预扫')), isTrue);
+    });
+
+    test('伪造 EOCD 条目数不能绕过解码前符号链接预扫', () {
+      final link = ArchiveFile(
+          'evil-link', 0, Uint8List.fromList(utf8.encode('/etc/passwd')))
+        ..mode = 0xA1FF;
+      final bytes = _asUnixMade(
+          _zip([_textFile('plugin.json', _validManifest), link]), 'evil-link');
+      final patched = Uint8List.fromList(bytes);
+      final bd = ByteData.sublistView(patched);
+      var eocd = -1;
+      for (var i = patched.length - 22; i >= 0; i--) {
+        if (bd.getUint32(i, Endian.little) == 0x06054b50) {
+          eocd = i;
+          break;
+        }
+      }
+      expect(eocd >= 0, isTrue);
+      // 谎报条目数为 1（中央目录尺寸不变）——朴素的按计数遍历会漏掉符号链接。
+      bd.setUint16(eocd + 10, 1, Endian.little);
+      final r = validatePluginPackage(patched);
+      expect(r.ok, isFalse);
       expect(_has(r, PluginPackageIssueCode.symbolicLink), isTrue);
+    });
+
+    test('zip64 触发字段被 fail-closed 拒绝', () {
+      final patched =
+          Uint8List.fromList(_zip([_textFile('plugin.json', _validManifest)]));
+      final bd = ByteData.sublistView(patched);
+      var eocd = -1;
+      for (var i = patched.length - 22; i >= 0; i--) {
+        if (bd.getUint32(i, Endian.little) == 0x06054b50) {
+          eocd = i;
+          break;
+        }
+      }
+      expect(eocd >= 0, isTrue);
+      bd.setUint16(eocd + 8, 0xFFFF, Endian.little); // entries-on-this-disk
+      final r = validatePluginPackage(patched);
+      expect(r.ok, isFalse);
+      expect(_has(r, PluginPackageIssueCode.notZip), isTrue);
     });
   });
 }
