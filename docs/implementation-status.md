@@ -29,6 +29,7 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 - 附件消息与文件搜索：`AttachmentService.assertSendable` 校验消息引用的附件属于发送者本人且上传时绑定同一会话（他人附件/跨会话/未知/非法引用拒绝，成员与历史由发送处策略判定）；`GET /search?type=file` 仅在本人自有附件内按已抽取正文做包含匹配并返回片段（他人不可见）。
 - 收藏标签与备注：Migration214 为 `favorites` 增加加密的 `tags`（JSON 数组）与 `note` 列；`FavoritesService` 创建时校验（≤20 标签、每个≤50、备注≤2000字符）并加密落库，列表返回 tags/note，搜索匹配标签/备注；`GET /favorites?tag=` 大小写不敏感按标签过滤；`PATCH /favorites/{id}` 仅本人可整体替换标签/备注（null 清空）并尽力重索引。
 - 群公告：Migration305 为 `social_conversations` 增加加密 `announcement` 列；`ConversationService.setAnnouncement/getAnnouncement` 仅群主可设置/清空（≤2000字符）、成员可读、非成员拒绝；认证 `PUT/GET /conversations/{id}/announcement` 已挂默认宿主。
+- 群成员列表：认证 `GET /conversations/{id}/members` 供当前成员列出成员（accountId、是否群主、加入时间）；非成员 404、匿名 401；身份只取 principal。
 
 ## 验证
 
