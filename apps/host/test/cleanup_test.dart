@@ -72,7 +72,7 @@ void main() {
     test('到期前 7 天只提醒一次，不删 blob', () async {
       final first = (await service.run(at: base)).value;
       expect(first.remindedCount, 1);
-      expect(store.remindedAt('remind'), base);
+      expect(await store.remindedAt('remind'), base);
       expect((await store.asset('remind'))!.blobPresent, isTrue);
 
       final nextDay = (await service.run(at: base.add(const Duration(days: 1)))).value;

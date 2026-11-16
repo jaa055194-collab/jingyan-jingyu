@@ -86,4 +86,14 @@ CREATE TABLE world_avatar_active (
   profile_rev INTEGER NOT NULL
 );
 '''),
+  Migration(904, 'world visit invitations', '''
+CREATE TABLE world_invitations (
+  token TEXT PRIMARY KEY NOT NULL,
+  visitor_id TEXT NOT NULL,
+  host_owner_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_world_invitations_pair
+  ON world_invitations(host_owner_id, visitor_id);
+'''),
 ];

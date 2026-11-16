@@ -64,6 +64,22 @@ import 'src/messages/pins.dart';
 import 'src/messages/reactions.dart';
 import 'src/messages/scheduled.dart';
 import 'src/messages/search.dart';
+import 'src/creative/creative_migrations.dart';
+import 'src/voice/voice_migrations.dart';
+import 'src/voice/voice_module.dart';
+import 'src/world/world_migrations.dart';
+import 'src/world/world_module.dart';
+import 'src/world/sqlite_avatar_registry.dart';
+import 'src/world/sqlite_presence_service.dart';
+import 'src/world/sqlite_space_layout_store.dart';
+import 'src/lifecycle/cleanup.dart';
+import 'src/lifecycle/departure.dart';
+import 'src/lifecycle/lifecycle_migrations.dart';
+import 'src/lifecycle/lifecycle_module.dart';
+import 'src/lifecycle/quota_service.dart';
+import 'src/lifecycle/sqlite_cleanup_store.dart';
+import 'src/lifecycle/sqlite_departure_store.dart';
+import 'src/lifecycle/sqlite_quota_store.dart';
 import 'src/system/system_module.dart';
 
 export 'src/audit/audit_log.dart';
@@ -108,6 +124,10 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       budgetTimezoneMigration,
       ...personaMigrations,
       socialLevelMigration,
+      ...creativeMigrations,
+      ...voiceMigrations,
+      ...worldMigrations,
+      ...lifecycleMigrations,
     ],
   );
   final messages = SqliteMessageStore(
@@ -325,6 +345,12 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
       database: storage.database,
       clock: clock,
     ),
+    WorldModule(
+      layouts: SqliteSpaceLayoutStore(database: storage.database, clock: clock),
+      presence: SqlitePresenceService(database: storage.database, clock: clock),
+      avatars: SqliteAvatarRegistry(database: storage.database, clock: clock),
+      clock: clock,
+    ),
     ModelsModule(
       runtime: runtime,
       providerDiscoveryRequest: providerDiscoveryRequest,
@@ -333,6 +359,7 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
       urlGuard: urlGuard,
       clock: clock,
     ),
+    VoiceModule.persistent(database: storage.database, clock: clock),
     SocialLevelModule(
       service: levels,
       authenticate: DbAuthenticator(accounts).call,
@@ -344,6 +371,23 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
       cipher: storage.cipher,
       clock: clock,
       authenticate: DbAuthenticator(accounts).call,
+    ),
+    LifecycleModule(
+      clock: clock,
+      audit: storage.auditLog,
+      quota: QuotaService(
+        store: SqliteQuotaStore(database: storage.database, clock: clock),
+      ),
+      cleanup: CleanupService(
+        store: SqliteCleanupStore(database: storage.database, clock: clock),
+        clock: clock,
+        audit: storage.auditLog,
+      ),
+      departure: DepartureService(
+        store: SqliteDepartureStore(database: storage.database),
+        clock: clock,
+        audit: storage.auditLog,
+      ),
     ),
   ];
 }

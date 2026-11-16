@@ -1,20 +1,23 @@
 # 验收矩阵：AC-01～AC-35 与 CR-01～CR-12（M13 hardening）
 
-> 基线：`main` @ `555443265a89411c99c30b47a74937d637652bca`；本票分支 `agent/m13-hardening`。
-> 环境：Windows x64，Dart SDK 3.14.0（`dart pub get --offline`），`apps/host` 默认宿主装配
-> （真实 SQLite + AES-GCM 列加密 + 默认 HTTP 管线），临时数据目录。
+> 基线：本票开局 `555443265a89411c99c30b47a74937d637652bca`，已 `git merge origin/main`
+> 合入 PR#60 `12ce6e0` 的后端模块切片（M08/M09/M10/M12 与 M13 hardening）；本票分支
+> `agent/m13-hardening`。环境：Windows x64，Dart SDK 3.14.0（`dart pub get --offline`），
+> `apps/host` 默认宿主装配（真实 SQLite + AES-GCM 列加密 + 默认 HTTP 管线），临时数据目录。
 > 记录日期：2026-11-16。
 
 ## 阅读须知（状态口径）
 
 本文件区分两类证据，**不把矩阵完整当成产品验收通过**：
 
-- **本票实测**：本次在 `apps/host/test/regression/` 新写的回归套件，其命令与结果见 §A，可复现。
+- **本票实测**：本次在 `apps/host/test/regression/` 的回归套件（§A）、PR#60 合入后的
+  M08/M09/M10/M12 基础切片回归（§A2）、以及 `tool/init_host.ps1` 端到端（§E），命令与结果
+  均可复现。
 - **基线证据**：仓库 `docs/requirements-traceability.md` / `docs/implementation-status.md`
   记录的历史测试结论。**本票未重跑**，只作背景，不当成本票通过证据。
 
-状态取值：`通过（子集）`、`部分（本票未重跑）`、`部分（内部能力）`、`未覆盖`、`未实现`、`待执行`。
-凡是“未装配 / 无路由 / 无 UI / 需真实厂商”的判据，一律如实标缺口，不写通过。
+状态取值：`通过（子集）`、`部分（基础切片）`、`部分（内部能力）`、`部分（本票未重跑）`、
+`未覆盖`、`未实现`。凡是“未装配 / 无路由 / 无 UI / 需真实厂商”的判据，一律如实标缺口。
 
 测试夹具说明（透明性）：默认宿主的 PBKDF2(600k) 口令派生在受限离线机器上每次约 11 秒，
 多账号夹具会因此显著拖慢。为控制套件耗时，回归夹具**只跳过口令哈希**：直接经账号存储契约
@@ -25,7 +28,7 @@
 
 ---
 
-## A. 本票回归套件执行结果（fresh）
+## A. M13 回归套件执行结果（fresh，本票重跑）
 
 复现命令（在 `apps/host` 下）：
 
@@ -35,12 +38,12 @@ dart analyze --fatal-infos test/regression
 dart test test/regression -r expanded --concurrency=1
 ```
 
-实测结果：
+实测结果（合并 origin/main 后重跑）：
 
 - `dart analyze --fatal-infos test/regression` → **No issues found!**（EXIT 0）
-- `dart test test/regression` → **All tests passed!** `+23` 通过、`~11` 跳过、EXIT 0（约 13.3s，含编译）
+- `dart test test/regression` → **All tests passed!** `+23` 通过、`~11` 跳过、EXIT 0（约 20s）
 
-逐文件：
+逐文件覆盖：
 
 | 文件 | 通过 | 跳过 | 覆盖要点 |
 |---|---|---|---|
@@ -60,6 +63,42 @@ dart test test/regression -r expanded --concurrency=1
 
 ---
 
+## A2. M08/M09/M10/M12 基础切片回归（fresh，本票重跑）
+
+这些是 PR#60 合入 main 的**宿主侧基础切片**：抽象接口 + 内存实现 + 契约/单元测试，
+**未接入默认宿主装配、共享路由、真实厂商或客户端**（各 `*_module.dart` 的 `mount` 暂不声明
+路由，`jingyu_host.dart` 未追加）。
+
+命令（在 `apps/host` 下）：
+
+```powershell
+dart test test/quota_test.dart test/quota_service_test.dart test/quota_store_test.dart `
+  test/cleanup_test.dart test/cleanup_store_test.dart test/export_import_test.dart `
+  test/departure_test.dart test/departure_store_test.dart `
+  test/lifecycle_module_test.dart test/lifecycle_migrations_test.dart `
+  test/voice_test.dart test/creative_reports_test.dart test/creative_radio_test.dart `
+  test/world_test.dart test/world_module_test.dart test/world_pathfinding_test.dart `
+  -r expanded --concurrency=1
+```
+
+实测结果：**All tests passed! 142 项通过，EXIT 0（约 28s）**。
+
+覆盖：
+
+- **M08 语音**：`VoiceProfiles`（单 provider+voice_id、激活/到期/保活）、`VoiceGateway`
+  （可控假 TTS/ASR 适配器、故障降级）、`CallService`（通话状态机基础）。
+- **M09 创造性**：`ReportsService`（关系周报/年报按期生成、范围过滤、预算门、可选信）、
+  `RadioService`（深夜电台定时生成、离线缓存语义、预算、音色档案）。
+- **M10 世界**：`layout_store` / `pathfinding`（连续街区路径）/ `presence` / `avatars` 宿主侧内存实现。
+- **M12 生命周期**：`quota_service` / `cleanup`（90 天删 blob 留占位、85 天提醒、共享占位、每日队列）/
+  `export` / `import`（包结构 + SHA256、仅人格/人格+聊天、篡改拒绝、冲突新 id）/ `departure`
+  （删除回执含计数与 now+30d、诚实“轮转后清除”）/ 迁移 1200–1299 / 模块装配。
+
+未覆盖（如实）：真实 TTS/ASR/生图厂商适配器、HTTP 路由与默认装配、客户端/UI、真实磁盘/blob
+删除、网盘/age 密文备份与 30 天轮转、`integrity_check` 恢复演练、3D 渲染与 2–5Hz 同步。
+
+---
+
 ## B. AC-01～AC-35
 
 | 编号 | 验收判据（摘要） | 本票实测 / 基线证据 | 结果 | 未覆盖 / 缺口 |
@@ -74,27 +113,27 @@ dart test test/regression -r expanded --concurrency=1
 | AC-08 | 候选事件默认 model_claim；确认才 confirmed；追问一次 | — | 未实现 | 候选事件/收件箱未交付 |
 | AC-09 | 60s 规则心跳；额度用尽退规则；离线只记 gap | 基线内部 LifeEngine（REQ-022） | 部分（内部能力） | 无生产调度/主动行为/静默窗接线 |
 | AC-10 | 6 类 provider 与绑定矩阵；key 无明文；私有 base_url 拒；重定向/DNS 复验 | 基线 REQ-010/012/013/053 + 本票 `outbound_test`（结构+接缝） | **部分（子集）** | 管理 UI、保存前连接测试、真实 provider 互通、6 类绑定全矩阵未覆盖 |
-| AC-11 | 语音单 provider+voice_id；到期提醒/保活；故障降文字不换音色 | — | 未实现 | M08 语音不在本票 |
+| AC-11 | 语音单 provider+voice_id；到期提醒/保活；故障降文字不换音色 | 本票重跑：M08 `voice_test.dart`（§A2） | **部分（基础切片）** | 真实 TTS/ASR 厂商、音频处理、客户端 UI、路由/默认装配未接 |
 | AC-12 | 生图工具按开关可见；to_friends 硬关；审批；标注生成；日上限 | — | 未实现 | 生图未交付 |
-| AC-13 | 通话 Tailscale 路径；打断无回声；视觉脱敏；关闭视觉仍纯语音 | — | 未实现 | 通话未交付 |
-| AC-14 | 配额 80% 告警/100% 停大文件/磁盘<10% 全停；90 天清理留占位 | 基线配额纯策略（REQ-002） | 部分（内部能力） | 清理队列/blob 清理未接入；仅有纯策略单测 |
-| AC-15 | 备份密文、30 天轮转、integrity_check、删除回执后快照不含其数据 | — | 未实现 | 备份/恢复/删除回执未交付 |
+| AC-13 | 通话 Tailscale 路径；打断无回声；视觉脱敏；关闭视觉仍纯语音 | 本票重跑：M08 `voice_test.dart`（CallService 通话/打断状态机基础，假网关；§A2） | **部分（基础切片）** | Tailscale 传输、回声消除、视觉理解/脱敏、客户端与端到端未实现 |
+| AC-14 | 配额 80% 告警/100% 停大文件/磁盘<10% 全停；90 天清理留占位 | 本票重跑：基线 `quota_*` + M12 `cleanup_test`/`cleanup_store_test`（§A2） | **部分（基础切片）** | 真实 blob 删除/磁盘探测/存储适配器未接；内存实现 |
+| AC-15 | 备份密文、30 天轮转、integrity_check、删除回执后快照不含其数据 | 本票重跑：M12 `export_import_test` + `departure_test`/`departure_store_test`（§A2） | **部分（基础切片）** | 密文备份 tar+age、第二块盘、30 天轮转、integrity_check 恢复演练未实现（本切片外） |
 | AC-16 | Windows 托盘/自启/通知；Android 保活/来电降级；分享面板 | — | 未实现 | M11 端侧未合入本票 |
 | AC-17 | 群 AI 默认仅 @；防刷屏；群记忆不串私聊；朋友圈可见性服务端判定；搜索不跨用户 | 基线群成员/群 AI 策略（REQ-007/023/024） | 部分（内部能力） | AI 自动发言 admission 未接实际发送事务；朋友圈/群记忆未做 |
 | AC-18 | seq/ack/幂等/差集同步全绿；双端未读一致；断网补传不重复 | 基线设备 ack 子集（REQ-006）；本票 cross_user 覆盖差集可见性 | 部分（子集） | WebSocket、双端未读、客户端 last_ack 持久化未接入 |
 | AC-19 | 撤回/编辑留痕/引用/表情/置顶/提醒/定时/闪照/合并转发且留审计 | 基线服务端撤回/编辑/定时/表情/置顶（REQ-028~031/033）+ 本票 audit_coverage | 部分（子集） | 引用回复、闪照、合并转发、消息提醒、客户端入口未完成 |
 | AC-20 | 收藏/浮窗/全局搜索按可见范围过滤；聊天文件夹双端同步 | 基线收藏/搜索/文件搜索（REQ-032/034/035/036/039/040）+ 本票 cross_user 隔离 | 部分（子集） | 浮窗、聊天文件夹双端同步、客户端 UI 未做 |
 | AC-21 | 群语音房可进出、AI 旁听转候选、点名受约束、音频不录存 | — | 未实现 | 群语音房未交付 |
-| AC-22 | 3D 街区寻路、位置权威在宿主、2–5Hz、门锁/超时日志 | — | 未实现 | 3D 世界未交付 |
-| AC-23 | 拜访小院/室内邀请/访客上限 4/主人不在 AI 接待可关 | — | 未实现 | 拜访未交付 |
-| AC-24 | 卡通化身可换装/肤色/发型并同步；不做真人相似 | — | 未实现 | 卡通化身未交付 |
-| AC-25 | 宿主机 `.moc3` 导入/param_map/热切换；双端 model_id+profile_rev 一致 | — | 未实现 | Live2D 导入未交付 |
+| AC-22 | 3D 街区寻路、位置权威在宿主、2–5Hz、门锁/超时日志 | 本票重跑：M10 `world_pathfinding_test`/`world_test`（§A2） | **部分（基础切片）** | 3D 渲染、2–5Hz 同步/插值、客户端、门锁/超时日志未实现 |
+| AC-23 | 拜访小院/室内邀请/访客上限 4/主人不在 AI 接待可关 | 本票重跑：M10 `world_test`/presence 契约基础（§A2） | **部分（基础切片）** | 完整拜访规则/室内邀请/访客上限/接待开关/客户端未实现 |
+| AC-24 | 卡通化身可换装/肤色/发型并同步；不做真人相似 | 本票重跑：M10 `world_test`（AvatarRegistry 登记基础；§A2） | **部分（基础切片）** | 卡通化身换装/渲染/双端同步/客户端未实现 |
+| AC-25 | 宿主机 `.moc3` 导入/param_map/热切换；双端 model_id+profile_rev 一致 | — | 未实现 | Live2D `.moc3` 导入/热切换未交付 |
 | AC-26 | 朋友端不提供 `.moc3` 导入；默认 VRM 渲染正常 | — | 未实现 | 客户端未交付 |
-| AC-27 | CR-01～CR-12 主路径全部通过、边界生效 | 见 §C | 未实现 | 全部 CR 未交付 |
+| AC-27 | CR-01～CR-12 主路径全部通过、边界生效 | 本票重跑：CR-03/CR-07 基础切片（§A2/§C），其余 CR 未实现 | **部分（基础切片）** | 仅 CR-03/CR-07 宿主逻辑基础；其余 CR 与所有客户端/UI/装配未交付 |
 | AC-28 | AI 提议收件箱汇总待决；未批准不生效；过期失效留审计 | — | 未实现 | 提议收件箱未交付 |
-| AC-29 | 隐私仪表盘；导出完整可导入；删除回执 | — | 未实现 | M12 导出/删除不在本票 |
+| AC-29 | 隐私仪表盘；导出完整可导入；删除回执 | 本票重跑：M12 `export_import_test` + `departure_test`（§A2） | **部分（基础切片）** | 隐私仪表盘未实现；导出/导入/回执为内存实现，未接真实存储/UI |
 | AC-30 | 应用锁；锁屏通知正文可隐藏 | — | 未实现 | 端侧未交付 |
-| AC-31 | 从零部署无旧依赖；一键初始化脚本可搭建宿主 | 本票 `tool/init_host.ps1` 端到端实测（§E）：空目录建库+唯一管理员+首个邀请码+写监听配置，EXIT 0 | **通过（子集）** | 仅在本机用 `127.0.0.1` 回退验证；真实 tailnet 地址自动探测未测（沙箱无 tailscale） |
+| AC-31 | 从零部署无旧依赖；一键初始化脚本可搭建宿主 | 本票 `tool/init_host.ps1` 端到端实测（§E）：空目录建库+唯一管理员+首个邀请码+写监听配置，EXIT 0 | **通过（子集）** | 仅本机 `127.0.0.1` 回退验证；真实 tailnet 地址自动探测未测（沙箱无 tailscale） |
 | AC-32 | 图片/文件给 AI 上下文提示；草稿持久化；群主可转让；通话字幕开关不落历史 | 基线群主转让后端（REQ-023） | 部分（内部能力） | 图片/文件上下文提示、通话字幕未实现；草稿仅客户端纯 Dart（未接外壳） |
 | AC-33 | S1/S2 路由；S1 秒回不写记忆/事实；衬垫/拟人延迟可关；不确定升级 S2 | 基线 brain 规则/路由内部测试 | 部分（内部能力） | 无自动回复入口装配；衬垫/拟人延迟未做 |
 | AC-34 | 梗库三层命中失效；新梗入收件箱；领域卡组 ≤500 字不落历史；领域外说不熟 | 基线 brain meme/domain 测试 | 部分（内部能力） | 未装配到回复链；收件箱未做 |
@@ -108,11 +147,11 @@ dart test test/regression -r expanded --concurrency=1
 |---|---|---|---|
 | CR-01 | 灵魂画布（实时共创画布） | 未实现 | 产品未交付 |
 | CR-02 | 时间胶囊 | 未实现 | 产品未交付 |
-| CR-03 | 关系周报与年度报告 | 未实现 | 产品未交付 |
+| CR-03 | 关系周报与年度报告 | **部分（基础切片）** | M09 `ReportsService`：按期生成/范围过滤/预算门/可选信；分享图/水印/UI/默认装配未接 |
 | CR-04 | 情绪天气 | 未实现 | 产品未交付 |
 | CR-05 | 双人小剧场（角色扮演） | 未实现 | 产品未交付 |
 | CR-06 | 共同目标（习惯打卡） | 未实现 | 产品未交付 |
-| CR-07 | 深夜电台 | 未实现 | 产品未交付 |
+| CR-07 | 深夜电台 | **部分（基础切片）** | M09 `RadioService`：定时生成/离线缓存语义/预算/音色档案；真实 TTS/客户端/默认装配未接 |
 | CR-08 | AI 群主持人 | 未实现 | 仅有群 AI 限流配置（REQ-024），不构成主持行为；主路径未交付 |
 | CR-09 | 生成式礼物 | 未实现 | 产品未交付 |
 | CR-10 | 记忆博物馆 | 未实现 | 产品未交付 |
@@ -123,10 +162,12 @@ dart test test/regression -r expanded --concurrency=1
 
 ## D. 汇总
 
-- AC-01～AC-35：**本票新证据仅覆盖 AC-01（子集）与 AC-31（见 §E）**；
-  AC-10/14/17/18/19/20/32/33/34/35 等为“部分（内部能力/子集，多数未本票重跑）”；
+- 本票新证据：**AC-01（回归套件，§A）**、**AC-31（init 脚本，§E）**，以及
+  **M08/M09/M10/M12 基础切片回归（§A2，142 项通过）**；据此 AC-11/13/14/15/22/23/24/27/29
+  与 CR-03/CR-07 记为“部分（基础切片）”。
+- AC-10/17/18/19/20/32/33/34/35 等为“部分（内部能力/子集，多数未本票重跑）”；
   其余为 未覆盖 / 未实现。
-- CR-01～CR-12：全部 未实现。
+- CR-01～CR-12：仅 CR-03/CR-07 有宿主基础切片，其余 未实现。
 - 本矩阵**不构成产品验收通过**；完整缺口见 `docs/implementation-status.md` 与
   `docs/requirements-traceability.md`。
 
@@ -137,7 +178,7 @@ dart test test/regression -r expanded --concurrency=1
 脚本：`tool/init_host.ps1`。命令（空目录、本机回退地址；口令为合成测试值）：
 
 ```powershell
-pwsh -File tool/init_host.ps1 -DataDir <全新空目录> -AdminName Root \
+pwsh -File tool/init_host.ps1 -DataDir <全新空目录> -AdminName Root `
   -AdminPassword '<>=12位合成口令>' -BindAddress 127.0.0.1 -Port 8799
 ```
 

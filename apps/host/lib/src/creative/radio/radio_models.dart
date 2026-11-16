@@ -31,6 +31,20 @@ class RadioScript {
     'text': text,
     'segments': [for (final segment in segments) segment.toPayload()],
   };
+
+  /// 持久化序列化（只存片段，不存拼接后的 text，避免冗余）。
+  Map<String, Object?> toJson() => {
+    'segments': [for (final segment in segments) segment.toPayload()],
+  };
+
+  /// 从持久化 JSON 还原。
+  factory RadioScript.fromJson(Map<String, Object?> json) => RadioScript([
+    for (final segment in (json['segments'] as List? ?? const []))
+      RadioSegment(
+        kind: (segment as Map)['kind'] as String,
+        text: segment['text'] as String,
+      ),
+  ]);
 }
 
 /// 脚本来源接口。真实实现取 AI 日记/安慰语/白噪音，宿主切片用模板假实现。

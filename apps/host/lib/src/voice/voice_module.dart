@@ -12,7 +12,10 @@ import 'dart:async';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
+import '../storage/database.dart';
 import 'calls.dart';
+import 'sqlite_calls.dart';
+import 'sqlite_voice_profiles.dart';
 import 'voice_gateway.dart';
 import 'voice_profiles.dart';
 
@@ -45,6 +48,33 @@ class VoiceModule extends HostModule {
             clock: clock,
           ),
       calls: calls ?? InMemoryCallService(clock: clock),
+      sweepInterval: sweepInterval,
+    );
+  }
+
+  /// 装配准备：用 SQLite 存储版本构建模块（宿主装配时一行接入）。
+  ///
+  /// `database` 由 StorageModule 提供，且已应用 [voiceMigrations]（700–799）。
+  factory VoiceModule.persistent({
+    required Database database,
+    Clock clock = const SystemClock(),
+    TtsAdapter? tts,
+    AsrAdapter? asr,
+    Duration sweepInterval = const Duration(seconds: 1),
+  }) {
+    final resolvedProfiles = SqliteVoiceProfiles(
+      database: database,
+      clock: clock,
+    );
+    return VoiceModule._(
+      profiles: resolvedProfiles,
+      gateway: VoiceGateway(
+        profiles: resolvedProfiles,
+        tts: tts ?? const UnavailableTtsAdapter(),
+        asr: asr ?? const UnavailableAsrAdapter(),
+        clock: clock,
+      ),
+      calls: SqliteCallService(database: database, clock: clock),
       sweepInterval: sweepInterval,
     );
   }

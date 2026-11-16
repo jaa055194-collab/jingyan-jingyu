@@ -49,6 +49,26 @@ class RadioEpisode {
     'playableOffline': playableOffline,
     'script': script.toPayload(),
   };
+
+  /// 持久化序列化（含 owner/ai，供 SQLite 存储还原完整对象）。
+  Map<String, Object?> toJson() => {
+    'ownerAccountId': ownerAccountId,
+    ...toPayload(),
+    'script': script.toJson(),
+  };
+
+  /// 从持久化 JSON 还原。
+  factory RadioEpisode.fromJson(Map<String, Object?> json) => RadioEpisode(
+    ownerAccountId: json['ownerAccountId'] as String,
+    aiId: json['aiId'] as String,
+    dateKey: json['dateKey'] as String,
+    scheduledFor: DateTime.parse(json['scheduledFor'] as String),
+    generatedAt: DateTime.parse(json['generatedAt'] as String),
+    script: RadioScript.fromJson((json['script'] as Map).cast<String, Object?>()),
+    voiceId: json['voiceId'] as String,
+    offlineCacheKey: json['offlineCacheKey'] as String,
+    playableOffline: json['playableOffline'] as bool,
+  );
 }
 
 /// 电台仓储。
