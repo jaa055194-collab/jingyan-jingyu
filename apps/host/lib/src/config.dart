@@ -13,6 +13,8 @@ class HostConfig {
     this.hostVersion = '0.1.0',
     this.modelWorkerExecutable,
     this.modelWorkerPath,
+    this.hostAccountId,
+    this.hostDeviceId,
   });
 
   /// 监听地址。部署时改为 LAN/tailnet 地址；不得监听公网（FR-10）。
@@ -30,7 +32,14 @@ class HostConfig {
   final String? modelWorkerExecutable;
   final String? modelWorkerPath;
 
-  /// 从环境变量读取：`JINGYU_BIND`、`JINGYU_PORT`、`JINGYU_DATA_DIR`。
+  /// 由部署者指定的可信宿主机账号与设备身份，必须同时匹配已认证管理员。
+  /// 未配置任一项时，不授予宿主机能力；不从地址、平台或请求参数推断。
+  final String? hostAccountId;
+  final String? hostDeviceId;
+
+  /// 从环境变量读取：`JINGYU_BIND`、`JINGYU_PORT`、`JINGYU_DATA_DIR`，
+  /// 可选的模型工作进程路径，以及 `JINGYU_HOST_ACCOUNT_ID` /
+  /// `JINGYU_HOST_DEVICE_ID` 身份对。
   factory HostConfig.fromEnvironment(Map<String, String> env) {
     final portRaw = env['JINGYU_PORT'];
     final port = portRaw == null ? 8787 : int.tryParse(portRaw);
@@ -43,6 +52,8 @@ class HostConfig {
       dataDir: env['JINGYU_DATA_DIR'] ?? 'data',
       modelWorkerExecutable: env['JINGYU_MODEL_WORKER_EXECUTABLE'],
       modelWorkerPath: env['JINGYU_MODEL_WORKER_PATH'],
+      hostAccountId: env['JINGYU_HOST_ACCOUNT_ID'],
+      hostDeviceId: env['JINGYU_HOST_DEVICE_ID'],
     );
   }
 }

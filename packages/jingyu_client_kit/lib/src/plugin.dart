@@ -4,6 +4,24 @@
 /// 插件只能通过 [PluginContext] 拿到被授权的能力，拿不到宿主内部对象。
 library;
 
+import 'package:jingyu_core/jingyu_core.dart';
+import 'package:jingyu_protocol/jingyu_protocol.dart';
+
+/// Host evaluates visibility, external-model restrictions and AI budget.
+/// Plugins never receive credentials or direct network access.
+class PluginModelRequest {
+  const PluginModelRequest({
+    required this.aiId,
+    required this.capability,
+    required this.input,
+    this.conversationId,
+  });
+  final String aiId;
+  final String capability;
+  final String? conversationId;
+  final Map<String, Object?> input;
+}
+
 /// 插件可申请的能力。未在清单里声明的能力，运行时一律拿不到。
 enum PluginCapability {
   /// 读取当前会话的消息（只读，且受服务端可见性约束）。
@@ -79,7 +97,9 @@ class PluginManifest {
   /// 随插件分发的素材署名（CC 素材必须保留署名，见 docs/plugins/02-assets.md）。
   final List<String> assetCredits;
 
-  static final RegExp _idPattern = RegExp(r'^[a-z][a-z0-9]*(\.[a-z][a-z0-9_-]*)+$');
+  static final RegExp _idPattern = RegExp(
+    r'^[a-z][a-z0-9]*(\.[a-z][a-z0-9_-]*)+$',
+  );
   static final RegExp _semver = RegExp(r'^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$');
 
   /// 从 `plugin.json` 解析。失败抛 [FormatException]，不做宽松兜底。
@@ -93,7 +113,9 @@ class PluginManifest {
     final id = str('id');
     if (!_idPattern.hasMatch(id)) throw FormatException('插件 id 非法', id);
     final version = str('version');
-    if (!_semver.hasMatch(version)) throw FormatException('version 不是语义化版本', version);
+    if (!_semver.hasMatch(version)) {
+      throw FormatException('version 不是语义化版本', version);
+    }
     final api = json['apiVersion'];
     if (api is! int) throw const FormatException('apiVersion 必须是整数');
 
@@ -107,7 +129,8 @@ class PluginManifest {
     }
 
     final rawPlatforms = json['platforms'] ?? const ['android', 'windows'];
-    if (rawPlatforms is! List || rawPlatforms.any((p) => p != 'android' && p != 'windows')) {
+    if (rawPlatforms is! List ||
+        rawPlatforms.any((p) => p != 'android' && p != 'windows')) {
       throw const FormatException('platforms 只允许 android / windows');
     }
 
@@ -188,7 +211,11 @@ class RoomBrief {
 
 /// 生成的房间布局（服务端保存版本号，FR-35）。
 class RoomLayout {
-  const RoomLayout({required this.style, required this.rooms, this.furniture = const []});
+  const RoomLayout({
+    required this.style,
+    required this.rooms,
+    this.furniture = const [],
+  });
 
   final String style;
   final List<String> rooms;
@@ -209,6 +236,29 @@ abstract class PluginContext {
 
   /// 发消息；未申请 sendMessage 时抛 [StateError]。
   Future<void> sendText(String conversationId, String text);
+
+  /// Host callback must enforce server visibility for the signed-in user.
+  Future<Result<List<MessageEventFrame>>> readConversation(
+    String conversationId,
+  ) {
+    if (!has(PluginCapability.readConversation)) {
+      throw StateError('readConversation not declared');
+    }
+    return Future.value(
+      err(FailureCode.unavailable, 'Conversation access unavailable'),
+    );
+  }
+
+  /// Host callback must enforce AI budget and disallow external invocation for
+  /// ephemeral/private/group content. This context supplies no direct network.
+  Future<Result<Map<String, Object?>>> modelInvoke(PluginModelRequest request) {
+    if (!has(PluginCapability.modelInvoke)) {
+      throw StateError('modelInvoke not declared');
+    }
+    return Future.value(
+      err(FailureCode.unavailable, 'Model invocation unavailable'),
+    );
+  }
 }
 
 /// 插件入口。
