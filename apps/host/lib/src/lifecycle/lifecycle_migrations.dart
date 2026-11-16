@@ -7,7 +7,7 @@ library;
 
 import '../storage/migrations.dart';
 
-/// 生命周期相关表：配额账本、清理日志、导出作业、删除回执。
+/// 生命周期相关表：配额账本+磁盘状态、清理媒体/提醒/占位/运行、导出作业、删除回执。
 const List<Migration> lifecycleMigrations = [
   Migration(1200, 'quota ledger', '''
 CREATE TABLE quota (
@@ -47,5 +47,49 @@ CREATE TABLE deletion_receipts (
   ai_disposition TEXT NOT NULL
 );
 CREATE INDEX idx_deletion_receipts_account ON deletion_receipts(account_id);
+'''),
+  Migration(1204, 'quota disk state', '''
+CREATE TABLE quota_disk_state (
+  id TEXT PRIMARY KEY NOT NULL,
+  free_bytes INTEGER NOT NULL CHECK(free_bytes >= 0),
+  total_bytes INTEGER NOT NULL CHECK(total_bytes > 0),
+  CHECK(free_bytes <= total_bytes)
+);
+'''),
+  Migration(1205, 'cleanup media assets and placeholders', '''
+CREATE TABLE media_assets (
+  id TEXT PRIMARY KEY NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('video','voice')),
+  created_at TEXT NOT NULL,
+  blob_present INTEGER NOT NULL DEFAULT 1 CHECK(blob_present IN (0,1))
+);
+CREATE TABLE media_asset_holders (
+  asset_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  PRIMARY KEY(asset_id, account_id)
+);
+CREATE TABLE media_reminders (
+  asset_id TEXT PRIMARY KEY NOT NULL,
+  reminded_at TEXT NOT NULL
+);
+CREATE TABLE media_placeholders (
+  asset_id TEXT NOT NULL,
+  owner_account_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  PRIMARY KEY(asset_id, owner_account_id, message_id)
+);
+CREATE TABLE cleanup_runs (
+  day_key TEXT PRIMARY KEY NOT NULL,
+  ran_at TEXT NOT NULL
+);
+'''),
+  Migration(1206, 'departure ledger', '''
+CREATE TABLE departure_ledger (
+  account_id TEXT PRIMARY KEY NOT NULL,
+  object_counts TEXT NOT NULL,
+  moments_to_anonymize INTEGER NOT NULL DEFAULT 0 CHECK(moments_to_anonymize >= 0)
+);
 '''),
 ];

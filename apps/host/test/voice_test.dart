@@ -1,13 +1,23 @@
 // M08 voice 模块测试入口。
+import 'dart:io';
+
 import 'package:jingyu_core/jingyu_core.dart';
+import 'package:jingyu_host/src/storage/migrations.dart';
+import 'package:jingyu_host/src/storage/sqlite_database.dart';
 import 'package:jingyu_host/src/voice/calls.dart';
+import 'package:jingyu_host/src/voice/sqlite_calls.dart';
+import 'package:jingyu_host/src/voice/sqlite_voice_profiles.dart';
 import 'package:jingyu_host/src/voice/voice_gateway.dart';
+import 'package:jingyu_host/src/voice/voice_migrations.dart';
 import 'package:jingyu_host/src/voice/voice_module.dart';
 import 'package:jingyu_host/src/voice/voice_profiles.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:test/test.dart';
 
+import 'voice_call_service_contract.dart';
 import 'voice_profile_store_contract.dart';
+
+const _testMigrations = [...allMigrations, ...voiceMigrations];
 
 class _InMemoryProfileFixture implements VoiceProfileFixture {
   @override
@@ -20,12 +30,103 @@ class _InMemoryProfileFixture implements VoiceProfileFixture {
   Future<void> close() async {}
 }
 
-void main() {
-  group('voice profiles (in-memory)', () {
-    voiceProfileContract(
-      'in-memory',
-      () async => _InMemoryProfileFixture(),
+class _SqliteProfileFixture implements VoiceProfileFixture {
+  _SqliteProfileFixture(this.directory, this.db, this.clock);
+
+  final Directory directory;
+  final SqliteDatabase db;
+
+  @override
+  final FakeClock clock;
+
+  @override
+  late final VoiceProfiles profiles = SqliteVoiceProfiles(
+    database: db,
+    clock: clock,
+  );
+
+  static Future<_SqliteProfileFixture> create() async {
+    final directory = await Directory.systemTemp.createTemp('voice-profile-');
+    final db = await SqliteDatabase.open(
+      '${directory.path}/host.sqlite',
+      migrations: _testMigrations,
     );
+    return _SqliteProfileFixture(
+      directory,
+      db,
+      FakeClock(DateTime.utc(2026, 1, 1)),
+    );
+  }
+
+  @override
+  Future<void> close() async {
+    await db.close();
+    await directory.delete(recursive: true);
+  }
+}
+
+class _MemoryCallFixture implements CallFixture {
+  @override
+  final FakeClock clock = FakeClock(DateTime.utc(2026, 1, 1));
+
+  @override
+  late final InMemoryCallService calls = InMemoryCallService(clock: clock);
+
+  @override
+  CallRuntimeDriver get runtime => calls;
+
+  @override
+  int get createdCount => calls.createdCount;
+
+  @override
+  Future<void> close() async {}
+}
+
+class _SqliteCallFixture implements CallFixture {
+  _SqliteCallFixture(this.directory, this.db, this.clock);
+
+  final Directory directory;
+  final SqliteDatabase db;
+
+  @override
+  final FakeClock clock;
+
+  @override
+  late final SqliteCallService calls = SqliteCallService(
+    database: db,
+    clock: clock,
+  );
+
+  @override
+  CallRuntimeDriver get runtime => calls;
+
+  @override
+  int get createdCount => calls.createdCount;
+
+  static Future<_SqliteCallFixture> create() async {
+    final directory = await Directory.systemTemp.createTemp('voice-calls-');
+    final db = await SqliteDatabase.open(
+      '${directory.path}/host.sqlite',
+      migrations: _testMigrations,
+    );
+    return _SqliteCallFixture(
+      directory,
+      db,
+      FakeClock(DateTime.utc(2026, 1, 1)),
+    );
+  }
+
+  @override
+  Future<void> close() async {
+    await db.close();
+    await directory.delete(recursive: true);
+  }
+}
+
+void main() {
+  group('voice profiles', () {
+    voiceProfileContract('in-memory', () async => _InMemoryProfileFixture());
+    voiceProfileContract('SQLite', _SqliteProfileFixture.create);
   });
 
   group('voice gateway', () {
@@ -127,101 +228,8 @@ void main() {
     });
   });
 
-  group('calls', () {
-    final ai = AiId.parse('ai1');
-    late FakeClock clock;
-    late InMemoryCallService calls;
-
-    setUp(() {
-      clock = FakeClock(DateTime.utc(2026, 1, 1));
-      calls = InMemoryCallService(clock: clock);
-    });
-
-    test('FR-32 the same call_id never opens a second call', () async {
-      final first = await calls.start(
-        callId: 'c1',
-        ai: ai,
-        peerAccountId: 'human',
-      );
-      final second = await calls.start(
-        callId: 'c1',
-        ai: ai,
-        peerAccountId: 'human',
-      );
-      expect(first.isOk, isTrue, reason: first.failureOrNull?.message);
-      expect(second.isOk, isTrue);
-      expect(second.value.callId, 'c1');
-      expect(calls.createdCount, 1);
-      expect((await calls.get(callId: 'c1')).value.state, CallState.ringing);
-    });
-
-    test('FR-32 unanswered call becomes missed after 30s', () async {
-      await calls.start(callId: 'c2', ai: ai, peerAccountId: 'human');
-      clock.advance(const Duration(seconds: 29));
-      expect((await calls.sweepMissed()).value, isEmpty);
-      clock.advance(const Duration(seconds: 1));
-      expect((await calls.sweepMissed()).value, contains('c2'));
-      expect((await calls.get(callId: 'c2')).value.state, CallState.missed);
-    });
-
-    test('FR-32 answered call is not swept as missed', () async {
-      await calls.start(callId: 'c3', ai: ai, peerAccountId: 'human');
-      await calls.answer(callId: 'c3');
-      clock.advance(const Duration(minutes: 1));
-      expect((await calls.sweepMissed()).value, isEmpty);
-      expect((await calls.get(callId: 'c3')).value.state, CallState.active);
-    });
-
-    test('FR-32 reusing call_id for a different peer is rejected', () async {
-      await calls.start(callId: 'c6', ai: ai, peerAccountId: 'human');
-      final result = await calls.start(
-        callId: 'c6',
-        ai: ai,
-        peerAccountId: 'other',
-      );
-      expect(result.failureOrNull?.code, FailureCode.conflict);
-    });
-
-    test(
-      'AC-13 interrupt cancels LLM, clears TTS queue, stops playback and marks truncation',
-      () async {
-        await calls.start(callId: 'c4', ai: ai, peerAccountId: 'human');
-        await calls.answer(callId: 'c4');
-        calls.beginAssistantTurn('c4', '这句话说到一半');
-        calls.enqueueTts('c4', 'seg-1');
-        calls.enqueueTts('c4', 'seg-2');
-        calls.beginPlayback('c4');
-
-        expect(calls.isLlmCancelled('c4'), isFalse);
-        expect(calls.ttsQueueOf('c4'), hasLength(2));
-        expect(calls.isPlaying('c4'), isTrue);
-
-        final result = await calls.interrupt(callId: 'c4');
-        expect(result.isOk, isTrue, reason: result.failureOrNull?.message);
-        final outcome = result.value;
-        expect(outcome.llmCancelled, isTrue);
-        expect(outcome.ttsQueueEmpty, isTrue);
-        expect(outcome.playbackStopped, isTrue);
-        expect(outcome.truncated, isTrue);
-
-        expect(calls.isLlmCancelled('c4'), isTrue);
-        expect(calls.ttsQueueOf('c4'), isEmpty);
-        expect(calls.isPlaying('c4'), isFalse);
-
-        final utterances = calls.utterancesOf('c4');
-        expect(utterances, hasLength(1));
-        expect(utterances.single.interrupted, isTrue);
-        expect(utterances.single.complete, isFalse);
-        expect(utterances.single.marker, '中途被打断');
-      },
-    );
-
-    test('AC-13 interrupt outside an active call is rejected', () async {
-      await calls.start(callId: 'c5', ai: ai, peerAccountId: 'human');
-      final result = await calls.interrupt(callId: 'c5');
-      expect(result.failureOrNull?.code, FailureCode.conflict);
-    });
-  });
+  callServiceContract('calls in-memory', () async => _MemoryCallFixture());
+  callServiceContract('calls SQLite', _SqliteCallFixture.create);
 
   group('voice module', () {
     test('is named voice and registers its three service interfaces', () async {
@@ -239,6 +247,24 @@ void main() {
 
       await module.stop();
       await module.stop(); // 停止必须幂等
+    });
+
+    test('persistent factory wires the SQLite-backed services', () async {
+      final db = await SqliteDatabase.open(
+        ':memory:',
+        migrations: _testMigrations,
+      );
+      final module = VoiceModule.persistent(
+        database: db,
+        clock: FakeClock(DateTime.utc(2026, 1, 1)),
+        sweepInterval: Duration.zero,
+      );
+      final services = HostServices();
+      await module.configure(services);
+      expect(services.get<VoiceProfiles>(), isA<SqliteVoiceProfiles>());
+      expect(services.get<CallService>(), isA<SqliteCallService>());
+      await module.stop();
+      await db.close();
     });
 
     test('wires caller-provided dependencies through HostServices', () async {
@@ -265,5 +291,51 @@ void main() {
       expect(services.get<VoiceGateway>(), same(gateway));
       expect(services.get<CallService>(), same(calls));
     });
+  });
+
+  test('SQLite profile and call state survive a reopen', () async {
+    final directory = await Directory.systemTemp.createTemp('voice-persist-');
+    final clock = FakeClock(DateTime.utc(2026, 1, 1));
+    final ai = AiId.parse('ai-persist');
+    final path = '${directory.path}/host.sqlite';
+
+    var db = await SqliteDatabase.open(path, migrations: _testMigrations);
+    var profiles = SqliteVoiceProfiles(database: db, clock: clock);
+    var calls = SqliteCallService(database: db, clock: clock);
+
+    expect(
+      (await profiles.create(
+        ai: ai,
+        provider: 'minimax',
+        model: 'speech-01',
+        voiceId: 'v-9',
+        consentRef: 'consent-9',
+        grantedBy: 'owner',
+      ))
+          .isOk,
+      isTrue,
+    );
+    await profiles.stageParams(ai: ai, params: const {'speed': 1.3});
+    await profiles.applyAtSentenceBoundary(ai: ai);
+    await calls.start(callId: 'call-persist', ai: ai, peerAccountId: 'human');
+    await calls.answer(callId: 'call-persist');
+    await db.close();
+
+    db = await SqliteDatabase.open(path, migrations: _testMigrations);
+    profiles = SqliteVoiceProfiles(database: db, clock: clock);
+    calls = SqliteCallService(database: db, clock: clock);
+
+    final reopenedProfile = await profiles.get(ai: ai);
+    expect(reopenedProfile.value.voiceId, 'v-9');
+    expect(reopenedProfile.value.revision, 2);
+    expect(reopenedProfile.value.params['speed'], 1.3);
+    expect((await profiles.consents(ai: ai)).value, isNotEmpty);
+
+    final reopenedCall = await calls.get(callId: 'call-persist');
+    expect(reopenedCall.value.state, CallState.active);
+    expect(reopenedCall.value.aiId, ai);
+
+    await db.close();
+    await directory.delete(recursive: true);
   });
 }

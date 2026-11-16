@@ -61,9 +61,9 @@ void cleanupStoreContract(String label, CleanupStore Function() create) {
 
     test('提醒时间记录与每日运行标记', () async {
       await store.addAsset(asset('x'));
-      expect(store.remindedAt('x'), isNull);
+      expect(await store.remindedAt('x'), isNull);
       await store.markReminded('x', DateTime.utc(2026, 3, 1));
-      expect(store.remindedAt('x'), DateTime.utc(2026, 3, 1));
+      expect(await store.remindedAt('x'), DateTime.utc(2026, 3, 1));
       expect(await store.ranOn('2026-03-01'), isFalse);
       await store.markRan('2026-03-01');
       expect(await store.ranOn('2026-03-01'), isTrue);

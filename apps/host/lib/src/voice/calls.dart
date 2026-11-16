@@ -142,6 +142,20 @@ abstract interface class CallService {
   Future<Result<List<String>>> sweepMissed();
 }
 
+/// 通话运行时驱动：仅供测试与宿主侧模拟打断边界（AC-13）。
+///
+/// 内存与 SQLite 实现都实现它，使「打断清理」契约可以被复用；
+/// 它不影响对外 [CallService] 的持久化语义。
+abstract interface class CallRuntimeDriver {
+  void beginAssistantTurn(String callId, String text);
+  void enqueueTts(String callId, String segment);
+  void beginPlayback(String callId);
+  List<String> ttsQueueOf(String callId);
+  bool isPlaying(String callId);
+  bool isLlmCancelled(String callId);
+  List<CallUtterance> utterancesOf(String callId);
+}
+
 class _Runtime {
   _Runtime(this.session);
 
@@ -154,7 +168,7 @@ class _Runtime {
 }
 
 /// 内存实现。
-class InMemoryCallService implements CallService {
+class InMemoryCallService implements CallService, CallRuntimeDriver {
   InMemoryCallService({
     Clock clock = const SystemClock(),
     this.ringTimeout = const Duration(seconds: 30),
@@ -304,9 +318,10 @@ class InMemoryCallService implements CallService {
     return Ok<List<String>>(List<String>.unmodifiable(missed));
   }
 
-  // ---- 测试/宿主侧模拟辅助（不属于对外接口） ----
+  // ---- 测试/宿主侧模拟辅助（属于 [CallRuntimeDriver]） ----
 
   /// 开始一轮 AI 发言：重置 LLM 取消位，记录尚未说完的部分。
+  @override
   void beginAssistantTurn(String callId, String text) {
     final runtime = _calls[callId]!;
     runtime.llmCancelled = false;
@@ -316,22 +331,28 @@ class InMemoryCallService implements CallService {
   }
 
   /// 追加一段待播放的 TTS 音频。
+  @override
   void enqueueTts(String callId, String segment) {
     _calls[callId]!.ttsQueue.add(segment);
   }
 
   /// 开始播放。
+  @override
   void beginPlayback(String callId) {
     _calls[callId]!.playing = true;
   }
 
+  @override
   List<String> ttsQueueOf(String callId) =>
       List<String>.unmodifiable(_calls[callId]?.ttsQueue ?? const <String>[]);
 
+  @override
   bool isPlaying(String callId) => _calls[callId]?.playing ?? false;
 
+  @override
   bool isLlmCancelled(String callId) => _calls[callId]?.llmCancelled ?? false;
 
+  @override
   List<CallUtterance> utterancesOf(String callId) =>
       List<CallUtterance>.unmodifiable(
         _calls[callId]?.utterances ?? const <CallUtterance>[],

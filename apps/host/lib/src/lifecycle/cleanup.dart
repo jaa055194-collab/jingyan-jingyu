@@ -73,8 +73,8 @@ abstract class CleanupStore {
   /// 删除 blob（幂等）；仅把 [MediaAsset.blobPresent] 置 false，占位由服务写入。
   Future<void> deleteBlob(String id);
 
-  /// 该媒体上次提醒时间；未提醒返回 null（同步查询契约）。
-  DateTime? remindedAt(String id);
+  /// 该媒体上次提醒时间；未提醒返回 null。
+  Future<DateTime?> remindedAt(String id);
 
   Future<void> markReminded(String id, DateTime at);
 
@@ -114,7 +114,7 @@ class InMemoryCleanupStore implements CleanupStore {
   }
 
   @override
-  DateTime? remindedAt(String id) => _reminders[id];
+  Future<DateTime?> remindedAt(String id) async => _reminders[id];
 
   @override
   Future<void> markReminded(String id, DateTime at) async {
@@ -252,7 +252,8 @@ class CleanupService {
             },
           ),
         );
-      } else if (age >= remindThreshold && _store.remindedAt(asset.id) == null) {
+      } else if (age >= remindThreshold &&
+          await _store.remindedAt(asset.id) == null) {
         await _store.markReminded(asset.id, now);
         reminded++;
         await _audit?.record(
