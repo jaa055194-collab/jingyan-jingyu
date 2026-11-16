@@ -4,11 +4,24 @@
 /// 新模块只需在 [defaultModules] 里追加一行（或由插件清单注入）。
 library;
 
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:jingyu_core/jingyu_core.dart';
+import 'package:jingyu_protocol/jingyu_protocol.dart';
+import 'src/brain/group_rules_module.dart';
+import 'src/ai/social_level/social_level_service.dart';
+import 'src/models/budget_configuration.dart';
+import 'src/models/usage_meter.dart';
+import 'src/models/provider_registry.dart';
+import 'src/social/group_ai_policy.dart';
+import 'src/messages/message_store.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
 import 'src/ai/persona/persona_migrations.dart';
 import 'src/ai/persona/persona_module.dart';
+import 'src/ai/social_level/social_level_migrations.dart';
+import 'src/ai/social_level/social_level_module.dart';
+import 'src/ai/social_level/sqlite_social_level_store.dart';
 import 'src/audit/admin_audit_module.dart';
 import 'src/audit/admin_audit_reader.dart';
 import 'src/accounts/accounts_module.dart';
@@ -94,6 +107,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       ...usageMigrations,
       budgetTimezoneMigration,
       ...personaMigrations,
+      socialLevelMigration,
     ],
   );
   final messages = SqliteMessageStore(
@@ -165,6 +179,112 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
           executable: executable,
           workerPath: workerPath!,
         );
+  final levels = SqliteSocialLevelStore(
+    database: storage.database,
+    clock: clock,
+  );
+  // Local-only sequential gates. Admission is atomic in GroupAiPolicy, but a
+  // later append failure may consume its slot; no crash replay/queue is promised.
+  Future<({String owner, AiId profile})?> resolve(
+    StoredMessage incoming,
+    String target,
+  ) async {
+    final rows = await storage.database.query(
+      '''
+SELECT o.operator_id AS owner,p.id AS profile FROM messages m
+JOIN account human ON human.id=m.sender_id AND human.kind='human' AND human.disabled=0
+JOIN social_conversations g ON g.id=m.conversation_id
+JOIN social_members source ON source.conversation_id=g.id AND source.account_id=human.id AND source.first_visible_seq<=m.seq
+JOIN account ai ON ai.id=? AND ai.kind='ai' AND ai.disabled=0
+JOIN ai_operator o ON o.ai_id=ai.id
+JOIN account owner ON owner.id=o.operator_id AND owner.kind='human' AND owner.disabled=0
+JOIN ai_profile p ON p.account_id=ai.id
+JOIN social_members member ON member.conversation_id=g.id AND member.account_id=ai.id AND member.first_visible_seq<=m.seq
+WHERE m.message_id=? AND m.conversation_id=? AND m.sender_id=? AND m.seq=? AND m.kind='text' AND m.recalled_at IS NULL
+AND NOT EXISTS(SELECT 1 FROM message_edits e WHERE e.message_id=m.message_id)
+AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
+''',
+      [
+        target,
+        incoming.messageId,
+        incoming.conversationId,
+        incoming.senderId,
+        incoming.seq,
+      ],
+    );
+    if (rows.length != 1) return null;
+    final owner = rows.single['owner'] as String,
+        profile = AiId.parse(rows.single['profile'] as String);
+    final level = await levels.get(owner: AccountId.parse(owner), ai: profile);
+    if (level.valueOrNull?.level == null ||
+        level.valueOrNull!.level == AiSocialLevel.l0) {
+      return null;
+    }
+    return (owner: owner, profile: profile);
+  }
+
+  Future<BudgetDay?> budget(({String owner, AiId profile}) target) async {
+    final config = await BudgetConfiguration.forOwner(
+      ownerId: target.owner,
+      db: storage.database,
+      clock: clock,
+    ).get(target.profile);
+    if (config.isErr) return null;
+    final gate =
+        await UsageMeter.forOwner(
+          ownerId: target.owner,
+          db: storage.database,
+          clock: clock,
+          dayForClock: (c) =>
+              BudgetDay.fromClock(c, offsetMinutes: config.value.offsetMinutes),
+        ).inspect(
+          target.profile,
+          layer: BudgetLayer.b1FastBrain,
+          capability: ProviderCapability.chatFast,
+        );
+    return gate.valueOrNull?.day;
+  }
+
+  final groupRules = GroupRulesModule(
+    dispatch: (incoming, target, reply) async {
+      final first = await resolve(incoming, target);
+      if (first == null || await budget(first) == null) return;
+      final current = await resolve(incoming, target);
+      if (current == null || current != first) return;
+      final day = await budget(current);
+      if (day == null) return;
+      final gate =
+          await GroupAiPolicy(
+            actorId: AccountId.parse(target),
+            database: storage.database,
+            clock: clock,
+            budgetDay: (_) => day,
+          ).tryConsumePost(
+            ConversationId.parse(incoming.conversationId),
+            roundId: incoming.messageId,
+            mentioned: true,
+          );
+      if (gate.isErr) return;
+      final id =
+          's1_${sha256.convert(utf8.encode('${incoming.messageId}:$target')).toString().substring(0, 48)}';
+      final sent = await messages.append(
+        conversationId: incoming.conversationId,
+        senderId: target,
+        clientMsgId: id,
+        kind: MessageKind.text,
+        body: {'text': reply.text, 'source': 's1', 'activityRefs': <String>[]},
+      );
+      if (sent.isOk && !sent.value.duplicate) {
+        try {
+          await blindIndex.indexMessage(
+            messageId: sent.value.message.messageId,
+            conversationId: incoming.conversationId,
+            body: sent.value.message.body,
+          );
+        } catch (_) {}
+      }
+    },
+  );
   final providerDiscoveryRequest = executable == null
       ? null
       : ProcessHttpTransport(
@@ -180,8 +300,12 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     ),
     storage,
     AccountsModule(domain: accounts),
-    AdminAuditModule(reader: AdminAuditReader(database: storage.database, clock: clock)),
-    AdminUsageModule(reader: AdminUsageReader(database: storage.database, clock: clock)),
+    AdminAuditModule(
+      reader: AdminAuditReader(database: storage.database, clock: clock),
+    ),
+    AdminUsageModule(
+      reader: AdminUsageReader(database: storage.database, clock: clock),
+    ),
     MessagesModule(
       store: messages,
       authenticate: DbAuthenticator(accounts).call,
@@ -209,6 +333,12 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       urlGuard: urlGuard,
       clock: clock,
     ),
+    SocialLevelModule(
+      service: levels,
+      authenticate: DbAuthenticator(accounts).call,
+      clock: clock,
+    ),
+    groupRules,
     PersonaModule(
       database: storage.database,
       cipher: storage.cipher,

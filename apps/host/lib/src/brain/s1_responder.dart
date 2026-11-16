@@ -29,6 +29,18 @@ class RulesS1Responder implements S1Responder {
     '😂': '😂',
   };
 
+  static String _normalize(String text) =>
+      text.trim().toLowerCase().replaceFirst(_trailingPunctuation, '');
+
+  /// Exact curated intent support, sharing the reply catalog and normalization.
+  bool supports(String text) => curatedReply(text) != null;
+
+  /// Curated identity-independent reaction; null means no exact supported intent.
+  S1Reply? curatedReply(String text) {
+    final reaction = _reactions[_normalize(text)];
+    return reaction == null ? null : S1Reply(reaction);
+  }
+
   @override
   Future<S1Reply> replyTo(
     AiId ai,
@@ -37,10 +49,6 @@ class RulesS1Responder implements S1Responder {
   }) async {
     // Padding must remain neutral even for distressing or adversarial input.
     if (padding) return const S1Reply('嗯……');
-    final String token = message.text.trim().toLowerCase().replaceFirst(
-      _trailingPunctuation,
-      '',
-    );
-    return S1Reply(_reactions[token] ?? '愿意多说一点吗？');
+    return curatedReply(message.text) ?? const S1Reply('愿意多说一点吗？');
   }
 }

@@ -338,9 +338,20 @@ void main() {
         )).failureOrNull?.code,
         FailureCode.invalidArgument,
       );
-      final short = (await create(a, apiKey: 'abc')).value;
-      expect(short.keyMask, '****');
-      expect(jsonEncode(short.toJson()), isNot(contains('abc')));
+      // A credential can coincide with public metadata (for example the
+      // generated ID's p_ prefix); assert the complete public response instead
+      // of banning that substring from unrelated fields.
+      for (final key in ['p', 'ab', 'abc', 'abcd']) {
+        final short = (await create(a, apiKey: key)).value;
+        expect(jsonDecode(jsonEncode(short.toJson())), {
+          'id': short.id,
+          'name': 'Example',
+          'base_url': 'https://models.example/v1',
+          'key_mask': '****',
+          'enabled': true,
+          'capabilities': ['chat', 'chatFast'],
+        });
+      }
     },
   );
 }

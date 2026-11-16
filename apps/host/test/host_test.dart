@@ -216,6 +216,8 @@ void main() {
         'attachments',
         'social',
         'models',
+        'social_level',
+        'group_rules',
         'persona',
       ]);
       final metadata = await host.pipeline.handle(
@@ -323,19 +325,16 @@ void main() {
       },
     );
 
-    test(
-      'message ack requires an authenticated session',
-      () async {
-        final anonymous = await host.pipeline.handle(
-          HostRequest(
-            method: 'POST',
-            path: path(Routes.messageAck, conversation),
-            body: {'seq': 0},
-          ),
-        );
-        expect(anonymous.status, 401);
-      },
-    );
+    test('message ack requires an authenticated session', () async {
+      final anonymous = await host.pipeline.handle(
+        HostRequest(
+          method: 'POST',
+          path: path(Routes.messageAck, conversation),
+          body: {'seq': 0},
+        ),
+      );
+      expect(anonymous.status, 401);
+    });
 
     test('发送 → 幂等重发 → 差集同步', () async {
       Future<HostResponse> post(String cmid) => host.pipeline.handle(
