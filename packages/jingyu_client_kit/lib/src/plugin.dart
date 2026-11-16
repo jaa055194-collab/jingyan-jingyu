@@ -70,7 +70,7 @@ class PluginManifest {
   /// 适用平台。
   final Set<String> platforms;
 
-  /// 仅宿主机客户端可用（例如 Live2D `.moc3` 导入，FR-38/39）。
+  /// 仅宿主机客户端可用；设备本地模型导入不受此通用限制。
   final bool hostOnly;
 
   /// 插件代码许可证（SPDX 标识）。

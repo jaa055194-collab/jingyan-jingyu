@@ -113,4 +113,13 @@
 - 覆盖顺序/游标/默认50/上限100/终页、diff与原因/证据/快照、不可变历史、非owner/admin拒绝、旧凭据/账号或设备错配/撤销/过期、AI停用/归属转让/同owner不同profile、损坏sentinel不解密与选中行安全500、revert完整before恢复/当前锁保留/旧记录不变/重开持久化、并发CAS仅一项接受和输入拒绝无写入。
 - 局限：行数上限不是字节或延迟上限；现有适配器对重复query键归一为单值，不宣称重复键拒绝；无人格UI、模型自迭代触发或生产记忆授权，不计完整M06或端到端产品验收。
 
+## 设备本地形象引用（2026-11-16）
+
+基线 `b96abb3`；按已批准的各端自行导入方向修订 FR-38/39、AC-25/26。模型文件与具体映射仅设备本地，宿主发布稳定引用。此记录不计入完整 Live2D 验收。
+
+| ID | 来源/章节 | 要求摘要 | 审批 | 可观察验收 | 实现 | 检查/证据 | 状态与缺口 |
+|---|---|---|---|---|---|---|---|
+| REQ-055 | FR-38/39 修订；AC-25 | 服务端只接受/保存/返回形象引用，不接收模型参数映射或路径 | 已批准 | 注册只收 kind/modelId；模型 ID 拒路径/URL；迁移旧库保留引用/revision/active 状态但移除 param_map；不安全旧 model_id 转成不透明 legacy token；跨 owner 与 stale revision 仍拒绝 | world avatar registry/HTTP；追加迁移 905 | world_routes_test、world_sqlite_test；旧映射响应/POST、路径/URL 输入、旧库路径、URL及回退别名碰撞先 RED；69 项 world 检查通过（第一次全仓 assembly 清单未更新，后已补） | 局部已验证；API 破坏性变更：旧客户端 paramMap 请求现 400，内部 setParamMap 被移除；迁移仅防旧映射和旧 ID继续广播，不追溯改造离线备份 |
+| REQ-056 | FR-39；本地 profile 子集 | 强制显式映射与安全 model3 相对路径 | 已批准 | 缺/空映射、未知字段、非整数 schema/revision、非规范/越界/远程路径拒绝；映射不可变 | client_kit Live2DProfile/Live2DParamMap，复用既有路径 sanitizer | live2d_profile_test：38 项；7 个行为缺口先 RED 后修；本地映射快照/Unicode 相对路径通过 | 元数据子集验证通过；未验证参数名或文件存在、JSON 字节/深度限额、真实解包/纹理/模型、设备持久化、UI、渲染、热切换或 VRM fallback |
+
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。

@@ -1,11 +1,8 @@
-/// FR-38/FR-39 形象登记：VRM 3D（默认，所有端可用）与 Live2D（仅宿主机端）。
+/// FR-38/FR-39 avatar references for VRM and device-local Live2D models.
 ///
-/// 两套形象共用同一套语义表情参数（开口度、表情标签、valence/energy），
-/// 由当前形象配置翻译成模型参数。登记/启用后广播 `model_id + profile_rev`，
-/// 双端据此渲染一致的形象（AC-25）。缺参数映射禁止启用（不许猜参数）。
-///
-/// 这里只做登记与版本权威；`.moc3` 安全解包与校验（Zip Slip、扩展名白名单、
-/// 条目数/体积/压缩比/JSON 深度、纹理魔数）在 `live2d_import.dart`（未在本切片）。
+/// Model-specific parameters, model files and their safe import belong to each
+/// device. This registry publishes only modelId/profileRev/kind references;
+/// reference activation does not prove a device can load or render that model.
 library;
 
 import 'package:jingyu_core/jingyu_core.dart';
@@ -25,22 +22,6 @@ enum AvatarKind {
   }
 }
 
-/// 两套形象共用的语义参数键（FR-38）。
-abstract final class AvatarSemanticParam {
-  static const String mouthOpen = 'mouthOpen';
-  static const String expression = 'expression';
-  static const String valence = 'valence';
-  static const String energy = 'energy';
-
-  /// 启用某个形象前必须齐全的语义参数。
-  static const List<String> required = <String>[
-    mouthOpen,
-    expression,
-    valence,
-    energy,
-  ];
-}
-
 /// 一个已登记的形象档案。
 class AvatarProfile {
   const AvatarProfile({
@@ -49,7 +30,6 @@ class AvatarProfile {
     required this.kind,
     required this.modelId,
     required this.profileRev,
-    required this.paramMap,
     required this.updatedAt,
   });
 
@@ -63,14 +43,7 @@ class AvatarProfile {
   /// 单调递增的档案版本号，变更即前进。
   final int profileRev;
 
-  /// 语义参数 -> 模型参数名。Live2D 启用前必须覆盖 [AvatarSemanticParam.required]。
-  final Map<String, Object?> paramMap;
   final DateTime updatedAt;
-
-  bool get hasCompleteParamMap => AvatarSemanticParam.required.every((key) {
-    final value = paramMap[key];
-    return value is String && value.isNotEmpty;
-  });
 
   Map<String, Object?> toJson() => {
     'avatarId': avatarId,
@@ -78,7 +51,6 @@ class AvatarProfile {
     'kind': kind.wire,
     'modelId': modelId,
     'profileRev': profileRev,
-    'paramMap': paramMap,
     'updatedAt': updatedAt.toUtc().toIso8601String(),
   };
 }
@@ -104,22 +76,14 @@ class AvatarBroadcast {
 
 /// 形象登记契约。ownerId 来自可信认证边界，绝不信请求 JSON。
 abstract interface class AvatarRegistry {
-  /// 登记一个形象。Live2D 可先无映射登记，待向导补齐后启用。
+  /// 登记一个设备本地可解析的模型引用。
   Future<Result<AvatarProfile>> register({
     required String ownerId,
     required AvatarKind kind,
     required String modelId,
-    Map<String, Object?> paramMap = const <String, Object?>{},
   });
 
-  /// 写入/替换语义参数映射，profileRev 前进。
-  Future<Result<AvatarProfile>> setParamMap({
-    required String ownerId,
-    required String avatarId,
-    required Map<String, Object?> paramMap,
-  });
-
-  /// 启用某形象（切换），要求 revision 匹配且 Live2D 映射齐全。
+  /// 启用某形象（切换），要求 revision 匹配。
   Future<Result<AvatarProfile>> enable({
     required String ownerId,
     required String avatarId,
@@ -163,17 +127,10 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
     return () => 'av${++n}';
   }
 
-  Failure? _validateParamMap(Map<String, Object?> paramMap) {
-    for (final entry in paramMap.entries) {
-      if (entry.key.isEmpty || entry.key.length > 64) {
-        return const Failure(FailureCode.invalidArgument, 'bad param key');
-      }
-      if (entry.value is! String || (entry.value as String).isEmpty) {
-        return const Failure(FailureCode.invalidArgument, 'bad param value');
-      }
-    }
-    return null;
-  }
+  static bool _validModelId(String value) =>
+      value.length <= 128 &&
+      !value.toLowerCase().startsWith('legacy_') &&
+      RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*$').hasMatch(value);
 
   AvatarProfile? _find(String ownerId, String avatarId) =>
       _byOwner[ownerId]?[avatarId];
@@ -183,25 +140,21 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
     required String ownerId,
     required AvatarKind kind,
     required String modelId,
-    Map<String, Object?> paramMap = const <String, Object?>{},
   }) async {
     try {
       validateId(ownerId, kind: 'owner');
     } on FormatException {
       return err(FailureCode.invalidArgument, 'bad owner id');
     }
-    if (modelId.isEmpty || modelId.length > 128) {
+    if (!_validModelId(modelId)) {
       return err(FailureCode.invalidArgument, 'bad model id');
     }
-    final invalid = _validateParamMap(paramMap);
-    if (invalid != null) return Err<AvatarProfile>(invalid);
     final profile = AvatarProfile(
       avatarId: _newId(),
       ownerId: ownerId,
       kind: kind,
       modelId: modelId,
       profileRev: 1,
-      paramMap: Map<String, Object?>.unmodifiable(paramMap),
       updatedAt: clock.now().toUtc(),
     );
     _byOwner.putIfAbsent(
@@ -209,29 +162,6 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
       () => <String, AvatarProfile>{},
     )[profile.avatarId] = profile;
     return Ok(profile);
-  }
-
-  @override
-  Future<Result<AvatarProfile>> setParamMap({
-    required String ownerId,
-    required String avatarId,
-    required Map<String, Object?> paramMap,
-  }) async {
-    final profile = _find(ownerId, avatarId);
-    if (profile == null) return err(FailureCode.notFound, 'avatar not found');
-    final invalid = _validateParamMap(paramMap);
-    if (invalid != null) return Err<AvatarProfile>(invalid);
-    final updated = AvatarProfile(
-      avatarId: profile.avatarId,
-      ownerId: profile.ownerId,
-      kind: profile.kind,
-      modelId: profile.modelId,
-      profileRev: profile.profileRev + 1,
-      paramMap: Map<String, Object?>.unmodifiable(paramMap),
-      updatedAt: clock.now().toUtc(),
-    );
-    _byOwner[ownerId]![avatarId] = updated;
-    return Ok(updated);
   }
 
   @override
@@ -245,16 +175,12 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
     if (profile.profileRev != expectedRevision) {
       return err(FailureCode.conflict, 'profile revision mismatch');
     }
-    if (profile.kind == AvatarKind.live2d && !profile.hasCompleteParamMap) {
-      return err(FailureCode.conflict, 'missing semantic param map');
-    }
     final updated = AvatarProfile(
       avatarId: profile.avatarId,
       ownerId: profile.ownerId,
       kind: profile.kind,
       modelId: profile.modelId,
       profileRev: profile.profileRev + 1,
-      paramMap: profile.paramMap,
       updatedAt: clock.now().toUtc(),
     );
     _byOwner[ownerId]![avatarId] = updated;
@@ -279,7 +205,6 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
       kind: profile.kind,
       modelId: profile.modelId,
       profileRev: profile.profileRev + 1,
-      paramMap: profile.paramMap,
       updatedAt: clock.now().toUtc(),
     );
     _byOwner[ownerId]![avatarId] = updated;

@@ -277,24 +277,19 @@ class WorldModule extends HostModule {
       return HostResponse.failure(body.failure);
     }
     final json = body.value;
-    final kindRaw = json['kind'];
-    final modelId = json['modelId'];
-    final paramRaw = json['paramMap'];
-    if (kindRaw is! String ||
-        modelId is! String ||
-        (paramRaw != null && paramRaw is! Map<String, Object?>)) {
+    if (json.keys.toSet().difference(const {'kind', 'modelId'}).isNotEmpty ||
+        !json.keys.toSet().containsAll(const {'kind', 'modelId'})) {
       return _bad();
     }
+    final kindRaw = json['kind'];
+    final modelId = json['modelId'];
+    if (kindRaw is! String || modelId is! String) return _bad();
     final kind = AvatarKind.tryParse(kindRaw);
     if (kind == null) return _bad();
-    final paramMap = paramRaw == null
-        ? const <String, Object?>{}
-        : paramRaw as Map<String, Object?>;
     final result = await _avatars.register(
       ownerId: principal.accountId,
       kind: kind,
       modelId: modelId,
-      paramMap: paramMap,
     );
     return HostResponse.fromResult(result, (profile) => profile.toJson());
   }

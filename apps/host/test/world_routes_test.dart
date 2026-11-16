@@ -291,6 +291,47 @@ void main() {
     expect(missing.status, 404);
   });
 
+  test(
+    'avatar creation accepts only kind and stable modelId references',
+    () async {
+      final h = _Harness();
+      for (final body in <Map<String, Object?>>[
+        {
+          'kind': 'live2d',
+          'modelId': 'model_local',
+          'paramMap': {'mouthOpen': 'Param'},
+        },
+        {
+          'kind': 'live2d',
+          'modelId': 'model_local',
+          'modelFile': 'avatar.moc3',
+        },
+        {'kind': 'live2d', 'modelId': 'model_local', 'unexpected': true},
+        {'kind': 'live2d', 'modelId': '../avatar.moc3'},
+        {'kind': 'live2d', 'modelId': 'https://example.test/model'},
+      ]) {
+        final response = await h.call(
+          'POST',
+          Routes.worldAvatars,
+          principal: _me,
+          body: body,
+        );
+        expect(response.status, 400, reason: '$body');
+      }
+      final accepted = await h.call(
+        'POST',
+        Routes.worldAvatars,
+        principal: _me,
+        body: {'kind': 'live2d', 'modelId': 'local_model-v2'},
+      );
+      expect(accepted.status, 200);
+      expect(
+        (accepted.json! as Map<String, Object?>).keys,
+        isNot(contains('paramMap')),
+      );
+    },
+  );
+
   test('avatars：owner 隔离 + 创建/启用/active 广播', () async {
     final h = _Harness();
     final created = await h.call(

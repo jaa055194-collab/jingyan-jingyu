@@ -1,19 +1,11 @@
 /// AvatarRegistry 契约测试。
 ///
-/// 覆盖 FR-38/FR-39、AC-25：形象登记（VRM 默认 / Live2D 宿主端）、
-/// `model_id + profile_rev` 广播一致、缺语义参数映射禁止启用、跨 owner 隔离。
+/// Covers reference-only avatar registration and revision broadcasts.
 library;
 
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/src/world/avatars.dart';
 import 'package:test/test.dart';
-
-Map<String, Object?> _completeParamMap() => <String, Object?>{
-  AvatarSemanticParam.mouthOpen: 'ParamMouthOpenY',
-  AvatarSemanticParam.expression: 'ParamExpression',
-  AvatarSemanticParam.valence: 'ParamValence',
-  AvatarSemanticParam.energy: 'ParamEnergy',
-};
 
 void avatarRegistryContract(
   String label,
@@ -44,50 +36,33 @@ void avatarRegistryContract(
         ownerId: 'owner',
         kind: AvatarKind.live2d,
         modelId: 'l2d_default',
-        paramMap: _completeParamMap(),
       )).value;
       expect(live2d.kind, AvatarKind.live2d);
       expect(live2d.profileRev, 1);
+      expect(live2d.toJson().keys, isNot(contains('paramMap')));
       expect((await registry.list('owner')).length, 2);
     });
 
-    test('Live2D 缺语义参数映射禁止启用', () async {
-      final profile = (await registry.register(
-        ownerId: 'owner',
-        kind: AvatarKind.live2d,
-        modelId: 'l2d_incomplete',
-      )).value;
-      final enabled = await registry.enable(
-        ownerId: 'owner',
-        avatarId: profile.avatarId,
-        expectedRevision: profile.profileRev,
-      );
-      expect(enabled.isErr, isTrue);
-      expect(enabled.failureOrNull?.code, FailureCode.conflict);
-      expect((await registry.active('owner')).isErr, isTrue);
-    });
-
-    test('补齐参数映射后可启用，profileRev 前进', () async {
-      final profile = (await registry.register(
-        ownerId: 'owner',
-        kind: AvatarKind.live2d,
-        modelId: 'l2d_incomplete',
-      )).value;
-      final mapped = (await registry.setParamMap(
-        ownerId: 'owner',
-        avatarId: profile.avatarId,
-        paramMap: _completeParamMap(),
-      )).value;
-      expect(mapped.profileRev, greaterThan(profile.profileRev));
-      final enabled = (await registry.enable(
-        ownerId: 'owner',
-        avatarId: profile.avatarId,
-        expectedRevision: mapped.profileRev,
-      )).value;
-      final broadcast = (await registry.active('owner')).value;
-      expect(broadcast.modelId, 'l2d_incomplete');
-      expect(broadcast.profileRev, enabled.profileRev);
-    });
+    test(
+      'Live2D without server-side mapping can be enabled by reference',
+      () async {
+        final profile = (await registry.register(
+          ownerId: 'owner',
+          kind: AvatarKind.live2d,
+          modelId: 'l2d_local_model',
+        )).value;
+        final enabled = (await registry.enable(
+          ownerId: 'owner',
+          avatarId: profile.avatarId,
+          expectedRevision: profile.profileRev,
+        )).value;
+        final broadcast = (await registry.active('owner')).value;
+        expect(broadcast.kind, AvatarKind.live2d);
+        expect(broadcast.modelId, 'l2d_local_model');
+        expect(broadcast.profileRev, enabled.profileRev);
+        expect(enabled.toJson().keys, isNot(contains('paramMap')));
+      },
+    );
 
     test('切换形象后双端拿到相同 model_id + profile_rev（AC-25）', () async {
       final first = (await registry.register(

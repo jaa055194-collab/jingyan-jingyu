@@ -1,10 +1,8 @@
 /// FR-38/FR-39 形象登记的 SQLite 实现。与 `InMemoryAvatarRegistry` 共用同一组契约测试。
 ///
-/// `param_map` 以 JSON 文本存储；启用 Live2D 前校验语义参数齐全；
-/// `model_id + profile_rev` 由 `world_avatar_active` 表权威发布。
+/// 仅保存模型引用与档案 revision；`model_id + profile_rev` 由
+/// `world_avatar_active` 表权威发布。
 library;
-
-import 'dart:convert';
 
 import 'package:jingyu_core/jingyu_core.dart';
 
@@ -24,38 +22,19 @@ class SqliteAvatarRegistry implements AvatarRegistry {
   String _newAvatarId() =>
       'av_${clock.now().toUtc().microsecondsSinceEpoch}_${++_seq}';
 
-  Failure? _validateParamMap(Map<String, Object?> paramMap) {
-    for (final entry in paramMap.entries) {
-      if (entry.key.isEmpty || entry.key.length > 64) {
-        return const Failure(FailureCode.invalidArgument, 'bad param key');
-      }
-      if (entry.value is! String || (entry.value as String).isEmpty) {
-        return const Failure(FailureCode.invalidArgument, 'bad param value');
-      }
-    }
-    return null;
-  }
-
-  bool _complete(Map<String, Object?> paramMap) =>
-      AvatarSemanticParam.required.every((key) {
-        final value = paramMap[key];
-        return value is String && value.isNotEmpty;
-      });
+  static bool _validModelId(String value) =>
+      value.length <= 128 &&
+      !value.toLowerCase().startsWith('legacy_') &&
+      RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*$').hasMatch(value);
 
   AvatarProfile? _toProfile(Map<String, Object?> row) {
     try {
-      final paramRaw = row['param_map'] as String;
-      final decoded = jsonDecode(paramRaw);
-      if (decoded is! Map<String, dynamic>) return null;
       return AvatarProfile(
         avatarId: row['avatar_id'] as String,
         ownerId: row['owner_id'] as String,
         kind: AvatarKind.tryParse(row['kind'] as String) ?? AvatarKind.vrm,
         modelId: row['model_id'] as String,
         profileRev: row['profile_rev'] as int,
-        paramMap: Map<String, Object?>.unmodifiable(
-          decoded.cast<String, Object?>(),
-        ),
         updatedAt: DateTime.parse(row['updated_at'] as String),
       );
     } catch (_) {
@@ -72,22 +51,13 @@ class SqliteAvatarRegistry implements AvatarRegistry {
     return _toProfile(rows.single);
   }
 
-  Future<Result<AvatarProfile>> _updateProfile(
-    AvatarProfile profile,
-    Map<String, Object?> paramMap,
-  ) async {
+  Future<Result<AvatarProfile>> _updateProfile(AvatarProfile profile) async {
     final rev = profile.profileRev + 1;
     final now = clock.now().toUtc();
     await database.execute(
-      'UPDATE world_avatars SET profile_rev = ?, param_map = ?, updated_at = ? '
+      'UPDATE world_avatars SET profile_rev = ?, updated_at = ? '
       'WHERE owner_id = ? AND avatar_id = ?',
-      [
-        rev,
-        jsonEncode(paramMap),
-        now.toIso8601String(),
-        profile.ownerId,
-        profile.avatarId,
-      ],
+      [rev, now.toIso8601String(), profile.ownerId, profile.avatarId],
     );
     return Ok(
       AvatarProfile(
@@ -96,7 +66,6 @@ class SqliteAvatarRegistry implements AvatarRegistry {
         kind: profile.kind,
         modelId: profile.modelId,
         profileRev: rev,
-        paramMap: Map<String, Object?>.unmodifiable(paramMap),
         updatedAt: now,
       ),
     );
@@ -107,33 +76,22 @@ class SqliteAvatarRegistry implements AvatarRegistry {
     required String ownerId,
     required AvatarKind kind,
     required String modelId,
-    Map<String, Object?> paramMap = const <String, Object?>{},
   }) async {
     try {
       validateId(ownerId, kind: 'owner');
     } on FormatException {
       return err(FailureCode.invalidArgument, 'bad owner id');
     }
-    if (modelId.isEmpty || modelId.length > 128) {
+    if (!_validModelId(modelId)) {
       return err(FailureCode.invalidArgument, 'bad model id');
     }
-    final invalid = _validateParamMap(paramMap);
-    if (invalid != null) return Err<AvatarProfile>(invalid);
     final avatarId = _newAvatarId();
     final now = clock.now().toUtc();
     await database.execute(
       'INSERT INTO world_avatars('
-      'avatar_id, owner_id, kind, model_id, profile_rev, param_map, updated_at'
-      ') VALUES(?,?,?,?,?,?,?)',
-      [
-        avatarId,
-        ownerId,
-        kind.wire,
-        modelId,
-        1,
-        jsonEncode(paramMap),
-        now.toIso8601String(),
-      ],
+      'avatar_id, owner_id, kind, model_id, profile_rev, updated_at'
+      ') VALUES(?,?,?,?,?,?)',
+      [avatarId, ownerId, kind.wire, modelId, 1, now.toIso8601String()],
     );
     return Ok(
       AvatarProfile(
@@ -142,23 +100,9 @@ class SqliteAvatarRegistry implements AvatarRegistry {
         kind: kind,
         modelId: modelId,
         profileRev: 1,
-        paramMap: Map<String, Object?>.unmodifiable(paramMap),
         updatedAt: now,
       ),
     );
-  }
-
-  @override
-  Future<Result<AvatarProfile>> setParamMap({
-    required String ownerId,
-    required String avatarId,
-    required Map<String, Object?> paramMap,
-  }) async {
-    final profile = await _find(ownerId, avatarId);
-    if (profile == null) return err(FailureCode.notFound, 'avatar not found');
-    final invalid = _validateParamMap(paramMap);
-    if (invalid != null) return Err<AvatarProfile>(invalid);
-    return _updateProfile(profile, paramMap);
   }
 
   @override
@@ -172,10 +116,7 @@ class SqliteAvatarRegistry implements AvatarRegistry {
     if (profile.profileRev != expectedRevision) {
       return err(FailureCode.conflict, 'profile revision mismatch');
     }
-    if (profile.kind == AvatarKind.live2d && !_complete(profile.paramMap)) {
-      return err(FailureCode.conflict, 'missing semantic param map');
-    }
-    final result = await _updateProfile(profile, profile.paramMap);
+    final result = await _updateProfile(profile);
     if (result.isErr) return result;
     final updated = result.value;
     await database.execute(
@@ -199,7 +140,7 @@ class SqliteAvatarRegistry implements AvatarRegistry {
     if (profile.profileRev != expectedRevision) {
       return err(FailureCode.conflict, 'profile revision mismatch');
     }
-    final result = await _updateProfile(profile, profile.paramMap);
+    final result = await _updateProfile(profile);
     if (result.isErr) return result;
     await database.execute(
       'DELETE FROM world_avatar_active WHERE owner_id = ? AND avatar_id = ?',
