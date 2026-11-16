@@ -121,4 +121,13 @@
 | REQ-056 | v4.2 §14 CR-07 / M09 | 23:00本地深夜电台、个人自行选择是否启用、音色一致 | 已授权局部 | radio opt-in默认false；owner单独授权/撤回；无voice profile不进入目标；跨owner404；TTS缺真实厂商时不得宣称音频验收 | `creative_radio_authorizations` Migration803；`SqliteRadioTargetProvider`; `CreativeAuthorizationModule`; `RadioModule`默认组装且timer关闭 | `creative_adapters_test` radio default-off/grant/voice tests；authorization route grant/revoke tests；analyze clean | opt-in持久化和目标过滤已实现；默认宿主生成总闸关闭且TTS明确不可用，不把文本缓存当音频。真实TTS、逐用户时区、预算生产配置及生成后最终授权校验未接，不计CR-07验收 |
 | REQ-057 | M09/M06/M07 结构化活动生产者前置 | 仅用已授权、脱敏、owner-scoped结构化事件喂周报；不复制正文 | 未实现（生产者接口缺失） | writer只接owner/profile/scope/kind/day/≤64字符label/非负value；同事务校验当前owner、AI有效及精确scope grant；未授权、owner错配、撤权或身份失效零写入 | `CreativeActivityWriter` service + `SqliteCreativeActivityWriter`; HostServices registration | writer tests覆盖default deny、grant write、stale owner grant、invalid day/label；适配器source tests覆盖授权范围与撤权 | 写端供可信模块注入；短标签仍由生产者负责脱敏，长度限制不证明脱敏。当前为append-only，无事件幂等键，接重试生产者前须增加来源事件键；没有获批M06/M07生产者，不从topic/message正文抽取，活动采集生产闭环缺失 |
 
-未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
+## 本人 AI 文本私聊闭环（2026-11-17）
+
+| ID | 来源/章节 | 授权范围 | 可观察条件 | 实现/检查 | 当前边界 |
+|---|---|---|---|---|---|
+| REQ-058 | v4.2 FR-01/FR-43、持续推进授权 | 本人显式开启自己的AI双人私聊，独立于好友接受 | default-off、revision CAS、当前profile/account/operator、撤回/禁用/转移/block/profile变更持久失效；原owner保留只读历史，新owner/AI不可读旧历史 | OwnerAiDirectConsent，307/505；consent/routes/private/preferences回归 | 不是其他人AI好友代同意，不默认开启 |
+| REQ-059 | B-1规则优先、FR-48/58预算 | 当前本人普通文本，排除群/他人来源/附件/历史/记忆 | simple curated仅S1，simple unsupported静默，complex/unsure可S2；显式预算/时区/绑定/worker/persona缺失fail-closed；精确provider/model pin | OwnerAiDirectReplyObserver + StatelessOwnerChat；root host、observer和offline ModelRuntime flow测试 | byte限是资源策略非tokenizer/window保证；无live provider/native模型端到端证明 |
+| REQ-060 | C-5撤权/竞态与消息幂等 | 接受时授权stamp、发送前复查、最终发布同Tx fence | incoming grant+append+216stamp原子；唯一(source,profile)215 claim不含revision；revoke/reopen/edit/recall/transfer期间旧结果不发布；reply+status/head同Tx回滚 | OwnerAiDirectIncoming、appendInTransaction、OwnerReplyAttempts；barrier/rollback/duplicate/reopen测试 | 已出站内容无法撤回；best-effort at-most-once，不自动重试，无completion cache/crash恢复保证 |
+| REQ-061 | NFR-06/10、本人工单状态可见 | 仅owner读本人的回复attempt元数据 | livebearer/account/device复核；owner历史可读pending/completed/failed/discarded，foreign/AI/group拒绝；不读取正文/provider信息 | OwnerAiReplyStatusModule；15个status测试与默认host集成 | notAttempted只指未有ledger，不承诺回复；未知provider用量保留pending reconciliation |
+
+上述实现仍须以本PR最终检查记录为验证修订；离线fake-provider流不能替代真实模型服务或客户端设备验收。未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。

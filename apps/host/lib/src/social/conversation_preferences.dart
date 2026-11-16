@@ -2,6 +2,7 @@ import 'package:jingyu_core/jingyu_core.dart';
 
 import '../storage/database.dart';
 import 'friendship_service.dart';
+import 'owner_ai_direct_consent.dart';
 
 /// Trusted current-account scope, never an owner accepted from request data.
 final class ConversationPreferences {
@@ -25,6 +26,11 @@ UNION ALL SELECT 'direct' AS kind FROM direct_conversations WHERE id=?
         'SELECT 1 FROM social_members WHERE conversation_id=? AND account_id=?',
         [conversation, account],
       )).isNotEmpty;
+    }
+    // Tagged owner-AI history cannot use the legacy pair-only shortcut.
+    final tag = await OwnerAiDirectConsent.tagInTx(tx, conversation);
+    if (tag != null) {
+      return OwnerAiDirectConsent.taggedReadInTx(tx, tag, account);
     }
     // Pinning follows retained read-history membership, not posting consent.
     return (await tx.query(
