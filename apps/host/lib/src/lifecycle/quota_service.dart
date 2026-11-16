@@ -121,6 +121,12 @@ class QuotaService {
     return const Ok<void>(null);
   }
 
+  /// 当前已用配额字节（只读）。
+  Future<int> usedBytes(String accountId) => _store.usedBytes(accountId);
+
+  /// 当前磁盘状态（只读）。
+  Future<DiskSpace> diskSpace() => _store.diskSpace();
+
   Result<UploadPermit> acquireUploadSlot(String accountId) =>
       gate.acquire(accountId);
 

@@ -158,4 +158,12 @@ class DepartureService {
     );
     return Ok(receipt);
   }
+
+  /// 离开前对象清点（不改变数据），供 survey 路由使用。
+  Future<Result<DepartureSurvey>> survey(String accountId) async {
+    if (accountId.trim().isEmpty) {
+      return err(FailureCode.invalidArgument, '账号标识不能为空');
+    }
+    return Ok(await _store.survey(accountId));
+  }
 }

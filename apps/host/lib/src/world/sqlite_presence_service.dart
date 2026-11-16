@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'package:jingyu_core/jingyu_core.dart';
 
 import '../storage/database.dart';
+import 'database_visit_access_policy.dart';
 import 'presence.dart';
 
 class SqlitePresenceService implements PresenceService {
@@ -15,7 +16,7 @@ class SqlitePresenceService implements PresenceService {
     required this.database,
     this.clock = const SystemClock(),
     VisitAccessPolicy? policy,
-  }) : _policy = policy ?? const DefaultVisitAccessPolicy();
+  }) : _policy = policy ?? DatabaseVisitAccessPolicy(database: database);
 
   final Database database;
   final Clock clock;
@@ -233,6 +234,18 @@ class SqlitePresenceService implements PresenceService {
       return err(FailureCode.internal, 'corrupt presence row');
     }
     return Ok(record);
+  }
+
+  @override
+  Future<Result<VisitSession>> getVisit(String visitId) async {
+    final rows = await database.query(
+      'SELECT * FROM world_visits WHERE visit_id = ?',
+      [visitId],
+    );
+    if (rows.isEmpty) return err(FailureCode.notFound, 'visit not found');
+    final visit = _toVisit(rows.single);
+    if (visit == null) return err(FailureCode.internal, 'corrupt visit row');
+    return Ok(visit);
   }
 
   @override
