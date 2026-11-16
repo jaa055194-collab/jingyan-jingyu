@@ -50,6 +50,7 @@ import 'src/social/topic_migrations.dart';
 import 'src/social/friendship_migrations.dart';
 import 'src/social/private_conversations.dart';
 import 'src/social/private_conversation_migration.dart';
+import 'src/social/owner_ai_direct_migration.dart';
 import 'src/social/social_module.dart';
 import 'src/storage/migrations.dart';
 import 'src/storage/storage_module.dart';
@@ -129,8 +130,10 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       groupAiMigration,
       topicMigration,
       conversationPreferencesMigration,
+      ownerAiDirectMigration,
       ...modelsMigrations,
       aiIdentityMigration,
+      ownerAiProfileInvalidationMigration,
       bindingMigration,
       ...usageMigrations,
       budgetTimezoneMigration,

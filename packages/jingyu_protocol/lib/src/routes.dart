@@ -61,6 +61,10 @@ abstract final class Routes {
   static const String conversationPreferences =
       '$prefix/conversations/{conversationId}/preferences';
   static const String directConversations = '$prefix/direct-conversations';
+
+  /// Current human's explicit ownerTextOnly consent (GET/POST/DELETE), no dispatch.
+  static const String ownerAiDirectConsent =
+      '$prefix/ai-profiles/{aiId}/direct-conversation';
   static const String friendState = '$prefix/friends/{accountId}';
   static const String friendRequest = '$prefix/friends/{accountId}/requests';
   static const String friendAccept = '$prefix/friends/{accountId}/accept';

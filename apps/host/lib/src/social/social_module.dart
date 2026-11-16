@@ -8,6 +8,7 @@ import 'conversation_preferences_routes.dart';
 import 'private_conversations.dart';
 import 'combined_membership.dart';
 import 'private_routes.dart';
+import 'owner_ai_direct_routes.dart';
 import 'group_management_routes.dart';
 import 'group_ai_routes.dart';
 import 'topic_routes.dart';
@@ -68,6 +69,13 @@ class SocialModule extends HostModule {
     final audit = _audit;
     if (db != null && hostClock != null && accounts != null && audit != null) {
       mountConversationPreferenceRoutes(router, db: db, accounts: accounts);
+      mountOwnerAiDirectRoutes(
+        router,
+        db: db,
+        clock: hostClock,
+        accounts: accounts,
+        audit: audit,
+      );
       final private = direct;
       if (private != null) {
         mountPrivateRoutes(
