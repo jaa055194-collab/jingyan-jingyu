@@ -191,4 +191,14 @@ abstract final class Routes {
 
   /// WebSocket 长连接（通知与实时事件）。
   static const String stream = '$prefix/stream';
+
+  /// CR-03 关系周报/年报（本人只读，按 owner 过滤）。
+  static const String creativeReports = '$prefix/creative/reports';
+  static const String creativeReport =
+      '$prefix/creative/reports/{aiId}/{kind}/{periodKey}';
+
+  /// CR-07 深夜电台（本人只读，按 owner 过滤）。
+  static const String creativeRadio = '$prefix/creative/radio';
+  static const String creativeRadioEpisode =
+      '$prefix/creative/radio/{aiId}/{dateKey}';
 }

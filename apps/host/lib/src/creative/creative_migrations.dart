@@ -39,4 +39,16 @@ CREATE TABLE creative_radio_episodes (
 );
 CREATE INDEX idx_creative_radio_owner ON creative_radio_episodes(owner_account_id);
 '''),
+  Migration(802, 'creative activity feed', '''
+CREATE TABLE creative_activity (
+  owner_account_id TEXT NOT NULL,
+  ai_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK(scope IN ('privateChat','groupChat','moments')),
+  kind TEXT NOT NULL CHECK(kind IN ('topic','agreementCompleted','checkin','mood','milestone')),
+  day_key TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  value INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_creative_activity_owner ON creative_activity(owner_account_id, ai_id, day_key);
+'''),
 ];

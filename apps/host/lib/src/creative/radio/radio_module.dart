@@ -1,15 +1,19 @@
-/// CR-07 电台模块：把 [RadioService] 登记为宿主服务并驱动后台调度。
+/// CR-07 电台模块：登记 [RadioService]、驱动后台调度，并暴露本人只读 HTTP 路由。
 ///
-/// 路由与装配建议（本切片不改 `jingyu_host.dart`、不改共享 routes）：
-/// * 在 `packages/jingyu_protocol/lib/src/routes.dart` 增加
-///   `GET /creative/radio/{dateKey}` 与 `GET /creative/radio`；
-/// * 在 `apps/host/lib/jingyu_host.dart` 的 `defaultModules` 追加
-///   `RadioModule(service: RadioService(...))`。
+/// 路由（只读、需登录、按 owner 隔离）：
+/// * `GET /creative/radio` → 当前调用者的全部电台期次
+/// * `GET /creative/radio/{aiId}/{dateKey}` → 某一晚的电台（离线缓存可听）
+/// 非本人/不存在一律 404（防探测）。
+///
+/// 装配建议（不改共享 `jingyu_host.dart`）：在 `defaultModules` 追加
+/// `RadioModule(service: RadioService(...))`，适配器见 `creative_adapters.dart`。
 library;
 
 import 'dart:async';
 
+import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
+import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import 'radio_service.dart';
 
@@ -34,6 +38,12 @@ class RadioModule extends HostModule {
   }
 
   @override
+  void mount(Router router) {
+    router.get(Routes.creativeRadio, _list);
+    router.get(Routes.creativeRadioEpisode, _get);
+  }
+
+  @override
   Future<void> start() async {
     if (!enableTimer) return;
     _timer = Timer.periodic(tickInterval, (_) async {
@@ -49,5 +59,33 @@ class RadioModule extends HostModule {
   Future<void> stop() async {
     _timer?.cancel();
     _timer = null;
+  }
+
+  Future<HostResponse> _list(HostRequest request) async {
+    final owner = request.principal!.accountId;
+    final episodes = await service.listForOwner(owner);
+    return HostResponse.ok({
+      'episodes': [for (final episode in episodes) episode.toPayload()],
+    });
+  }
+
+  Future<HostResponse> _get(HostRequest request) async {
+    final owner = request.principal!.accountId;
+    final aiId = request.pathParams['aiId']!;
+    final dateKey = request.pathParams['dateKey']!;
+    try {
+      validateId(aiId, kind: 'ai');
+      validateId(dateKey, kind: 'dateKey');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    final result = await service.getEpisode(
+      ownerAccountId: owner,
+      aiId: aiId,
+      dateKey: dateKey,
+    );
+    return HostResponse.fromResult(result, (episode) => episode.toPayload());
   }
 }
