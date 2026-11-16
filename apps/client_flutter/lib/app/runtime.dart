@@ -13,6 +13,7 @@ import '../net/account_auth.dart';
 import '../net/host_connection.dart';
 import '../net/group_api.dart';
 import '../net/own_ai_api.dart';
+import '../net/owner_ai_direct_api.dart';
 import '../platform/native_platform.dart';
 import 'conversation_mapping.dart';
 import 'shell_view_model.dart';
@@ -43,6 +44,25 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   List<ShellOwnedAi> _ownAiAccounts = [];
   String? _ownAiNotice;
   bool _ownAiLoaded = false;
+  final _ownAiDirect = <String, ShellOwnAiDirectState>{};
+  Object _ownAiDirectEpoch = Object();
+
+  void _invalidateOwnAiDirect() {
+    _ownAiDirectEpoch = Object();
+    _ownAiDirect.clear();
+  }
+
+  @override
+  Object? get ownAiDirectContext =>
+      authenticated && !locked && !_switching && !_disposed
+      ? _ownAiDirectEpoch
+      : null;
+  @override
+  ShellOwnAiDirectState ownAiDirectState(String aiAccountId) =>
+      !authenticated || locked || _switching || _disposed
+      ? const ShellOwnAiDirectState()
+      : _ownAiDirect[aiAccountId] ?? const ShellOwnAiDirectState();
+
   @override
   Object? get ownAiSessionContext => authenticated ? _generation : null;
   @override
@@ -159,7 +179,11 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           (await _settingsStorage.read())['preferences']
               as Map<String, Object?>? ??
           {};
-      appLock = AppLockController(persistence: _settingsStorage, auth: native);
+      appLock = _OwnAiEpochAppLock(
+        persistence: _settingsStorage,
+        auth: native,
+        invalidate: _invalidateOwnAiDirect,
+      );
       await appLock.initialize();
       final guest = await _prepareSnapshot(
         FilePersistence(File('$directory/guest.json')),
@@ -363,6 +387,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         if (error is HostRequestException &&
             error.failure.code == FailureCode.unauthenticated) {
           _sessionRejected = true;
+          _invalidateOwnAiDirect();
           _ownAiAccounts = [];
           _ownAiNotice = null;
           _chatEntered = false;
@@ -436,6 +461,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   Future<void> _logout() async {
     final generation = ++_generation;
+    _invalidateOwnAiDirect();
     _pendingMention = null;
     _credentials = null;
     _pendingRenewal = null;
@@ -633,6 +659,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       final submission = _submissionTransport;
       final oldPlugins = plugins;
       ++_generation;
+      _invalidateOwnAiDirect();
       _pendingMention = null;
       _credentials = credentials;
       _sessionRejected = false;
@@ -746,6 +773,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _ownAiCurrentSession(generation, session) && !locked;
 
   void _publishOwnAi(List<OwnedAiAccount> rows) {
+    // A fresh list is a new ownership snapshot; never leave stale confirmations.
+    _invalidateOwnAiDirect();
     _ownAiLoaded = true;
     _ownAiAccounts = [
       for (final row in rows)
@@ -768,6 +797,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         error.failure.code == FailureCode.unauthenticated &&
         error.failure.details['authenticationRenewalFailed'] != true) {
       _sessionRejected = true;
+      _invalidateOwnAiDirect();
       _online = false;
       _ownAiAccounts = [];
       _ownAiNotice = null;
@@ -796,6 +826,168 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     }
     _error = creating ? 'AI账户创建未确认，可能已创建；请先刷新我的AI，勿重复创建' : '我的AI列表读取失败，请重试刷新';
   }
+
+  bool _activeOwnAi(String accountId) =>
+      _ownAiLoaded &&
+      _ownAiAccounts.any((row) => row.accountId == accountId && !row.disabled);
+
+  bool _directContext(
+    int generation,
+    HostConnection session,
+    Object epoch,
+    String account,
+  ) =>
+      _ownAiContext(generation, session) &&
+      identical(_ownAiDirectEpoch, epoch) &&
+      _activeOwnAi(account);
+
+  void _publishDirect(
+    String account,
+    OwnerAiDirectConsentState state, {
+    String? notice,
+  }) {
+    if (state.aiAccountId != account) throw const FormatException('AI私聊身份不匹配');
+    _ownAiDirect[account] = ShellOwnAiDirectState(
+      phase: ShellOwnAiDirectPhase.ready,
+      profileId: state.aiProfileId,
+      revision: state.revision,
+      enabled: state.enabled,
+      conversationId: state.conversationId,
+      notice: notice,
+    );
+  }
+
+  void _directFailure(
+    Object error,
+    int generation,
+    HostConnection session,
+    Object epoch,
+    String account,
+  ) {
+    // Terminal auth must clear private caches even after a lock invalidated epoch.
+    if (error is HostRequestException &&
+        error.failure.code == FailureCode.unauthenticated) {
+      _ownAiFailure(error, generation, session);
+      if (!_directContext(generation, session, epoch, account)) return;
+    }
+    if (!_directContext(generation, session, epoch, account)) return;
+    if (error is HostRequestException &&
+        const {
+          FailureCode.invalidArgument,
+          FailureCode.forbidden,
+          FailureCode.notFound,
+          FailureCode.rateLimited,
+        }.contains(error.failure.code)) {
+      _ownAiDirect[account] = const ShellOwnAiDirectState(
+        notice: '授权请求被拒绝，请刷新读取后重新确认',
+      );
+      _error = error.failure.message;
+      return;
+    }
+    _ownAiDirect[account] = const ShellOwnAiDirectState(
+      phase: ShellOwnAiDirectPhase.uncertain,
+      notice: '授权状态未确认，请刷新读取后重新确认；勿重复提交',
+    );
+    _error = 'AI私聊授权状态未确认，请刷新后重新确认';
+  }
+
+  @override
+  Future<void> loadOwnAiDirectConsent(String aiAccountId) => _run(() async {
+    _requireOnlineGroupSession();
+    if (!_activeOwnAi(aiAccountId)) {
+      _ownAiDirect.remove(aiAccountId);
+      _error = '请选择当前本人名下的有效AI账户';
+      return;
+    }
+    final generation = _generation;
+    final session = connection!;
+    final owner = connectedAccountId!;
+    _ownAiDirectEpoch = Object();
+    final epoch = _ownAiDirectEpoch;
+    _ownAiDirect[aiAccountId] = const ShellOwnAiDirectState(
+      phase: ShellOwnAiDirectPhase.loading,
+    );
+    notifyListeners();
+    if (!_directContext(generation, session, epoch, aiAccountId)) return;
+    try {
+      final api = OwnerAiDirectApi(session);
+      final identity = await api.registerOrResolve(
+        aiAccountId,
+        expectedOwnerAccountId: owner,
+      );
+      if (!_directContext(generation, session, epoch, aiAccountId)) return;
+      final state = await api.read(identity.profileId);
+      if (!_directContext(generation, session, epoch, aiAccountId)) return;
+      _publishDirect(aiAccountId, state);
+    } catch (error) {
+      _directFailure(error, generation, session, epoch, aiAccountId);
+    }
+  });
+
+  @override
+  Future<void> setOwnAiDirectConsent(
+    String aiAccountId, {
+    required String profileId,
+    required int expectedRevision,
+    required bool enabled,
+    required Object interactionContext,
+  }) => _run(() async {
+    _requireOnlineGroupSession();
+    final current = ownAiDirectState(aiAccountId);
+    if (!_activeOwnAi(aiAccountId) ||
+        !identical(interactionContext, _ownAiDirectEpoch) ||
+        current.phase != ShellOwnAiDirectPhase.ready ||
+        current.profileId != profileId ||
+        current.revision != expectedRevision ||
+        expectedRevision < 0) {
+      _error = '授权状态已变化，请刷新后重新确认';
+      return;
+    }
+    final generation = _generation;
+    final session = connection!;
+    // Consume the confirmation immediately. No retry, including after a 401.
+    // A request already sent may still commit across lock/logout; invalidation
+    // only prevents stale publication/replay, never pretends it was unsent.
+    _ownAiDirectEpoch = Object();
+    final epoch = _ownAiDirectEpoch;
+    _ownAiDirect[aiAccountId] = const ShellOwnAiDirectState(
+      phase: ShellOwnAiDirectPhase.loading,
+    );
+    notifyListeners();
+    if (!_directContext(generation, session, epoch, aiAccountId)) return;
+    final api = OwnerAiDirectApi(session);
+    try {
+      final state = enabled
+          ? await api.open(
+              profileId,
+              expectedRevision: expectedRevision,
+              retryAuthentication: false,
+            )
+          : await api.revoke(
+              profileId,
+              expectedRevision: expectedRevision,
+              retryAuthentication: false,
+            );
+      if (!_directContext(generation, session, epoch, aiAccountId)) return;
+      _publishDirect(aiAccountId, state);
+    } catch (error) {
+      if (error is HostRequestException &&
+          error.failure.code == FailureCode.conflict &&
+          _directContext(generation, session, epoch, aiAccountId)) {
+        try {
+          // Reconcile only. Never replay the mutation or profile registration.
+          final state = await api.read(profileId);
+          if (!_directContext(generation, session, epoch, aiAccountId)) return;
+          _publishDirect(aiAccountId, state, notice: '授权版本已变化，请重新确认');
+          _error = '授权版本已变化，请重新确认';
+        } catch (readError) {
+          _directFailure(readError, generation, session, epoch, aiAccountId);
+        }
+      } else {
+        _directFailure(error, generation, session, epoch, aiAccountId);
+      }
+    }
+  });
 
   @override
   Future<void> loadOwnAi() => _run(() async {
@@ -1135,6 +1327,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   });
   @override
   Future<void> setHideNotificationBody(bool value) => _run(() async {
+    _invalidateOwnAiDirect();
     await appLock.setHideNotificationBody(value);
   });
 
@@ -1168,6 +1361,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     if (_disposed) return;
     _disposed = true;
     ++_generation;
+    _invalidateOwnAiDirect();
     _pendingMention = null;
     _credentials = null;
     _pendingRenewal = null;
@@ -1179,6 +1373,22 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     connection = null;
     _submissionTransport = null;
     super.dispose();
+  }
+}
+
+/// Capture even direct appLock.lock() calls without changing lock behavior or
+/// notifying listeners reentrantly from the lock callback.
+class _OwnAiEpochAppLock extends AppLockController {
+  _OwnAiEpochAppLock({
+    required super.persistence,
+    required super.auth,
+    required this.invalidate,
+  });
+  final void Function() invalidate;
+  @override
+  void lock() {
+    super.lock();
+    invalidate();
   }
 }
 

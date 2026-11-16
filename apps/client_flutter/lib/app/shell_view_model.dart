@@ -22,6 +22,19 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get ownAiLoaded => false;
   Future<void> loadOwnAi() async {}
   Future<void> createOwnAi(String displayName) async {}
+
+  /// Opaque runtime-issued session/lock epoch for an explicit confirmation.
+  Object? get ownAiDirectContext => null;
+  ShellOwnAiDirectState ownAiDirectState(String aiAccountId) =>
+      const ShellOwnAiDirectState();
+  Future<void> loadOwnAiDirectConsent(String aiAccountId) async {}
+  Future<void> setOwnAiDirectConsent(
+    String aiAccountId, {
+    required String profileId,
+    required int expectedRevision,
+    required bool enabled,
+    required Object interactionContext,
+  }) async {}
   String? get selectedConversationId;
   List<ShellConversation> get conversations;
   List<ShellMessage> get messages;
@@ -71,6 +84,27 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> setThemeMode(ThemeMode value);
   Future<void> setFontScale(double value);
   void clearError();
+}
+
+enum ShellOwnAiDirectPhase { unknown, loading, ready, uncertain }
+
+/// Missing/uncertain state is not an explicit off grant. UI must check phase
+/// and obtain a fresh runtime-issued context before an explicit CAS mutation.
+class ShellOwnAiDirectState {
+  const ShellOwnAiDirectState({
+    this.phase = ShellOwnAiDirectPhase.unknown,
+    this.profileId,
+    this.revision,
+    this.enabled,
+    this.conversationId,
+    this.notice,
+  });
+  final ShellOwnAiDirectPhase phase;
+  final String? profileId;
+  final int? revision;
+  final bool? enabled;
+  final String? conversationId;
+  final String? notice;
 }
 
 class ShellOwnedAi {
