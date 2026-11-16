@@ -18,9 +18,17 @@ typedef GroupRulesDispatch =
 /// owns every live identity, visibility, social, budget and posting check.
 final class GroupRulesModule extends HostModule
     implements AcceptedMessageObserver {
-  GroupRulesModule({required GroupRulesDispatch dispatch})
-    : _dispatch = dispatch;
+  GroupRulesModule({
+    required GroupRulesDispatch dispatch,
+    AcceptedMessageObserver Function(AcceptedMessageObserver rules)?
+    composeObserver,
+  }) : _dispatch = dispatch,
+       _composeObserver = composeObserver;
   final GroupRulesDispatch _dispatch;
+
+  /// Optional local composition; this module remains the sole observer provider.
+  final AcceptedMessageObserver Function(AcceptedMessageObserver rules)?
+  _composeObserver;
   static const _rules = RulesS1Responder();
   @override
   String get name => 'group_rules';
@@ -33,7 +41,10 @@ final class GroupRulesModule extends HostModule
   ];
   @override
   Future<void> configure(HostServices services) async {
-    services.provide<AcceptedMessageObserver>(this, owner: name);
+    services.provide<AcceptedMessageObserver>(
+      _composeObserver?.call(this) ?? this,
+      owner: name,
+    );
   }
 
   @override
