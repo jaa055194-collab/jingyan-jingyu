@@ -17,6 +17,16 @@ Source: Issue #5, `docs/modules/M11-client-shell.md`, v4.2 FR-09/11/13/18/61. Ow
 | M11-009 | analyze/test/build | Full Flutter analyzer clean;133 Flutter tests pass. Clientkit analyzer clean/144 tests pass. Windows debug154.1s and APK debug269s pass. Full repository check failed one unchanged host TLS concurrency test (expected16 sockets/actual17); isolated rerun passed | Repository suite is not green; no complete product acceptance claim |
 | M11-010 | Actual Before/After | Real Windows captures at1280x960 logical, light initial onboarding; baseline6b06a3b and changed source hashes in evidence/README.md | Captures prove this credential increment only. Original whole-shell comparison remains absent. Image model inspection unavailable; OCR is not visual review |
 
+## Explicit own-AI private consent (2026-11-17 increment)
+
+- Baseline: PR58 `0f63126`; host contract is merged PR66/main `9da4c1f`. This increment retains the incomplete draft and PR8 merge hold.
+- Settings loads a canonical owner/account/profile tuple, then authoritative consent state; it never infers profile ID from account ID or grants on refresh. Grant/revoke requires an explicit revision-bound confirmation. Unknown/uncertain is not off; 409 reloads only; uncertain writes are not replayed.
+- Runtime-issued interaction epochs are invalidated on lock, logout, session replacement and disposal. A lock/unlock cycle cannot revive an old confirmation; post-notify guards stop synchronous reentrant locking before HTTP dispatch. Mutation requests disable automatic 401 replay. Requests already transmitted cannot be unsent; late state is discarded and requires a fresh read.
+- Dialogs preserve existing Material layout and hide details after captured owner/session/AI-row changes, including changes while awaiting a response. The operation's own epoch consumption does not falsely invalidate its success.
+- Fresh automated evidence at source `9030e25`: Flutter analyzer clean; full suite **307 passed / 1 opt-in evidence test skipped**; focused API/runtime/Settings **84 passed**. Independent reviews and final delayed-response/row-snapshot regressions found no remaining material issue in this increment.
+- Actual Windows Before was captured at `0f63126` with a synthetic owner/AI, light theme, font scale 1.0 and 1280×960 logical viewport. The exact `9030e25` After scratch build passed isolation/build checks, but its bounded native run did not reach the first capture stage; no After capture or actual-UI grant/cancel/revoke acceptance is available. The first host process disappeared; one controlled same-fixture recovery did not complete the UI journey. Root cause remains unverified. This UI handoff is **incomplete**, not ready for merge. Automated widget checks at 375/768/1280 and dark375 are not actual-app visual acceptance. No live provider inference, Android or full-product readiness claim.
+- Exact `9030e25` production Windows debug build passed (83.2 seconds), without launching the ordinary native client or using production session storage. The draft must retain the missing After/native-interaction evidence before any readiness claim.
+
 ## Identity and token invariants
 
 - Password/invitation are never stored in ordinary snapshots. Tokens pass only through native protected session storage.
