@@ -5,8 +5,7 @@
 /// * `GET /creative/reports/{aiId}/{kind}/{periodKey}` → 单份报告
 /// 非本人/不存在一律 404（防探测）。
 ///
-/// 装配建议（不改共享 `jingyu_host.dart`）：在 `defaultModules` 追加
-/// `ReportsModule(service: ReportsService(...))`，适配器见 `creative_adapters.dart`。
+/// 默认宿主已注册该模块。调度器由宿主显式启用；缺少本地时区/生产活动源时必须保持关闭。
 library;
 
 import 'dart:async';

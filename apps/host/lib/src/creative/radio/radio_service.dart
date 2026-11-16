@@ -27,6 +27,7 @@ class RadioService {
     required RadioTargetProvider targetProvider,
     RadioScheduleConfig schedule = const RadioScheduleConfig(),
     CreativeBudgetGate budget = const AlwaysGrantBudgetGate(),
+    this.generationEnabled = true,
   }) : _store = store,
        _scriptSource = scriptSource,
        _voice = voice,
@@ -45,10 +46,14 @@ class RadioService {
   final RadioScheduleConfig _schedule;
   final CreativeBudgetGate _budget;
 
+  /// False in default assembly until genuine audio and production gates exist.
+  final bool generationEnabled;
+
   /// 处理一次调度 tick。返回本轮新生成的电台。
   ///
   /// 只考虑"今天"的 23:00 槽：宿主离线错过之后不会回头补昨晚的电台（B-4）。
   Future<List<RadioEpisode>> tick() async {
+    if (!generationEnabled) return const [];
     final targets = await _targetProvider.targets();
     final nowInstant = _clock.now().toUtc();
     final nowWall = _timeZone.toLocalWall(nowInstant);
@@ -83,6 +88,11 @@ class RadioService {
     required DateTime referenceInstant,
     required String profileVoiceId,
   }) {
+    if (!generationEnabled) {
+      return Future.value(
+        err(FailureCode.modelUnavailable, 'radio generation unavailable'),
+      );
+    }
     final target = RadioTarget(
       ownerAccountId: ownerAccountId,
       aiId: aiId,

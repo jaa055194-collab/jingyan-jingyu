@@ -5,8 +5,7 @@
 /// * `GET /creative/radio/{aiId}/{dateKey}` → 某一晚的电台（离线缓存可听）
 /// 非本人/不存在一律 404（防探测）。
 ///
-/// 装配建议（不改共享 `jingyu_host.dart`）：在 `defaultModules` 追加
-/// `RadioModule(service: RadioService(...))`，适配器见 `creative_adapters.dart`。
+/// 默认宿主已注册该模块。生成调度器仅在逐用户时区、授权与生产源接通后显式启用。
 library;
 
 import 'dart:async';

@@ -8,6 +8,7 @@ import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/src/accounts/accounts_migrations.dart';
 import 'package:jingyu_host/src/creative/creative_adapters.dart';
 import 'package:jingyu_host/src/creative/creative_migrations.dart';
+import 'package:jingyu_host/src/creative/sqlite_creative_authorization_store.dart';
 import 'package:jingyu_host/src/creative/creative_time.dart';
 import 'package:jingyu_host/src/creative/reports/reports_models.dart';
 import 'package:jingyu_host/src/creative/reports/reports_service.dart';
@@ -25,16 +26,13 @@ void main() {
   late Directory dir;
   late SqliteDatabase database;
 
-  Future<void> insertAccount(
-    String id,
-    String kind, {
-    bool disabled = false,
-  }) => database.execute(
-    'INSERT INTO account(id, display_name, kind, is_admin, disabled, '
-    'password_hash, failed_passwords, locked_until) '
-    'VALUES(?,?,?,?,?,?,?,?)',
-    [id, id, kind, 0, disabled ? 1 : 0, kind == 'human' ? 'x' : null, 0, 0],
-  );
+  Future<void> insertAccount(String id, String kind, {bool disabled = false}) =>
+      database.execute(
+        'INSERT INTO account(id, display_name, kind, is_admin, disabled, '
+        'password_hash, failed_passwords, locked_until) '
+        'VALUES(?,?,?,?,?,?,?,?)',
+        [id, id, kind, 0, disabled ? 1 : 0, kind == 'human' ? 'x' : null, 0, 0],
+      );
 
   Future<void> insertAi(String owner, String aiAccount, String profile) async {
     await insertAccount(aiAccount, 'ai');
@@ -48,10 +46,22 @@ void main() {
     );
   }
 
-  Future<void> insertVoice(String aiAccount, String voiceId) => database.execute(
+  Future<void> insertVoice(
+    String aiAccount,
+    String voiceId,
+  ) => database.execute(
     'INSERT INTO voice_profiles(ai_id, provider, model, voice_id, params_json, '
     'revision, consent_ref, activated_at) VALUES(?,?,?,?,?,?,?,?)',
-    [aiAccount, 'test', 'm', voiceId, '{}', 1, 'c', DateTime.utc(2026).toIso8601String()],
+    [
+      aiAccount,
+      'test',
+      'm',
+      voiceId,
+      '{}',
+      1,
+      'c',
+      DateTime.utc(2026).toIso8601String(),
+    ],
   );
 
   Future<void> insertActivity(
@@ -92,18 +102,21 @@ void main() {
     await dir.delete(recursive: true);
   });
 
-  test('目标枚举：从 ai_profile/ai_operator/account 得到 (owner, aiProfile) 对', () async {
-    final directory = CreativeTargetDirectory(
-      database: database,
-      authorization: InMemoryCreativeAuthorizationPolicy()
-    );
-    final pairs = await directory.pairs();
-    expect(pairs, hasLength(2));
-    expect(pairs[0].ownerAccountId, 'u1');
-    expect(pairs[0].aiProfileId, 'pA');
-    expect(pairs[1].ownerAccountId, 'u2');
-    expect(pairs[1].aiProfileId, 'pB');
-  });
+  test(
+    '目标枚举：从 ai_profile/ai_operator/account 得到 (owner, aiProfile) 对',
+    () async {
+      final directory = CreativeTargetDirectory(
+        database: database,
+        authorization: InMemoryCreativeAuthorizationPolicy(),
+      );
+      final pairs = await directory.pairs();
+      expect(pairs, hasLength(2));
+      expect(pairs[0].ownerAccountId, 'u1');
+      expect(pairs[0].aiProfileId, 'pA');
+      expect(pairs[1].ownerAccountId, 'u2');
+      expect(pairs[1].aiProfileId, 'pB');
+    },
+  );
 
   test('报告目标：只纳入已授权对象，未授权（空 scope）不进入调度', () async {
     final policy = InMemoryCreativeAuthorizationPolicy()
@@ -120,12 +133,27 @@ void main() {
     expect(targets.any((t) => t.ownerAccountId == 'u2'), isFalse);
   });
 
-  test('电台目标：需要档案音色；无音色的 AI 不生成', () async {
+  test('电台目标：没有单独电台授权时不生成', () async {
+    final policy = InMemoryCreativeAuthorizationPolicy();
     final voices = InMemoryCreativeVoiceDirectory()..set('u1', 'pA', 'voice-1');
     final provider = SqliteRadioTargetProvider(
       directory: CreativeTargetDirectory(
         database: database,
-        authorization: InMemoryCreativeAuthorizationPolicy()
+        authorization: policy,
+      ),
+      voices: voices,
+    );
+    expect(await provider.targets(), isEmpty);
+  });
+
+  test('电台目标：需要单独授权和档案音色；无音色的 AI 不生成', () async {
+    final policy = InMemoryCreativeAuthorizationPolicy()
+      ..setRadioEnabled('u1', 'pA', true);
+    final voices = InMemoryCreativeVoiceDirectory()..set('u1', 'pA', 'voice-1');
+    final provider = SqliteRadioTargetProvider(
+      directory: CreativeTargetDirectory(
+        database: database,
+        authorization: policy,
       ),
       voices: voices,
     );
@@ -137,20 +165,39 @@ void main() {
 
   test('SQLite 音色目录：从 voice_profiles 取档案音色，未知返回 null', () async {
     final voices = SqliteCreativeVoiceDirectory(database: database);
-    expect(await voices.voiceIdFor(ownerAccountId: 'u1', aiProfileId: 'pA'), 'voice-1');
-    expect(await voices.voiceIdFor(ownerAccountId: 'u1', aiProfileId: 'missing'), isNull);
+    expect(
+      await voices.voiceIdFor(ownerAccountId: 'u1', aiProfileId: 'pA'),
+      'voice-1',
+    );
+    expect(
+      await voices.voiceIdFor(ownerAccountId: 'u1', aiProfileId: 'missing'),
+      isNull,
+    );
     // 非本人（u2 查 u1 的 AI）拿不到音色。
-    expect(await voices.voiceIdFor(ownerAccountId: 'u2', aiProfileId: 'pA'), isNull);
+    expect(
+      await voices.voiceIdFor(ownerAccountId: 'u2', aiProfileId: 'pA'),
+      isNull,
+    );
   });
 
   test('活动来源：只读本人窗口内数据，绝不跨用户', () async {
     await insertActivity(
       'u1',
       'pA',
+      scope: CreativeScope.privateChat,
       kind: CreativeActivityKind.topic,
       dayKey: '2026-11-15',
       label: '旅行',
       value: 3,
+    );
+    await insertActivity(
+      'u1',
+      'pA',
+      scope: CreativeScope.groupChat,
+      kind: CreativeActivityKind.topic,
+      dayKey: '2026-11-15',
+      label: '群内话题',
+      value: 1,
     );
     await insertActivity(
       'u2',
@@ -158,6 +205,13 @@ void main() {
       kind: CreativeActivityKind.topic,
       dayKey: '2026-11-15',
       label: '机密话题',
+    );
+    final policy = SqliteCreativeAuthorizationStore(database: database);
+    await policy.setAuthorization(
+      ownerAccountId: 'u1',
+      aiProfileId: 'pA',
+      scopes: {CreativeScope.privateChat},
+      radioEnabled: false,
     );
     final source = SqliteCreativeActivitySource(database: database);
     final mine = await source.collect(
@@ -169,7 +223,20 @@ void main() {
     expect(mine, hasLength(1));
     expect(mine.single.label, '旅行');
     expect(mine.single.value, 3);
-    // 窗口外不返回。
+    await policy.setAuthorization(
+      ownerAccountId: 'u1',
+      aiProfileId: 'pA',
+      scopes: const {},
+      radioEnabled: false,
+    );
+    final revoked = await source.collect(
+      ownerAccountId: 'u1',
+      aiId: 'pA',
+      windowStartDay: '2026-11-09',
+      windowEndDay: '2026-11-15',
+    );
+    expect(revoked, isEmpty);
+    // 窗口外不返回.
     final outOfWindow = await source.collect(
       ownerAccountId: 'u1',
       aiId: 'pA',
@@ -197,7 +264,10 @@ void main() {
 
   test('离线缓存音色后端：写真实文件、回显音色、空脚本返回 null', () async {
     final synth = FileBackedVoiceSynthesizer(cacheDir: '${dir.path}/voice');
-    final audio = await synth.synthesize(script: '晚安，慢慢呼吸。', voiceId: 'voice-1');
+    final audio = await synth.synthesize(
+      script: '晚安，慢慢呼吸。',
+      voiceId: 'voice-1',
+    );
     expect(audio, isNotNull);
     expect(audio!.voiceId, 'voice-1');
     expect(File(audio.ref).existsSync(), isTrue);
@@ -214,8 +284,13 @@ void main() {
       label: '旅行',
       value: 3,
     );
-    final policy = InMemoryCreativeAuthorizationPolicy()
-      ..grant('u1', 'pA', {CreativeScope.privateChat});
+    final policy = SqliteCreativeAuthorizationStore(database: database);
+    await policy.setAuthorization(
+      ownerAccountId: 'u1',
+      aiProfileId: 'pA',
+      scopes: {CreativeScope.privateChat},
+      radioEnabled: false,
+    );
     final clock = FakeClock(DateTime.utc(2026, 11, 15, 12, 0)); // 周日 20:00 本地
     final service = ReportsService(
       store: SqliteReportsStore(database: database),

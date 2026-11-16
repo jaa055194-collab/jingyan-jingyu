@@ -113,4 +113,12 @@
 - 覆盖顺序/游标/默认50/上限100/终页、diff与原因/证据/快照、不可变历史、非owner/admin拒绝、旧凭据/账号或设备错配/撤销/过期、AI停用/归属转让/同owner不同profile、损坏sentinel不解密与选中行安全500、revert完整before恢复/当前锁保留/旧记录不变/重开持久化、并发CAS仅一项接受和输入拒绝无写入。
 - 局限：行数上限不是字节或延迟上限；现有适配器对重复query键归一为单值，不宣称重复键拒绝；无人格UI、模型自迭代触发或生产记忆授权，不计完整M06或端到端产品验收。
 
+## M09 Creative 只读装配与活动授权（2026-11-17）
+
+| ID | 来源/版本/章节 | 原始要求摘要 | 审批状态 | 验收条件 | 实现位置 | 检查/证据 | 状态/缺口 |
+|---|---|---|---|---|---|---|---|
+| REQ-055 | v4.2 §14 CR-03 / M09 | 周报/年报只统计本人授权范围，授权可撤回 | 已授权局部 | 初始无授权；只有当前AI operator可设置scope；撤权后读取不返数据；匿名401/跨owner404/未知scope400；读取同时核验owner与授权scope；原始聊天正文不进入活动表 | `creative_authorizations` Migration803；`SqliteCreativeAuthorizationStore`；`CreativeAuthorizationModule`; `SqliteCreativeActivitySource` | 授权路由、授权store、writer、adapter scope/revocation与默认装配定向检查通过；最新完整host analyze clean。2026-11-17 当前修订完整 host 套件1203 passed/12 skipped（10m57s），四共享库20/22/10/165项通过且各包分析clean；独立复审无本次只读/配置装配范围的Critical/Important。测试数不是产品需求验收比例 | scope授权存储与report读取/配置装配已实现；M06/M07无已批准producer。默认宿主同时关闭timer和所有手动/定时生成入口；逐用户时区、真实预算、生成后最终授权校验接通前不得启用，不计CR-03按期生成验收 |
+| REQ-056 | v4.2 §14 CR-07 / M09 | 23:00本地深夜电台、个人自行选择是否启用、音色一致 | 已授权局部 | radio opt-in默认false；owner单独授权/撤回；无voice profile不进入目标；跨owner404；TTS缺真实厂商时不得宣称音频验收 | `creative_radio_authorizations` Migration803；`SqliteRadioTargetProvider`; `CreativeAuthorizationModule`; `RadioModule`默认组装且timer关闭 | `creative_adapters_test` radio default-off/grant/voice tests；authorization route grant/revoke tests；analyze clean | opt-in持久化和目标过滤已实现；默认宿主生成总闸关闭且TTS明确不可用，不把文本缓存当音频。真实TTS、逐用户时区、预算生产配置及生成后最终授权校验未接，不计CR-07验收 |
+| REQ-057 | M09/M06/M07 结构化活动生产者前置 | 仅用已授权、脱敏、owner-scoped结构化事件喂周报；不复制正文 | 未实现（生产者接口缺失） | writer只接owner/profile/scope/kind/day/≤64字符label/非负value；同事务校验当前owner、AI有效及精确scope grant；未授权、owner错配、撤权或身份失效零写入 | `CreativeActivityWriter` service + `SqliteCreativeActivityWriter`; HostServices registration | writer tests覆盖default deny、grant write、stale owner grant、invalid day/label；适配器source tests覆盖授权范围与撤权 | 写端供可信模块注入；短标签仍由生产者负责脱敏，长度限制不证明脱敏。当前为append-only，无事件幂等键，接重试生产者前须增加来源事件键；没有获批M06/M07生产者，不从topic/message正文抽取，活动采集生产闭环缺失 |
+
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
