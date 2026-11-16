@@ -26,13 +26,15 @@ void main() {
         ),
         throwsArgumentError,
       );
-      final configured = defaultModules(envConfig, const SystemClock())
-          .whereType<ModelsModule>()
-          .single;
+      final configured = defaultModules(
+        envConfig,
+        const SystemClock(),
+      ).whereType<ModelsModule>().single;
       expect(configured.providerDiscoveryRequest, isNotNull);
-      final offline = defaultModules(const HostConfig(), const SystemClock())
-          .whereType<ModelsModule>()
-          .single;
+      final offline = defaultModules(
+        const HostConfig(),
+        const SystemClock(),
+      ).whereType<ModelsModule>().single;
       expect(offline.providerDiscoveryRequest, isNull);
       final dir = await Directory.systemTemp.createTemp(
         'jingyu-model-runtime-assembly-',
@@ -104,6 +106,7 @@ void main() {
           800,
           801,
           802,
+          803,
           900,
           901,
           902,
@@ -133,7 +136,10 @@ void main() {
         (await host.pipeline.handle(
           HostRequest(
             method: 'GET',
-            path: Routes.modelProviderModels.replaceFirst('{providerId}', 'fixture'),
+            path: Routes.modelProviderModels.replaceFirst(
+              '{providerId}',
+              'fixture',
+            ),
           ),
         )).status,
         401,

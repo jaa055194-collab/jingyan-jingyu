@@ -51,4 +51,21 @@ CREATE TABLE creative_activity (
 );
 CREATE INDEX idx_creative_activity_owner ON creative_activity(owner_account_id, ai_id, day_key);
 '''),
+  Migration(803, 'creative owner authorization', '''
+CREATE TABLE creative_authorizations (
+  owner_account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+  ai_profile_id TEXT NOT NULL REFERENCES ai_profile(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL CHECK(scope IN ('privateChat','groupChat','moments')),
+  granted_at TEXT NOT NULL,
+  PRIMARY KEY(owner_account_id, ai_profile_id, scope)
+);
+CREATE TABLE creative_radio_authorizations (
+  owner_account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+  ai_profile_id TEXT NOT NULL REFERENCES ai_profile(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(owner_account_id, ai_profile_id)
+);
+CREATE INDEX idx_creative_authorizations_owner ON creative_authorizations(owner_account_id, ai_profile_id);
+'''),
 ];

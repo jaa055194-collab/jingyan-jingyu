@@ -64,7 +64,19 @@ import 'src/messages/pins.dart';
 import 'src/messages/reactions.dart';
 import 'src/messages/scheduled.dart';
 import 'src/messages/search.dart';
+import 'src/creative/creative_activity_writer.dart';
+import 'src/creative/creative_adapters.dart';
+import 'src/creative/creative_authorization_module.dart';
 import 'src/creative/creative_migrations.dart';
+import 'src/creative/sqlite_creative_authorization_store.dart';
+import 'src/creative/creative_time.dart';
+import 'src/creative/radio/radio_models.dart';
+import 'src/creative/radio/radio_module.dart';
+import 'src/creative/radio/radio_service.dart';
+import 'src/creative/radio/sqlite_radio_store.dart';
+import 'src/creative/reports/reports_module.dart';
+import 'src/creative/reports/reports_service.dart';
+import 'src/creative/reports/sqlite_reports_store.dart';
 import 'src/voice/voice_migrations.dart';
 import 'src/voice/voice_module.dart';
 import 'src/world/world_migrations.dart';
@@ -311,6 +323,42 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
           executable: executable,
           workerPath: workerPath!,
         ).request;
+  final creativeAuthorization = SqliteCreativeAuthorizationStore(
+    database: storage.database,
+    clock: clock,
+  );
+  final creativeActivityWriter = SqliteCreativeActivityWriter(
+    database: storage.database,
+  );
+  final creativeDirectory = CreativeTargetDirectory(
+    database: storage.database,
+    authorization: creativeAuthorization,
+  );
+  final creativeActivity = SqliteCreativeActivitySource(
+    database: storage.database,
+  );
+  final creativeTimeZone = const UserTimeZone(Duration.zero);
+  final reportsService = ReportsService(
+    store: SqliteReportsStore(database: storage.database),
+    activitySource: creativeActivity,
+    clock: clock,
+    timeZone: creativeTimeZone,
+    targetProvider: SqliteReportTargetProvider(creativeDirectory),
+    letterWriter: const TemplateReportLetterWriter(),
+    generationEnabled: false,
+  );
+  final radioService = RadioService(
+    store: SqliteRadioStore(database: storage.database),
+    scriptSource: const TemplateRadioScriptSource(),
+    voice: const UnavailableCreativeVoiceSynthesizer(),
+    generationEnabled: false,
+    clock: clock,
+    timeZone: creativeTimeZone,
+    targetProvider: SqliteRadioTargetProvider(
+      directory: creativeDirectory,
+      voices: SqliteCreativeVoiceDirectory(database: storage.database),
+    ),
+  );
   return [
     SystemModule(
       config: config,
@@ -372,6 +420,12 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
       clock: clock,
       authenticate: DbAuthenticator(accounts).call,
     ),
+    CreativeAuthorizationModule(
+      store: creativeAuthorization,
+      activityWriter: creativeActivityWriter,
+    ),
+    ReportsModule(service: reportsService, enableTimer: false),
+    RadioModule(service: radioService, enableTimer: false),
     LifecycleModule(
       clock: clock,
       audit: storage.auditLog,

@@ -200,8 +200,7 @@ abstract final class Routes {
       '$prefix/ai-profiles/{aiId}/voice-profile';
 
   /// 某 AI 的短期试听/合成会话票据（POST 签发，5 分钟有效）。
-  static const String aiVoiceTicket =
-      '$prefix/ai-profiles/{aiId}/voice-ticket';
+  static const String aiVoiceTicket = '$prefix/ai-profiles/{aiId}/voice-ticket';
 
   /// 创建 1v1 通话（POST）。
   static const String voiceCalls = '$prefix/voice/calls';
@@ -280,6 +279,10 @@ abstract final class Routes {
 
   /// 离开并生成删除回执（当前账号）。
   static const String lifecycleDepartureReceipt = '$prefix/lifecycle/departure';
+
+  /// Owner-only consent for report scopes and radio generation.
+  static const String creativeOwnerConsent =
+      '$prefix/creative/authorizations/{aiId}';
 
   /// CR-03 关系周报/年报（本人只读，按 owner 过滤）。
   static const String creativeReports = '$prefix/creative/reports';

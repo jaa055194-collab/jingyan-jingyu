@@ -4,19 +4,16 @@
 /// * [CreativeTargetDirectory] 从既有 `ai_profile` / `ai_operator` / `account`
 ///   枚举 (owner, aiProfile) 对，供 [SqliteReportTargetProvider] /
 ///   [SqliteRadioTargetProvider] 使用。
-/// * [CreativeAuthorizationPolicy]：授权范围策略（授权配置的数据契约目前缺失，
-///   见文件末尾"外部缺口"）。未授权（空集合）的对象不会进入调度，绝不读取。
-/// * [SqliteCreativeActivitySource]：读 owner 私有的预聚合活动表
-///   `creative_activity`（迁移 802），只按 owner/ai/窗口过滤，不读任何跨用户正文。
+/// * [CreativeAuthorizationPolicy]：授权范围策略已持久化；空集合默认拒绝。
+/// * [SqliteCreativeActivitySource]：只读 owner 私有的结构化预聚合表
+///   `creative_activity`（迁移 802），读取前重新核验 owner、AI 和 scope。
 /// * [TemplateReportLetterWriter]：确定性一封信（无模型）；真实 AI 信件属 M07。
 /// * [FileBackedVoiceSynthesizer]：把脚本落成离线缓存文件的最小后端（音色回显），
 ///   真实 TTS 厂商属 M08。
 ///
-/// 外部缺口（未定接口，用可注入接口隔离，不在本切片伪造）：
-/// * 授权配置持久化：谁的哪个 AI 向哪类数据（私聊/群/朋友圈）授权统计——
-///   目前无表/无契约，由 [CreativeAuthorizationPolicy] 注入；默认拒绝。
-/// * 活动采集写入方：`creative_activity` 由 M06/M07 在生成话题/打卡/心情时写入；
-///   本切片只提供读取端。
+/// 外部缺口：
+/// * M06/M07 尚无已批准的 `CreativeActivityWriter` producer；当前提供受授权、
+///   只接受脱敏结构化字段的 writer service，不从话题引用或消息正文抽取数据。
 /// * 真实 TTS / 音色目录由 M08 voice 提供；本切片用 [CreativeVoiceDirectory] 读取
 ///   已存在的 `voice_profiles.voice_id`（若装配了 voice 迁移）。
 library;
@@ -34,23 +31,55 @@ abstract class CreativeAuthorizationPolicy {
     required String ownerAccountId,
     required String aiProfileId,
   });
+
+  Future<bool> radioEnabledFor({
+    required String ownerAccountId,
+    required String aiProfileId,
+  });
 }
 
 /// 内存授权配置（供装配/测试注入）。
-class InMemoryCreativeAuthorizationPolicy implements CreativeAuthorizationPolicy {
-  final Map<String, Set<CreativeScope>> _grants = <String, Set<CreativeScope>>{};
+class InMemoryCreativeAuthorizationPolicy
+    implements CreativeAuthorizationPolicy {
+  final Map<String, Set<CreativeScope>> _grants =
+      <String, Set<CreativeScope>>{};
+  final Set<String> _radio = <String>{};
 
   String _key(String owner, String ai) => '$owner\u0000$ai';
 
-  void grant(String ownerAccountId, String aiProfileId, Set<CreativeScope> scopes) {
+  void grant(
+    String ownerAccountId,
+    String aiProfileId,
+    Set<CreativeScope> scopes,
+  ) {
     _grants[_key(ownerAccountId, aiProfileId)] = {...scopes};
+  }
+
+  void setRadioEnabled(
+    String ownerAccountId,
+    String aiProfileId,
+    bool enabled,
+  ) {
+    final key = _key(ownerAccountId, aiProfileId);
+    if (enabled) {
+      _radio.add(key);
+    } else {
+      _radio.remove(key);
+    }
   }
 
   @override
   Future<Set<CreativeScope>> scopesFor({
     required String ownerAccountId,
     required String aiProfileId,
-  }) async => _grants[_key(ownerAccountId, aiProfileId)] ?? const <CreativeScope>{};
+  }) async =>
+      _grants[_key(ownerAccountId, aiProfileId)] ?? const <CreativeScope>{};
+
+  @override
+  Future<bool> radioEnabledFor({
+    required String ownerAccountId,
+    required String aiProfileId,
+  }) async => _radio.contains(_key(ownerAccountId, aiProfileId));
 }
 
 /// 音色目录：把 (owner, aiProfile) 映射到档案音色 id。
@@ -108,7 +137,10 @@ WHERE p.id = ?
 
 /// 从既有身份表枚举 (owner, aiProfile) 对。只读，不带任何正文。
 class CreativeTargetDirectory {
-  CreativeTargetDirectory({required this.database, required this.authorization});
+  CreativeTargetDirectory({
+    required this.database,
+    required this.authorization,
+  });
 
   final Database database;
   final CreativeAuthorizationPolicy authorization;
@@ -170,6 +202,11 @@ class SqliteRadioTargetProvider implements RadioTargetProvider {
   Future<List<RadioTarget>> targets() async {
     final result = <RadioTarget>[];
     for (final pair in await directory.pairs()) {
+      final radioEnabled = await directory.authorization.radioEnabledFor(
+        ownerAccountId: pair.ownerAccountId,
+        aiProfileId: pair.aiProfileId,
+      );
+      if (!radioEnabled) continue; // 电台有独立于报告范围的明确 opt-in
       final voiceId = await voices.voiceIdFor(
         ownerAccountId: pair.ownerAccountId,
         aiProfileId: pair.aiProfileId,
@@ -203,10 +240,23 @@ class SqliteCreativeActivitySource implements CreativeActivitySource {
   }) async {
     final rows = await database.query(
       '''
-SELECT scope, kind, day_key, label, value
-FROM creative_activity
-WHERE owner_account_id = ? AND ai_id = ? AND day_key >= ? AND day_key <= ?
-ORDER BY day_key, kind, label
+SELECT activity.scope, activity.kind, activity.day_key, activity.label, activity.value
+FROM creative_activity AS activity
+JOIN creative_authorizations AS authorization
+  ON authorization.owner_account_id=activity.owner_account_id
+ AND authorization.ai_profile_id=activity.ai_id
+ AND authorization.scope=activity.scope
+JOIN ai_profile AS profile
+  ON profile.id=activity.ai_id
+JOIN account AS ai
+  ON ai.id=profile.account_id AND ai.kind='ai' AND ai.disabled=0
+JOIN ai_operator AS operator
+  ON operator.ai_id=ai.id AND operator.operator_id=activity.owner_account_id
+JOIN account AS owner
+  ON owner.id=operator.operator_id AND owner.kind='human' AND owner.disabled=0
+WHERE activity.owner_account_id = ? AND activity.ai_id = ?
+  AND activity.day_key >= ? AND activity.day_key <= ?
+ORDER BY activity.day_key, activity.kind, activity.label
 ''',
       [ownerAccountId, aiId, windowStartDay, windowEndDay],
     );
@@ -246,6 +296,17 @@ class TemplateReportLetterWriter implements ReportLetterWriter {
 ///
 /// 真实 TTS（M08 厂商）未定；本实现保证 [RadioAudio.ref] 指向一个真实存在的缓存
 /// 文件，从而"预生成可离线听"的存储侧契约可被验证。音色回显保证与档案一致。
+class UnavailableCreativeVoiceSynthesizer implements VoiceSynthesizer {
+  const UnavailableCreativeVoiceSynthesizer();
+
+  @override
+  Future<RadioAudio?> synthesize({
+    required String script,
+    required String voiceId,
+  }) async => null;
+}
+
+/// Test/reference text cache, not an audio synthesizer. Never use in default assembly.
 class FileBackedVoiceSynthesizer implements VoiceSynthesizer {
   FileBackedVoiceSynthesizer({required this.cacheDir});
 
