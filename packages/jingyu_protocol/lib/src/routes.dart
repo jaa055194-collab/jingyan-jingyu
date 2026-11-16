@@ -280,4 +280,14 @@ abstract final class Routes {
 
   /// 离开并生成删除回执（当前账号）。
   static const String lifecycleDepartureReceipt = '$prefix/lifecycle/departure';
+
+  /// CR-03 关系周报/年报（本人只读，按 owner 过滤）。
+  static const String creativeReports = '$prefix/creative/reports';
+  static const String creativeReport =
+      '$prefix/creative/reports/{aiId}/{kind}/{periodKey}';
+
+  /// CR-07 深夜电台（本人只读，按 owner 过滤）。
+  static const String creativeRadio = '$prefix/creative/radio';
+  static const String creativeRadioEpisode =
+      '$prefix/creative/radio/{aiId}/{dateKey}';
 }
