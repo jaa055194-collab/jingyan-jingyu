@@ -1,0 +1,24 @@
+{
+  "label": "independent real HTTP API; same synthetic Before/After fixture; no model/Android claim",
+  "ownerAccountId": "capture_owner",
+  "ownAi": [
+    {
+      "accountId": "capture_ai",
+      "displayName": "Synthetic Owner AI",
+      "disabled": false
+    }
+  ],
+  "consent": {
+    "scope": "ownerTextOnly",
+    "aiProfileId": "capture_profile",
+    "aiAccountId": "capture_ai",
+    "conversationId": "sL87uh3yN5LBCA7bheSOodSO",
+    "enabled": false,
+    "revision": 2
+  },
+  "providers": [],
+  "historyReadable": true,
+  "messages": [],
+  "noMessageSend": true,
+  "noAiCreate": true
+}

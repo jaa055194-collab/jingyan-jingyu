@@ -87,3 +87,19 @@ These are actual Windows debug application captures from locally built executabl
 - **After (created through the real UI):** the driver opened the real Create AI dialog, entered `Capture Settings AI`, pressed Create, and the actual app displayed the server-confirmed canonical ID and a new list row. [actual After created image](<settings-after-main-recovery-128ea5f-created.png>) — PNG SHA-256 `A222AB382D2BF43FCF22C2137E627C55005BF0EB3A6CFBA8FBAA517F3CE29878`.
 
 The baseline image is the immediate pre-increment recovered client, not an application on original `main` (original main has no Flutter client at all). This comparison establishes the Settings own-AI list/create increment only. It does not prove automatic model replies, AI readiness, whole-shell main-baseline acceptance, Android device acceptance, or complete product acceptance. Image input was unavailable to the model; Windows OCR confirmed rendered text (`我的 AI`, `Capture Rules S1`, `Capture Settings AI`, created-account notice) and the driver asserted authenticated/online/list/create state, but human visual review remains required.
+
+## Explicit own-AI private consent — actual comparison (2026-11-17)
+
+**Before `0f631267887f35fdcc5cfadc90a40aaf497a59bb`:** [Settings own-AI row before consent controls](<consent-before-settings.png>).
+
+**After `9030e25722562e945cedc133bd8b1fd0708824b9`:** [off](<consent-after40-off.png>), [explicit disclosure](<consent-after40-dialog.png>), [cancelled without consent](<consent-after40-canceled.png>), [confirmed on](<consent-after40-on.png>), [revoked](<consent-after40-revoked.png>).
+
+These are actual Windows application captures of production `main` with a capture-only native namespace/data isolation patch. Both sides use the same synthetic host database/owner/AI, host revision `9da4c1f`, dependency-lock SHA256 `924B5B4631271C690FBC1D9722F70CC4E96E977B7A502AFBCECA55DCE0EDEAD1`, light theme, font scale 1.0, 1280×960 logical viewport (2560×1920 physical at DPI192) and own-AI row scroll alignment .72. Host restart retained the fixture database; capture40 reused the successful diagnostic session at the same loopback origin. No real account credentials or private conversation content is included.
+
+Actual UI assertions establish: status read off/revision0; opening and cancelling the dialog leaves it off/revision0; one explicit confirm opens a canonical conversation at revision1; one explicit revoke returns off/revision2 and retains that conversation. [Independent public HTTP evidence](<consent-api-evidence.json>) confirms the final revision2 state, readable empty history and zero configured providers/messages. It is not real model-chat or Android acceptance. Status refresh includes existing-profile registration POST, not literally GET-only. No production runtime state was injected.
+
+PNG SHA256: Before `8532CE2182FE4BA9420CF4F416C4C90FA7FD2631428A8E9EDCBF0E5BE187B997`; off/cancelled/revoked `E06F1FBD0EEE02D64B2A5BD2D154BD406830A323A701F526729433C814D95051`; disclosure `3173C69B7DCC91A29E2F98528B9E701FD8BDB4DFD402FCD76494768B0A26CFA3`; on `149C800769D5C647EE65CBAEF6DF831547A60D6460FDBECF09BA99D0ADCBDA8F`.
+
+Earlier capture attempts failed before the first stage. Diagnostics identified private-harness callback lookup and UTF8-copy defects, not a production defect; the final capture used the tested actual-driver IconButton finder and ASCII Unicode escapes with explicit UTF8 IO. Exact source/driver/binary isolation hashes and stage metadata were retained locally. Owned GUI/host processes were stopped and temporary drive mappings removed.
+
+**Limitation:** image input is unavailable in this worker session. The captures and driver/API assertions are verified, but no image-capable/human visual review, contrast assessment, full-shell acceptance or complete client release readiness is claimed. PR58 remains a draft and PR8's explicit owner-agreement hold remains unchanged.
