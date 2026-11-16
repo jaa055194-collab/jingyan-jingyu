@@ -25,7 +25,7 @@
 在 `apps/host` 目录下，只把密钥注入当前进程（示例，切勿提交）：
 
 ```powershell
-$env:JINGYU_LIVE_BASE_URL = 'https://api.hcnsec.cn/v1'
+$env:JINGYU_LIVE_BASE_URL = 'https://<your-openai-compatible-host>/v1'
 $env:JINGYU_LIVE_API_KEY  = '<本机注入，禁止提交>'
 $env:JINGYU_LIVE_MODEL    = 'auto'
 dart test test/live_model_chat_test.dart -r expanded
@@ -47,7 +47,7 @@ dart test test/live_model_chat_test.dart -r expanded
 
 ## 安全边界
 
-- 密钥仅经环境变量注入，测试代码不读取、不落盘、不回显明文。
+- 密钥仅经环境变量注入，测试代码只在内存中使用，不落盘明文、不回显。
 - `.gitignore` 已忽略 `.env`、`.env.*`、`secrets.local/`；不要把这些值写进任何跟踪文件、PR 描述或日志。
 - 该验证只证明「单次真实对话经宿主链路可用」；它不代表已实现自动回复触发链、客户端 UI、
   流式、多轮记忆授权或完整 FR-57 验收。

@@ -11,7 +11,7 @@
 // secret-free. JINGYU_LIVE_MODEL defaults to "auto".
 //
 // Local run (PowerShell), injecting the key only into this process:
-//   $env:JINGYU_LIVE_BASE_URL = 'https://api.hcnsec.cn/v1'
+//   $env:JINGYU_LIVE_BASE_URL = 'https://<your-openai-compatible-host>/v1'
 //   $env:JINGYU_LIVE_API_KEY  = '<injected locally, never committed>'
 //   $env:JINGYU_LIVE_MODEL    = 'auto'
 //   dart test test/live_model_chat_test.dart -r expanded
@@ -160,6 +160,9 @@ void main() {
           cipher: cipher,
           clock: clock,
           urlGuard: guard,
+          // Same guarded-HTTP implementation the production worker runs
+          // (bin/http_worker.dart); the subprocess IPC isolation boundary itself
+          // is covered by process_http_test.dart / guarded_http_test.dart.
           adapter: OpenAiCompatibleChatAdapter(GuardedHttpTransport()),
           profile: ContextualChatProfile(
             providerId: providerId,
