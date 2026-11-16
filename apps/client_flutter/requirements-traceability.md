@@ -27,6 +27,20 @@ Source: Issue #5, `docs/modules/M11-client-shell.md`, v4.2 FR-09/11/13/18/61. Ow
 - Actual matched Windows Before `0f63126` / After `9030e25` now exist at light/1.0/1280×960 with the same synthetic database/owner/AI. Actual UI cancel leaves off/rev0; confirm opens rev1; revoke leaves off/rev2 with canonical conversation retained. Independent HTTP verification confirms readable empty history and no providers/messages. See `evidence/README.md` and its labelled captures. Earlier private-harness callback/UTF8-copy failures were diagnosed; no production change was needed for final capture.
 - Exact `9030e25` production Windows debug build passed (83.2 seconds), without launching the ordinary native client or using production session storage. Capture source/binary isolation and metadata checks passed, but image-capable/human visual review remains unavailable. Automated widget widths and captured pixels do not prove contrast or full-shell acceptance. No live provider inference, Android or full-product readiness claim; PR58 remains an incomplete draft.
 
+## Owner-AI prerequisite read metadata (task-40, 2026-11-17)
+
+Baseline `1f5e16e57843bd3a23feb8e80ea47cb72738c78d`; read contracts inspected in host PersonaModule, BindingMatrix/config_routes, BudgetConfiguration/budget_routes and ProviderRegistry/ModelsModule. This is a client read adapter only, not product or model readiness acceptance.
+
+| ID | Source / approved scope | Observable acceptance | Implementation / test | State / gap |
+|---|---|---|---|---|
+| M11-011 | task-40: explicit resolved identity, GET only | Every item first GETs current canonical profile/account/owner; mismatch/identity404 stops before target read | owner_ai_readiness_api.dart / owner_ai_readiness_api_test.dart | Implemented; verification recorded in handoff |
+| M11-012 | task-40: exact persona/binding/budget/provider metadata | Strict identity/schema/types; complete nonnegative budget maps and sums; actual host key-mask contract, no raw key; missing/unconfigured/unknown distinguished | Same targeted loopback tests | Implemented; no UI/runtime integration |
+| M11-013 | task-40: honest configuration-only status | No model/discovery/outbound/write/usage/history requests; persona text excluded from status/error/log | GET-only request assertions and safe status tests | Implemented; not model ready, budget admitted or worker available |
+
+Fresh targeted verification: `flutter test --no-pub test/owner_ai_readiness_api_test.dart` **33 passed / 0 failed**; `flutter analyze --no-pub` **No issues found** (Windows, Dart3.14, task-40 baseline1f5e16e). Review deltas have separate RED/GREEN evidence: host-valid multiline persona values now permit TAB/LF/CR while keys still reject all controls; identity/target TLS handshake and certificate failures are normalized to unknown without exposing exception details. Lead integration subsequently passed the complete Flutter suite **340 passed / 1 opt-in evidence test skipped** and the full Flutter analyzer. No UI/runtime or real provider acceptance is claimed for this read-only adapter.
+
+Identity and item GETs form a non-atomic observation, not a durable ownership assertion. A target persona404 may also follow transfer/revoke between reads and only means no card was retrieved. A valid zero-token budget or disabled provider is still configuration metadata, never execution permission. Provider URL parsing is metadata validation only and does not replace host UrlGuard or perform DNS.
+
 ## Identity and token invariants
 
 - Password/invitation are never stored in ordinary snapshots. Tokens pass only through native protected session storage.
