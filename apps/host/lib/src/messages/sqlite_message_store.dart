@@ -49,75 +49,107 @@ class SqliteMessageStore implements MessageStore {
     }
     // A failed transaction (including commit) must escape: returning an error
     // inside the callback would commit any preceding sequence allocation.
-    return _database.transaction((tx) async {
-      final existing = await tx.query(
-        '''
+    return _database.transaction(
+      (tx) => appendInTransaction(
+        tx,
+        conversationId: conversationId,
+        senderId: senderId,
+        clientMsgId: clientMsgId,
+        kind: kind,
+        body: body,
+      ),
+    );
+  }
+
+  /// Appends using an active caller-owned transaction, without opening another
+  /// transaction or making outer Database calls. Authorization remains the
+  /// caller's responsibility; this helper makes no permission decisions.
+  ///
+  /// The result is provisional until the caller commits. An Err does not roll
+  /// back earlier caller writes: throw from the transaction callback when those
+  /// writes must also be reverted. Storage/cipher exceptions propagate and must
+  /// not be swallowed if the caller requires the entire transaction to roll back.
+  Future<Result<AppendResult>> appendInTransaction(
+    Tx tx, {
+    required String conversationId,
+    required String senderId,
+    required String clientMsgId,
+    required MessageKind kind,
+    required Map<String, Object?> body,
+  }) async {
+    if (clientMsgId.isEmpty || clientMsgId.length > 64) {
+      return err(
+        FailureCode.invalidArgument,
+        'clientMsgId length must be 1–64',
+      );
+    }
+    final existing = await tx.query(
+      '''
 SELECT * FROM messages
 WHERE conversation_id = ? AND sender_id = ? AND client_msg_id = ?
 ''',
-        [conversationId, senderId, clientMsgId],
+      [conversationId, senderId, clientMsgId],
+    );
+    if (existing.isNotEmpty) {
+      return _read(
+        existing.single,
+      ).map((m) => AppendResult(m, duplicate: true));
+    }
+    final String encoded;
+    try {
+      encoded = jsonEncode(body);
+    } on JsonUnsupportedObjectError {
+      return err<AppendResult>(
+        FailureCode.invalidArgument,
+        'Body must be a JSON object',
       );
-      if (existing.isNotEmpty) {
-        return _read(
-          existing.single,
-        ).map((m) => AppendResult(m, duplicate: true));
-      }
-      final String encoded;
-      try {
-        encoded = jsonEncode(body);
-      } on JsonUnsupportedObjectError {
-        return err<AppendResult>(
-          FailureCode.invalidArgument,
-          'Body must be a JSON object',
-        );
-      }
-      final id = _newId();
-      final sealed = _cipher.encrypt(encoded, aad: 'messages:body:$id');
-      final seq = await headSeqInTransaction(tx, conversationId) + 1;
-      final sentAt = clock.now().toUtc();
-      await tx.execute(
-        '''
+    }
+    final id = _newId();
+    final sealed = _cipher.encrypt(encoded, aad: 'messages:body:$id');
+    final seq = await headSeqInTransaction(tx, conversationId) + 1;
+    final sentAt = clock.now().toUtc();
+    await tx.execute(
+      '''
 INSERT INTO message_heads(conversation_id, seq) VALUES (?, ?)
 ON CONFLICT(conversation_id) DO UPDATE SET seq = excluded.seq
 ''',
-        [conversationId, seq],
-      );
-      await tx.execute(
-        '''
+      [conversationId, seq],
+    );
+    await tx.execute(
+      '''
 INSERT INTO messages(message_id, conversation_id, seq, sender_id, client_msg_id, kind, body, sent_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ''',
-        [
-          id,
-          conversationId,
-          seq,
-          senderId,
-          clientMsgId,
-          kind.wire,
-          sealed,
-          sentAt.toIso8601String(),
-        ],
-      );
-      // Decode the serialized snapshot, so later mutations of nested caller
-      // maps cannot change the returned message relative to persistent data.
-      return Ok(
-        AppendResult(
-          StoredMessage(
-            conversationId: conversationId,
-            seq: seq,
-            messageId: id,
-            senderId: senderId,
-            clientMsgId: clientMsgId,
-            kind: kind,
-            body: Map<String, Object?>.unmodifiable(
-              jsonDecode(encoded) as Map<String, dynamic>,
-            ),
-            sentAt: sentAt,
+      [
+        id,
+        conversationId,
+        seq,
+        senderId,
+        clientMsgId,
+        kind.wire,
+        sealed,
+        sentAt.toIso8601String(),
+      ],
+    );
+    // Decode the serialized snapshot, so later mutations of nested caller
+    // maps cannot change the returned message relative to persistent data.
+    return Ok(
+      AppendResult(
+        StoredMessage(
+          conversationId: conversationId,
+          seq: seq,
+          messageId: id,
+          senderId: senderId,
+          clientMsgId: clientMsgId,
+          kind: kind,
+          body: Map<String, Object?>.unmodifiable(
+            jsonDecode(encoded) as Map<String, dynamic>,
           ),
-          duplicate: false,
+          sentAt: sentAt,
         ),
-      );
-    });
+        duplicate: false,
+      ),
+    );
   }
 
   Result<StoredMessage> _read(Map<String, Object?> row) {
