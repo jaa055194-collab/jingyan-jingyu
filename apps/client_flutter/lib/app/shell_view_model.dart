@@ -14,6 +14,14 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get locked;
   bool get online;
   String? get error;
+  // Defaults keep older read-only view-model doubles source-compatible. The
+  // runtime overrides all of these.
+  List<ShellOwnedAi> get ownAiAccounts => const <ShellOwnedAi>[];
+  String? get ownAiNotice => null;
+  Object? get ownAiSessionContext => null;
+  bool get ownAiLoaded => false;
+  Future<void> loadOwnAi() async {}
+  Future<void> createOwnAi(String displayName) async {}
   String? get selectedConversationId;
   List<ShellConversation> get conversations;
   List<ShellMessage> get messages;
@@ -63,6 +71,17 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> setThemeMode(ThemeMode value);
   Future<void> setFontScale(double value);
   void clearError();
+}
+
+class ShellOwnedAi {
+  const ShellOwnedAi({
+    required this.accountId,
+    required this.displayName,
+    required this.disabled,
+  });
+  final String accountId;
+  final String displayName;
+  final bool disabled;
 }
 
 class ShellConversation {

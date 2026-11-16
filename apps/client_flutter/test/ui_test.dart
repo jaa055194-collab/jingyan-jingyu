@@ -111,6 +111,19 @@ class TestShellModel extends ShellViewModel {
   }
 
   @override
+  List<ShellOwnedAi> get ownAiAccounts => const [];
+  @override
+  String? get ownAiNotice => null;
+  @override
+  Object? get ownAiSessionContext => connectedAccountId;
+  @override
+  bool get ownAiLoaded => false;
+  @override
+  Future<void> loadOwnAi() async {}
+  @override
+  Future<void> createOwnAi(String displayName) async {}
+
+  @override
   bool get canAddMembersToSelectedGroup => false;
   @override
   Future<void> createGroup(String name) async {}
