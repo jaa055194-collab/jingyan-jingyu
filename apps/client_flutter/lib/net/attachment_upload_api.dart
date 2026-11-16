@@ -93,7 +93,7 @@ class AttachmentUploadApi {
     // Encode before the first await so later caller mutation cannot change a
     // request or its bounded 401 authentication replay.
     final byteLength = bytes.length;
-    final encoded = base64Encode(bytes);
+    final encoded = base64Encode(List<int>.from(bytes));
     try {
       final body = await connection.request(
         'PUT',
