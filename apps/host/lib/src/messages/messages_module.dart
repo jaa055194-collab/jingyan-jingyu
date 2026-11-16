@@ -40,10 +40,26 @@ class _DenyAll implements MembershipCheck {
   Future<bool> canRead(String accountId, String conversationId) async => false;
 }
 
+/// Trusted composition hook for HTTP sends, called after existing prechecks.
+///
+/// A successful result must represent an already committed append before it is
+/// returned: indexing and accepted-message observers run afterwards. A failure
+/// is returned without falling back to the default store. Authorization and
+/// transaction ownership remain the caller's responsibility.
+typedef IncomingMessageAppend =
+    Future<Result<AppendResult>> Function({
+      required String conversationId,
+      required String senderId,
+      required String clientMsgId,
+      required MessageKind kind,
+      required Map<String, Object?> body,
+    });
+
 /// 消息模块。
 class MessagesModule extends HostModule {
   MessagesModule({
     MessageStore? store,
+    IncomingMessageAppend? appendIncoming,
     Authenticator? authenticate,
     ScheduledMessageService? scheduled,
     ReactionsService? reactions,
@@ -54,6 +70,7 @@ class MessagesModule extends HostModule {
     AttachmentService? attachments,
     this.clock = const SystemClock(),
   }) : _store = store ?? InMemoryMessageStore(),
+       _appendIncoming = appendIncoming,
        _authenticate = authenticate,
        _scheduled = scheduled,
        _reactions = reactions,
@@ -64,6 +81,7 @@ class MessagesModule extends HostModule {
        _attachments = attachments;
 
   final MessageStore _store;
+  final IncomingMessageAppend? _appendIncoming;
   final Authenticator? _authenticate;
   final ScheduledMessageService? _scheduled;
   final ReactionsService? _reactions;
@@ -726,7 +744,7 @@ class MessagesModule extends HostModule {
       }
     }
 
-    final result = await _store.append(
+    final result = await (_appendIncoming ?? _store.append)(
       conversationId: conversationId,
       senderId: principal.accountId,
       clientMsgId: clientMsgId,
