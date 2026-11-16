@@ -215,10 +215,16 @@ void main() {
         'messages',
         'attachments',
         'social',
+        'world',
         'models',
+        'voice',
         'social_level',
         'group_rules',
         'persona',
+        'creative_authorization',
+        'creative_reports',
+        'creative_radio',
+        'lifecycle',
       ]);
       final metadata = await host.pipeline.handle(
         HostRequest(

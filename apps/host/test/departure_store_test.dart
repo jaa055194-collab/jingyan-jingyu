@@ -9,7 +9,7 @@ void main() {
   departureStoreContract(
     'InMemoryDepartureStore',
     () => InMemoryDepartureStore(),
-    (store) {
+    (store) async {
       (store as InMemoryDepartureStore).seed('u1', {
         'conversations': 2,
         'messages': 10,

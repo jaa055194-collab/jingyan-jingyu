@@ -45,6 +45,7 @@ abstract final class Routes {
   /// Administrator disables an account; the sole administrator is protected.
   static const String adminAccountDisable =
       '$prefix/admin/accounts/{accountId}/disable';
+
   /// Bounded administrator audit envelopes; no entry metadata or bodies.
   static const String adminAudit = '$prefix/admin/audit';
 
@@ -191,4 +192,105 @@ abstract final class Routes {
 
   /// WebSocket 长连接（通知与实时事件）。
   static const String stream = '$prefix/stream';
+
+  // ---- M08 voice：音色档案、短期试听票据与 1v1 通话 ----
+
+  /// 某 AI 的音色档案（GET 读取）。
+  static const String aiVoiceProfile =
+      '$prefix/ai-profiles/{aiId}/voice-profile';
+
+  /// 某 AI 的短期试听/合成会话票据（POST 签发，5 分钟有效）。
+  static const String aiVoiceTicket = '$prefix/ai-profiles/{aiId}/voice-ticket';
+
+  /// 创建 1v1 通话（POST）。
+  static const String voiceCalls = '$prefix/voice/calls';
+
+  /// 单通通话的状态（GET）。
+  static const String voiceCall = '$prefix/voice/calls/{callId}';
+
+  /// 应答通话（POST）。
+  static const String voiceCallAnswer = '$prefix/voice/calls/{callId}/answer';
+
+  /// 结束通话（POST）。
+  static const String voiceCallEnd = '$prefix/voice/calls/{callId}/end';
+
+  /// 打断当前发言（POST）：取消 LLM、清 TTS 队列、停播并标记截断。
+  static const String voiceCallInterrupt =
+      '$prefix/voice/calls/{callId}/interrupt';
+
+  // ===== M10 world：街区/房间/形象（仅追加） =====
+
+  /// 房间布局：GET 读取 / PUT 保存（带 expectedVersion 的 CAS）。
+  static const String worldSpaceLayout =
+      '$prefix/world/spaces/{spaceId}/layout';
+
+  /// 某空间当前 presence 位置快照（2–5Hz 下发由客户端轮询/推送）。
+  static const String worldSpacePresence =
+      '$prefix/world/spaces/{spaceId}/presence';
+
+  /// 发起拜访（visitorId 取自认证主体；body 含 hostOwnerId/location/邀请 token）。
+  static const String worldVisits = '$prefix/world/visits';
+
+  /// 结束拜访。
+  static const String worldVisitEnd = '$prefix/world/visits/{visitId}/end';
+
+  /// 寻路超时/卡住回自家。
+  static const String worldVisitTimeout =
+      '$prefix/world/visits/{visitId}/timeout';
+
+  /// 主人给访客发室内邀请，返回一次性 token。
+  static const String worldSpaceInvitations =
+      '$prefix/world/spaces/{spaceId}/invitations';
+
+  /// 形象：GET 列表 / POST 登记。
+  static const String worldAvatars = '$prefix/world/avatars';
+
+  /// 启用（切换）某形象。
+  static const String worldAvatarEnable =
+      '$prefix/world/avatars/{avatarId}/enable';
+
+  /// 当前启用形象的 model_id + profile_rev 广播。
+  static const String worldAvatarActive = '$prefix/world/avatars/active';
+
+  // ---------------------------------------------------------------------------
+  // M12 lifecycle（本切片追加；只新增常量，不改既有路径）
+  // ---------------------------------------------------------------------------
+
+  /// 当前账号的配额用量与磁盘状态。
+  static const String lifecycleQuota = '$prefix/lifecycle/quota';
+
+  /// 上传预检：配额/磁盘评估并占用一个并发上传名额（返回 permitId）。
+  static const String lifecycleUploadPreview =
+      '$prefix/lifecycle/uploads/preview';
+
+  /// 上传记用量：释放预检占用的名额并累加已用字节。
+  static const String lifecycleUploadCommit =
+      '$prefix/lifecycle/uploads/commit';
+
+  /// 导出当前账号数据（JSON 导出内容；文件流接口受限时的替代）。
+  static const String lifecycleExport = '$prefix/lifecycle/export';
+
+  /// 导入到当前账号（仅人格 / 人格 + 聊天记录）。
+  static const String lifecycleImport = '$prefix/lifecycle/import';
+
+  /// 离开前对象清点（当前账号）。
+  static const String lifecycleDepartureSurvey =
+      '$prefix/lifecycle/departure/survey';
+
+  /// 离开并生成删除回执（当前账号）。
+  static const String lifecycleDepartureReceipt = '$prefix/lifecycle/departure';
+
+  /// Owner-only consent for report scopes and radio generation.
+  static const String creativeOwnerConsent =
+      '$prefix/creative/authorizations/{aiId}';
+
+  /// CR-03 关系周报/年报（本人只读，按 owner 过滤）。
+  static const String creativeReports = '$prefix/creative/reports';
+  static const String creativeReport =
+      '$prefix/creative/reports/{aiId}/{kind}/{periodKey}';
+
+  /// CR-07 深夜电台（本人只读，按 owner 过滤）。
+  static const String creativeRadio = '$prefix/creative/radio';
+  static const String creativeRadioEpisode =
+      '$prefix/creative/radio/{aiId}/{dateKey}';
 }

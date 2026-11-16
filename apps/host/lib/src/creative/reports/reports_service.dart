@@ -26,6 +26,7 @@ class ReportsService {
     ReportScheduleConfig schedule = const ReportScheduleConfig(),
     CreativeBudgetGate budget = const AlwaysGrantBudgetGate(),
     ReportLetterWriter? letterWriter,
+    this.generationEnabled = true,
   }) : _store = store,
        _activitySource = activitySource,
        _clock = clock,
@@ -44,8 +45,12 @@ class ReportsService {
   final CreativeBudgetGate _budget;
   final ReportLetterWriter? _letterWriter;
 
+  /// False in default assembly until production timezone/budget/consent gates exist.
+  final bool generationEnabled;
+
   /// 处理一次调度 tick（后台定时器或测试驱动）。返回本轮发生状态变化的记录。
   Future<List<ReportRecord>> tick() async {
+    if (!generationEnabled) return const [];
     final targets = await _targetProvider.targets();
     final nowInstant = _clock.now().toUtc();
     final nowWall = _timeZone.toLocalWall(nowInstant);
@@ -191,6 +196,9 @@ class ReportsService {
     required int year,
     required Set<CreativeScope> authorizedScopes,
   }) async {
+    if (!generationEnabled) {
+      return err(FailureCode.modelUnavailable, 'report generation unavailable');
+    }
     final target = ReportTarget(
       ownerAccountId: ownerAccountId,
       aiId: aiId,
@@ -321,19 +329,19 @@ class ReportsService {
       }
     }
 
-    final topics = topicCounts.entries
-        .map((entry) => TopicCount(entry.key, entry.value))
-        .toList()
-      ..sort((a, b) {
-        final byCount = b.count.compareTo(a.count);
-        return byCount != 0 ? byCount : a.label.compareTo(b.label);
-      });
+    final topics =
+        topicCounts.entries
+            .map((entry) => TopicCount(entry.key, entry.value))
+            .toList()
+          ..sort((a, b) {
+            final byCount = b.count.compareTo(a.count);
+            return byCount != 0 ? byCount : a.label.compareTo(b.label);
+          });
     final commonTopics = topics.take(5).toList();
 
     final moodDays = moodSum.keys.toList()..sort();
     final moodCurve = <String, double>{
-      for (final day in moodDays)
-        day: moodSum[day]! / (moodSeen[day] ?? 1),
+      for (final day in moodDays) day: moodSum[day]! / (moodSeen[day] ?? 1),
     };
 
     final busiestDay = _busiestDay(dayActivity);

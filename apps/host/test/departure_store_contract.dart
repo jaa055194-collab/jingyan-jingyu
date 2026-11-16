@@ -7,13 +7,13 @@ import 'package:test/test.dart';
 void departureStoreContract(
   String label,
   DepartureStore Function() create,
-  void Function(DepartureStore store) seed,
+  Future<void> Function(DepartureStore store) seed,
 ) {
   group('DepartureStore 契约 [$label]', () {
     late DepartureStore store;
-    setUp(() {
+    setUp(() async {
       store = create();
-      seed(store);
+      await seed(store);
     });
 
     test('survey 返回对象计数且不清空数据', () async {
