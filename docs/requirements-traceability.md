@@ -13,7 +13,7 @@
 | REQ-007 | FR-22 / M04 | 群成员服务器权限 | 已授权 | 非成员不可列出/读取/发送；仅owner加成员；有效账号检查 | social/conversation_service.dart、social_routes.dart、Migration300 | conversation_membership_test 6项、social_routes_test 7项 | 局部通过；好友/私聊/拉黑/群角色/退出未完成 |
 | REQ-008 | decisions C-1 | 房主可选择仅入群后历史 | 已授权 | 同Tx取head+1，服务器忽略越界afterSeq，分页不泄露旧内容 | HistoryMembershipCheck、MessagesModule._sync | message_membership_boundary_test 2项；默认host端到端补充验证 | 局部通过；不把客户端过滤当权限 |
 | REQ-009 | M01/M03/M04工程约束 | 统一迁移装配 | 已授权 | 默认单库顺序1/100/200/300、旧M01默认不变 | StorageModule optional migrations、defaultModules | storage_extra_migrations_test 1项，先缺参数RED后GREEN | 局部通过，最终全仓重验 |
-| REQ-010 | FR-57 / NFR-06 / M05 | owner隔离provider配置与密钥不回读 | 已授权 | A/B CRUD隔离、仅掩码响应、安全审计、加密AAD绑定 | models/provider_registry.dart、models_module.dart、Migration500 | provider8+HTTP6测试，独立review无新严重发现 | 局部通过，已挂配置路由；无发现/连接测试 |
+| REQ-010 | FR-57 / NFR-06 / M05 | owner隔离provider配置与密钥不回读 | 已授权 | A/B CRUD隔离、仅掩码响应、安全审计、加密AAD绑定 | models/provider_registry.dart、models_module.dart、Migration500 | provider8+HTTP6测试，独立review无新严重发现；已保存provider目录发现另见REQ-053 | 局部通过，已挂配置路由；保存前连接测试未完成 |
 | REQ-011 | M05/M06身份接口 | AiId与AccountId显式映射 | 工程前置 | 有效AI+当前operator才可注册/解析，跨owner404，独立随机档案ID | ai_identity.dart、Migration501 | 11项identity+6项注册HTTP测试 | 局部通过；尚无人格业务/新AI创建HTTP |
 | REQ-012 | NFR-05 / M05 | DNS校验与真实连接一致、TLS原域验证 | 已授权 | pinned IP、拒私网答案、HTTPS不明文、证书/hostname拒绝、3xx不跟 | security/guarded_http.dart + process_http.dart | guarded13/process6真实本地HTTP/TLS测试；独立review复验 | 单独guarded仅原型，生产经子进程回收；不宣称所有保留地址全覆盖 |
 | REQ-013 | FR-57 / M05 | 单次OpenAI-compatible规范响应 | 已授权 | 保留base path、严格usage/roles、安全错误，无retry/fallback | openai_chat_adapter.dart | 10项测试含int溢出与错误脱敏 | 局部通过；接内部budget/binding/runtime，无真实公网或自动AI回复链 |
@@ -65,6 +65,7 @@
 | REQ-052 | protocol严格Err契约 / FR14可靠性支撑 | 非finite整数输入安全拒绝 | 已授权局部修复 | _asInt转换前要求double.isFinite；合法JSON指数溢出不抛toInt异常，有限整数double兼容；不改finite范围/sequence/schema | codec._asInt | 1e999合法JSON实际UnsupportedError RED；13新增+原9=protocol22通过、analysis清洁，raw/map五入口正负溢出/finite/fraction/NaN覆盖 | 无实际生产decode调用点，不宣称host远程漏洞；无UI/协议版本变化 |
 
 | REQ-054 | v4.2 FR43 / M06 social_level | operator显式保存每个AI的L0–L4配置 | 已授权配置子集 | 缺省unconfigured无写；active canonical owner/AI/profile同Tx；严格等级与owner隔离，转移不继承、转回保留旧owner设置；metadata审计 | SocialLevelModule、SocialLevelService/Store、SQLite、Migration603、Routes.aiSocialLevel、默认宿主 | 缺路由404先RED；22契约/SQLite/HTTP/装配通过与analysisclean；时间overflowRED→canonicalUTC修复；升级无backfill/保留persona-life、CHECK、同owner多profile、audit身份时间覆盖 | 配置前置，不含L0取消/实际AI回复/好友同意/L4开关或完整FR43/AC04；audit postcommit非原子，身份token与数据Tx边界分开 |
+| REQ-053 | v4.2 FR-57 / M05 provider模型发现 | 当前owner查询已保存启用provider的模型目录 | 已授权M05子集 | 真实bearer/账号设备复核，owner隔离无admin绕过；保留base path且受保护GET；响应仅去重id，拒畸形/越界/密钥回显，无付费生成/绑定/用量写入 | ProviderModelDiscovery、ModelsModule、Routes.modelProviderModels、默认host受限process request注入 | 缺路由404及缺DI先RED；23项SQLite/HTTP/装配定向检查和相关analysis通过；独立静态review无Critical/Important，C1控制符反馈已RED→GREEN | 后端已保存OpenAI兼容目录子集；无真实外部provider互通、保存前连接测试、客户端选择UI或完整FR57验收；现有UrlGuard地址范围与可信worker部署边界不扩大保证 |
 
 ## 验证口径
 2026-11-13在当前增量上，31项新持久消息/群权限/HTTP/迁移测试主代理及独立审查均通过；全仓 `tool/check.ps1` 输出 `ALL CHECKS PASSED`：core 20、protocol 9、host_kit 10、client_kit 18、host 144，所有分析无问题。其后仅新增默认host的joined群端到端回归；`host_test.dart` 19项全部通过，最终host分析无问题。该回归验证真实登录后创建群、管理员非成员404、owner添加成员、服务器只返回入群后消息、列表可见。总计当前覆盖的各包测试为202项（全仓201项 + 后加的host回归1项），不是202条产品需求验收。旧工作树结果不作为未来提交通过证据。

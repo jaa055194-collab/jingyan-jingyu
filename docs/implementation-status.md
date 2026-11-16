@@ -61,7 +61,9 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 
 独立review检出的层降级inspect→begin竞态已由同Tx策略重检修复；模型空白/legacy脏值在pending前拒绝；binding配置bearer必须匹配principal账户与device。定向证据与最终全仓结果记录于需求追踪和PR。
 
-认证GET/POST `/api/v1/accounts/me/ai`现可列出/创建当前人类operator自己的AI账户，POST仅接受displayName，GET只返回ID/名称/disabled并实时查询当前归属；管理员也不能替别人创建。创建不产生AI登录凭据、profile、persona、好友或私聊；随后仍须显式注册profile/配置模型。这不是完整AI创建向导或自动AI回复链。尚无有序fallback、流式、模型发现/连接测试、生图和自动对账，不宣称整个M05/AC10已完成。
+认证GET/POST `/api/v1/accounts/me/ai`现可列出/创建当前人类operator自己的AI账户，POST仅接受displayName，GET只返回ID/名称/disabled并实时查询当前归属；管理员也不能替别人创建。创建不产生AI登录凭据、profile、persona、好友或私聊；随后仍须显式注册profile/配置模型。这不是完整AI创建向导或自动AI回复链。尚无有序fallback、流式、保存前连接测试、生图和自动对账，不宣称整个M05/AC10已完成。
+
+当前认证owner可用 `GET /api/v1/model-providers/{providerId}/models` 查询自己已保存、启用的OpenAI兼容provider模型目录。每次复核bearer账号/设备；未知或他人provider统一404，无admin绕过。仅发一次受保护的GET `/models`，保留base path；返回去重后的 `{models:[{id}]}`，不转发上游元数据或错误正文，不生成付费聊天、不写绑定/用量。生产只在既有worker配置完整时注入受限子进程传输；未配置时安全返回模型不可用，不回落直连。目录≤4MiB、≤1000条，ID≤256代码单元且拒空白/C0-C1控制字符/完整密钥回显。23项SQLite/HTTP/默认装配定向检查与相关分析通过；独立静态review未发现阻塞问题，C1校验反馈已回归修复。真实外部provider互通、保存前连接测试、客户端模型选择UI与完整FR57仍未验证/完成。
 
 ## M06 内部记忆仓储（未生产装配）
 

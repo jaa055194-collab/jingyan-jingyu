@@ -40,6 +40,7 @@ import 'src/models/budget_timezone_migration.dart';
 import 'src/models/model_runtime.dart';
 import 'src/models/models_module.dart';
 import 'src/security/url_guard.dart';
+import 'src/security/process_http.dart';
 import 'src/messages/sqlite_message_store.dart';
 import 'src/social/conversation_service.dart';
 import 'src/social/social_migrations.dart';
@@ -284,6 +285,12 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
       }
     },
   );
+  final providerDiscoveryRequest = executable == null
+      ? null
+      : ProcessHttpTransport(
+          executable: executable,
+          workerPath: workerPath!,
+        ).request;
   return [
     SystemModule(
       config: config,
@@ -320,6 +327,7 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
     ),
     ModelsModule(
       runtime: runtime,
+      providerDiscoveryRequest: providerDiscoveryRequest,
       db: storage.database,
       cipher: storage.cipher,
       urlGuard: urlGuard,

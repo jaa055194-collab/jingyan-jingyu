@@ -4,6 +4,7 @@ import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/jingyu_host.dart';
 import 'package:jingyu_host/src/storage/database.dart';
 import 'package:jingyu_host/src/models/model_runtime.dart';
+import 'package:jingyu_host/src/models/models_module.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 import 'package:test/test.dart';
@@ -25,6 +26,14 @@ void main() {
         ),
         throwsArgumentError,
       );
+      final configured = defaultModules(envConfig, const SystemClock())
+          .whereType<ModelsModule>()
+          .single;
+      expect(configured.providerDiscoveryRequest, isNotNull);
+      final offline = defaultModules(const HostConfig(), const SystemClock())
+          .whereType<ModelsModule>()
+          .single;
+      expect(offline.providerDiscoveryRequest, isNull);
       final dir = await Directory.systemTemp.createTemp(
         'jingyu-model-runtime-assembly-',
       );
@@ -100,6 +109,15 @@ void main() {
         HostRequest(method: 'GET', path: Routes.modelProviders),
       );
       expect(result.status, 401);
+      expect(
+        (await host.pipeline.handle(
+          HostRequest(
+            method: 'GET',
+            path: Routes.modelProviderModels.replaceFirst('{providerId}', 'fixture'),
+          ),
+        )).status,
+        401,
+      );
       expect(
         (await host.pipeline.handle(
           HostRequest(
