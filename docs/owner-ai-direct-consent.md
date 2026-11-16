@@ -9,10 +9,7 @@ revoke the direct conversation with their own active AI. Admin is not delegation
 `aiProfileId` and `aiAccountId` are distinct canonical identities. Only the fixed
 human and AI account are pair members. No friendship/request is created or changed.
 
-`scope=ownerTextOnly` declares a consent boundary for future text-only dispatch.
-**This slice does not invoke a model, start a worker, enable a provider, or produce
-an AI reply.** Opening creates a canonical direct pair plus explicit consent; it
-is not a message/model request. Existing message APIs retain their behavior.
+`scope=ownerTextOnly` explicitly permits reactive replies to newly accepted owner text in this exact private pair. Opening only creates the pair and consent: it does not send content, start a worker or enable a provider. The integrated observer uses rules-first routing: exact curated simple input gets local S1; complex/unsure input may use the owner's explicitly configured model only when the trusted model worker, persona, binding and budget are available. Simple unsupported input stays silent. No group, history, memory, third-party source or attachment is assembled into a model prompt. A plain owner text can of course contain pasted information; the host does not claim to identify its authorship.
 
 ## HTTP contract
 
@@ -65,12 +62,9 @@ grant. The tag deliberately has no profile FK/cascade so deleting a profile
 cannot erase the tag and fall back to legacy friendship. Original human history
 remains readable. Runtime resolution checks the canonical mapping on each use.
 
-This slice changes social membership checks, not the existing messages append
-transaction. A revoke returning before a **new** send request prevents that send;
-an already-in-flight request may have passed canPost before revoke and finish its
-append (C-5 permits up to one minute). No strict canPost/append linearization is
-claimed here. Future checked append/final reply must use the same-Tx revision
-fence; messages and dispatch are not expanded by this slice.
+The default host uses a tagged-only checked append: current grant, canonical pair, collision exclusion, message insertion and accepted-at consent-revision stamp share one SQLite transaction. If revoke commits first, a subsequent tagged append is denied. Legacy untagged human/group posting remains governed by the existing boundary. Only fresh exact owner text receives a source stamp; retries cannot retroactively approve old input or replace its revision.
+
+A reply attempt claims `(source message, AI profile)` permanently before work; grant revision is a fence, not a retry key. The observer reloads unedited/unrecalled canonical text, rejects extra metadata and checks the accepted-at stamp. Model calls run outside transactions; final publication rechecks source, identity, current binding and the exact grant revision, then appends the AI reply and completes status in one transaction. Revoke/transfer/edit/recall or re-open during generation discards the stale result. An already transmitted prompt cannot be unsent; the final check prevents publication, not historical network transmission. Runtime settles actual usage even for discarded or oversized output.
 
 ## Internal same-transaction port
 
@@ -78,6 +72,12 @@ fence; messages and dispatch are not expanded by this slice.
 required String conversationId}) -> Future<OwnerAiDirectGrant?>` returns an
 immutable ownerAccountId / aiProfileId / aiAccountId / conversationId / revision
 snapshot only for the canonical active, current-owner, enabled, unblocked pair.
-It is **not** a future permission token. Future dispatch must resolve again in its
-final append transaction and fence the captured revision. A revision is a final
-fence, not a replay/idempotency key. No dispatcher is implemented here.
+It is **not** a future permission token. The dispatcher resolves it again in its final append transaction and fences the captured revision. A revision is a final fence, not a replay/idempotency key.
+
+## Status and failure semantics
+
+`GET /api/v1/conversations/{conversationId}/messages/{messageId}/owner-reply` returns only owner-visible metadata: `notAttempted`, `pending`, `completed`, `failed` or `discarded`, plus safe IDs/failure enum where present. It never returns source text or provider prose. Original active owners retain status history after consent/profile changes. `notAttempted` means no ledger row, not eligibility or a promise of generation.
+
+Delivery is best-effort, at-most-one attempt per source/profile, not a durable retry queue. Provider errors leave safe failed status and preserve the runtime's unknown-usage reconciliation; crashes can strand pending attempts. No automatic retry or completion cache exists. The client may sync the accepted input even when no reply is generated. Input/output byte caps are engineering resource limits, not exact tokenizer/model-context or strict cost guarantees. This bounded path does not replace ContextualChat or claim full FR-46/48 acceptance.
+
+The new attempt and source-stamp ledgers contain metadata only. Existing enabled trusted creative generators remain unrelated; default creative generation stays disabled.

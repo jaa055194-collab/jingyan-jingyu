@@ -109,6 +109,10 @@ abstract final class Routes {
   static const String messages =
       '$prefix/conversations/{conversationId}/messages';
 
+  /// Original human owner's reply-attempt metadata for an exact source message.
+  static const String ownerAiReplyStatus =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/owner-reply';
+
   /// Per-device message acknowledgement for one conversation.
   static const String messageAck = '$prefix/conversations/{conversationId}/ack';
 
