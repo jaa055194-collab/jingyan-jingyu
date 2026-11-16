@@ -45,6 +45,10 @@ dart test test/live_model_chat_test.dart -r expanded
 测试只断言：调用返回 `Ok`、回复非空、`total = input + output`。它只打印归一化后的
 回复与 token 用量，不打印密钥、请求头或上游原始报文。
 
+说明：该测试对真实网络发起一次调用。宿主受控传输会把任何瞬时 DNS/连接/TLS 失败
+归一化为 `modelUnavailable`，且要求 provider 返回整数 `usage` 并满足 `total = prompt + completion`；
+因此个别 OpenAI 兼容实现或瞬时网络抖动可能判为不可用，重跑一次即可区分。
+
 ## 安全边界
 
 - 密钥仅经环境变量注入，测试代码只在内存中使用，不落盘明文、不回显。
