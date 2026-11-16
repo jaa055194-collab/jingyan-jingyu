@@ -214,6 +214,9 @@ abstract interface class PresenceService {
   /// 单个居民当前快照。
   Future<Result<PresenceRecord>> record(String residentId);
 
+  /// 按 visitId 取拜访会话（路由层据此做参与方鉴权）。
+  Future<Result<VisitSession>> getVisit(String visitId);
+
   /// 主人给某访客发室内邀请，返回邀请 token。
   Future<Result<String>> grantInvitation({
     required String hostOwnerId,
@@ -351,6 +354,13 @@ class InMemoryPresenceService implements PresenceService {
     final record = _records[residentId];
     if (record == null) return err(FailureCode.notFound, 'resident not found');
     return Ok(record);
+  }
+
+  @override
+  Future<Result<VisitSession>> getVisit(String visitId) async {
+    final visit = _visits[visitId];
+    if (visit == null) return err(FailureCode.notFound, 'visit not found');
+    return Ok(visit);
   }
 
   @override

@@ -14,7 +14,7 @@
 | REQ-M12-04 | A-12、AC-29 | 导入支持"仅人格"/"人格+聊天记录"；先校验 SHA256SUMS；冲突不覆盖、生成新 id 并报告 | 已批准基线 | 空宿主导入数量一致；仅人格不导聊天；篡改被拒；冲突新 id | `import.dart` | `export_import_test.dart` | 验证通过 |
 | REQ-M12-05 | FR-65、C-4、AC-15、NFR-11 | 离开生成删除回执（对象计数+备份轮转到期日），诚实口径"轮转后清除" | 已批准基线 | 回执含计数与 now+30d；含"轮转后清除"不含"瞬间" | `departure.dart`、`sqlite_departure_store.dart` | `departure_test.dart`、`departure_store_test.dart`、`departure_sqlite_store_test.dart` | 验证通过（内存+SQLite）；真实删除与备份轮转待适配器 |
 | REQ-M12-06 | FR-64、AC-15 | 每日快照 tar+age 加密→第二块盘→可选远端；30 天轮转；恢复演练 `PRAGMA integrity_check` | 已批准基线 | 密文、30 天轮转、integrity_check=ok 留存 | 未实现（本切片外） | 未执行 | 待实现 |
-| REQ-M12-07 | FR-09、分层规则 | 模块可装配、路由可挂载、migration 可登记 | 已批准基线 | 登记 5 服务、boot/shutdown 正常、migration 在 1200–1299 | `lifecycle_module.dart`、`lifecycle_migrations.dart` | `lifecycle_module_test.dart`、`lifecycle_migrations_test.dart` | 已实现未验证（路由/整机装配未接，见 §3） |
+| REQ-M12-07 | FR-09、分层规则 | 模块可装配、路由可挂载、migration 可登记 | 已批准基线 | 登记 5 服务、boot/shutdown 正常、migration 在 1200–1299 | `lifecycle_module.dart`、`lifecycle_migrations.dart` | `lifecycle_module_test.dart`、`lifecycle_migrations_test.dart` | 验证通过（路由已挂载，见 §5） |
 | REQ-M12-08 | FR-66、持久化 | Quota/Cleanup/Departure 三存储提供 SQLite 实现，跨重启保留，复用同一契约测试 | 已批准基线 | 内存与 SQLite 两实现通过同一契约；重启后数据仍在 | `sqlite_quota_store.dart`、`sqlite_cleanup_store.dart`、`sqlite_departure_store.dart`；迁移 1200–1206 | `*_sqlite_store_test.dart`（含跨重启用例） | 验证通过 |
 
 ## 2. 证据（自动化）
@@ -69,4 +69,27 @@ router.post(Routes.accountDeparture, _departureHandler);     // 生成删除回�
 - `LifecycleModule` 通过构造注入接受 `QuotaService/CleanupService/DepartureService`，可在装配时用 SQLite 版 store 组合（见 `lifecycle_module_test.dart` 的 "注入 SQLite 版 store" 用例）；未修改共享 `jingyu_host.dart`/`routes.dart`。
 - 为支持真实持久化，`CleanupStore.remindedAt` 由同步改为 `Future<DateTime?>`（内存实现与契约测试同步更新）；`departureStoreContract` 的 seed 回调改为 async 以适配数据库播种。改动均在本模块内，对外行为不变。
 - 导出/导入的 `ExportSource`/`ImportSink` 仍为内存参考实现：真实实现需要读取其他模块（消息/记忆/附件）数据，而分层规则禁止模块互相 import 实现文件，应由装配层注入适配器。这不在本切片内。
-- 未完成：备份 tar+age/远端/恢复演练（REQ-M12-06）；真实磁盘 blob 物理删除（store 已把 `blob_present` 置 0，物理删由媒体存储适配器执行）。
+- 未完成：备份 tar+age/远端/恢复演练（REQ-M12-06，见 §6 评估）；真实磁盘 blob 物理删除（store 已把 `blob_present` 置 0，物理删由媒体存储适配器执行）。
+
+## 5. HTTP 路由（task-18）
+
+- `Routes` 只**追加** lifecycle 常量（`packages/jingyu_protocol/lib/src/routes.dart`）：`lifecycleQuota`、`lifecycleUploadPreview`、`lifecycleUploadCommit`、`lifecycleExport`、`lifecycleImport`、`lifecycleDepartureSurvey`、`lifecycleDepartureReceipt`。未改动既有路径。
+- `LifecycleModule.mount` 挂载以上路由，全部默认 `Access.authenticated`；处理函数一律以 `request.principal!.accountId` 为 owner，绝不使用请求体里的账号 → owner 隔离；未知/跨账号资源统一 404。
+- 上传预检复用既有 `QuotaService` 的 `UploadGate`：预检占用并发名额并返回 `permitId`；记用量释放名额并累加已用字节；第 4 个并发预检 429；未知/跨账号 permit 404。
+- 导出返回 JSON 内容（`files`/`manifest`/`sha256sums`）；受文件流接口限制暂不提供下载流。导入落到当前账号（`ImportSink` 由装配注入）。离开提供 survey（对象计数）与 receipt（校验处置 + 轮转到期日）。
+- 测试：`apps/host/test/lifecycle_routes_test.dart` 覆盖 认证(401)、owner 隔离、404、429、正常 200。证据：**17 tests passed**。
+
+## 6. 备份缺口评估（FR-64 / AC-15，REQ-M12-06）——仅评估，未实现
+
+前置依赖（均**缺失**，不伪造完成）：
+
+1. **tar 打包**：Dart 无内置 tar，需流式打包库或调用系统 `tar`。
+2. **age 加密**：Dart 无成熟 age 实现，需调用 `age` CLI 或引入库；收件人公钥、私钥离线保管，私钥绝不入库/入导出。
+3. **第二块物理盘**：配置路径 + 容量/健康检查。
+4. **可选远端**：对象存储客户端，所有出站过 `UrlGuard.check`（NFR-05）每跳重定向复验；远端只见密文。
+5. **上传后 sha256 校验**（`crypto` 已有 sha256，可直接用）。
+6. **30 天轮转**：本地与远端各保留 30 天，轮转任务写审计（不记正文）。
+7. **恢复演练**：下载 → 解密 → 打开 SQLite 执行 `PRAGMA integrity_check`（`Database.integrityCheck()` 已具备）→ 结果写审计。
+8. **密钥管理**：age 私钥离线；备份窗口的诚实口径"轮转后清除"。
+
+结论：以上备份/恢复链路整体未实现（REQ-M12-06 待实现）；导出侧已保证不含 BYOK 明文（`export.dart`）。
