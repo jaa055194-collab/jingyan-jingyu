@@ -220,6 +220,7 @@ void main() {
         'voice',
         'social_level',
         'group_rules',
+        'owner_ai_reply_status',
         'persona',
         'creative_authorization',
         'creative_reports',

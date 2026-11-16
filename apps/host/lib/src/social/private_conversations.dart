@@ -6,6 +6,7 @@ import 'package:jingyu_core/jingyu_core.dart';
 import '../messages/messages_module.dart';
 import '../storage/database.dart';
 import 'friendship_service.dart';
+import 'owner_ai_direct_consent.dart';
 
 class PrivateConversation {
   const PrivateConversation({
@@ -100,6 +101,19 @@ class PrivateConversations implements HistoryMembershipCheck {
       final pair = actorId.compareTo(targetId) < 0
           ? [actorId, targetId]
           : [targetId, actorId];
+      final existing = await tx.query(
+        'SELECT id FROM direct_conversations WHERE account_low=? AND account_high=?',
+        pair,
+      );
+      if (existing.isNotEmpty &&
+          await OwnerAiDirectConsent.tagInTx(
+                tx,
+                existing.single['id'] as String,
+              ) !=
+              null) {
+        // Tagged owner-AI consent can only be changed via its explicit CAS API.
+        return _denied();
+      }
       // Eligibility, uniqueness and insertion share the supplied Tx. The unique
       // pair also arbitrates competing opens through independent connections.
       await tx.execute(
@@ -128,7 +142,15 @@ VALUES (?,?,?,?) ON CONFLICT(account_low,account_high) DO NOTHING''',
 ORDER BY created_at,id''',
         [accountId, accountId],
       );
-      return Ok(rows.map(PrivateConversation._row).toList(growable: false));
+      final visible = <PrivateConversation>[];
+      for (final row in rows) {
+        final tag = await OwnerAiDirectConsent.tagInTx(tx, row['id'] as String);
+        if (tag == null ||
+            await OwnerAiDirectConsent.taggedReadInTx(tx, tag, accountId)) {
+          visible.add(PrivateConversation._row(row));
+        }
+      }
+      return Ok(visible);
     });
   }
 
@@ -136,11 +158,20 @@ ORDER BY created_at,id''',
     Tx tx,
     String accountId,
     String conversationId,
-  ) => tx.query(
-    '''SELECT * FROM direct_conversations WHERE id=?
+  ) async {
+    final rows = await tx.query(
+      '''SELECT * FROM direct_conversations WHERE id=?
 AND (account_low=? OR account_high=?)''',
-    [conversationId, accountId, accountId],
-  );
+      [conversationId, accountId, accountId],
+    );
+    if (rows.isEmpty) return rows;
+    final tag = await OwnerAiDirectConsent.tagInTx(tx, conversationId);
+    if (tag != null &&
+        !await OwnerAiDirectConsent.taggedReadInTx(tx, tag, accountId)) {
+      return [];
+    }
+    return rows;
+  }
 
   Future<Result<PrivateConversation>> get({
     required String accountId,
@@ -174,6 +205,15 @@ AND (account_low=? OR account_high=?)''',
     return _db.transaction((tx) async {
       final rows = await _member(tx, accountId, conversationId);
       if (rows.isEmpty) return false;
+      final tag = await OwnerAiDirectConsent.tagInTx(tx, conversationId);
+      if (tag != null) {
+        return await OwnerAiDirectConsent.resolveInTx(
+              tx,
+              ownerAccountId: tag['owner_account_id'] as String,
+              conversationId: conversationId,
+            ) !=
+            null;
+      }
       final a = rows.single['account_low'] as String;
       final b = rows.single['account_high'] as String;
       return await FriendshipService.activeKindInTx(tx, a) != null &&
