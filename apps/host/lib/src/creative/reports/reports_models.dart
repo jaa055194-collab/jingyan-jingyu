@@ -229,6 +229,48 @@ class RelationshipReport {
     'busiestDay': busiestDay,
     'sourceScopes': [for (final scope in sourceScopes) scope.name],
   };
+
+  /// 持久化序列化（含 owner/ai，供 SQLite 存储还原完整对象）。
+  Map<String, Object?> toJson() => {
+    'ownerAccountId': ownerAccountId,
+    'aiId': aiId,
+    ...toPayload(),
+  };
+
+  /// 从持久化 JSON 还原。
+  factory RelationshipReport.fromJson(Map<String, Object?> json) {
+    final topics = json['commonTopics'] as List? ?? const [];
+    final keywords = json['keywords'] as List? ?? const [];
+    final milestones = json['milestones'] as List? ?? const [];
+    final scopes = json['sourceScopes'] as List? ?? const [];
+    final moodRaw = json['moodCurve'] as Map? ?? const {};
+    return RelationshipReport(
+      ownerAccountId: json['ownerAccountId'] as String,
+      aiId: json['aiId'] as String,
+      kind: ReportKind.values.byName(json['kind'] as String),
+      periodKey: json['periodKey'] as String,
+      windowStartDay: json['windowStartDay'] as String,
+      windowEndDay: json['windowEndDay'] as String,
+      generatedAt: DateTime.parse(json['generatedAt'] as String),
+      commonTopics: [
+        for (final topic in topics)
+          TopicCount((topic as Map)['label'] as String, topic['count'] as int),
+      ],
+      completedAgreements: json['completedAgreements'] as int,
+      checkinDays: json['checkinDays'] as int,
+      moodCurve: {
+        for (final entry in moodRaw.entries)
+          entry.key as String: (entry.value as num).toDouble(),
+      },
+      letter: json['letter'] as String,
+      keywords: [for (final keyword in keywords) keyword as String],
+      milestones: [for (final milestone in milestones) milestone as String],
+      busiestDay: json['busiestDay'] as String?,
+      sourceScopes: {
+        for (final scope in scopes) CreativeScope.values.byName(scope as String),
+      },
+    );
+  }
 }
 
 /// 一个待调度的报告对象（某用户 + 某 AI）及其授权范围。

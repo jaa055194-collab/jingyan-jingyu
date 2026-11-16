@@ -165,6 +165,63 @@ class VoiceSampleMeta {
   final bool multiVoice;
 }
 
+/// 校验上传样本是否满足 FR-31 质检门槛；返回 null 表示通过。
+///
+/// 内存与 SQLite 实现共用同一份校验，避免两套规则漂移。
+Failure? validateVoiceSample(VoiceSampleMeta sample, String consentRef) {
+  if (consentRef.trim().isEmpty) {
+    return const Failure(FailureCode.invalidArgument, '必须提供 consent_ref');
+  }
+  final seconds = sample.duration.inMilliseconds / 1000.0;
+  if (seconds < 10 || seconds > 30) {
+    return const Failure(FailureCode.invalidArgument, '样本时长必须在 10–30s');
+  }
+  if (sample.channels != 1) {
+    return const Failure(FailureCode.invalidArgument, '样本必须单声道');
+  }
+  if (sample.sampleRateHz < 16000) {
+    return const Failure(FailureCode.invalidArgument, '采样率必须 ≥16kHz');
+  }
+  if (sample.hasBgm || sample.hasReverb) {
+    return const Failure(FailureCode.invalidArgument, '样本不能含 BGM 或混响');
+  }
+  if (sample.multiVoice) {
+    return const Failure(FailureCode.invalidArgument, '样本不能含多人声');
+  }
+  if (sample.silenceRatio > 0.5) {
+    return const Failure(FailureCode.invalidArgument, '静音比例过高');
+  }
+  if (sample.clippingRatio > 0.01) {
+    return const Failure(FailureCode.invalidArgument, '削波比例过高');
+  }
+  if (sample.snrDb < 15) {
+    return const Failure(FailureCode.invalidArgument, '信噪比过低');
+  }
+  return null;
+}
+
+/// 校验创建档案的必填字段；返回 null 表示通过。
+Failure? validateVoiceCreation({
+  required String provider,
+  required String model,
+  required String voiceId,
+  required String consentRef,
+}) {
+  if (provider.trim().isEmpty) {
+    return const Failure(FailureCode.invalidArgument, 'provider 不能为空');
+  }
+  if (model.trim().isEmpty) {
+    return const Failure(FailureCode.invalidArgument, 'model 不能为空');
+  }
+  if (voiceId.trim().isEmpty) {
+    return const Failure(FailureCode.invalidArgument, 'voice_id 不能为空');
+  }
+  if (consentRef.trim().isEmpty) {
+    return const Failure(FailureCode.invalidArgument, '必须提供 consent_ref');
+  }
+  return null;
+}
+
 /// 音色档案服务接口，登记到 [HostServices]。
 abstract interface class VoiceProfiles {
   /// 创建档案并立即激活。同一 AI 只允许一个档案，重复创建返回 conflict。
@@ -241,21 +298,13 @@ class InMemoryVoiceProfiles implements VoiceProfiles {
         '该 AI 已有音色档案',
       );
     }
-    if (provider.trim().isEmpty) {
-      return err<VoiceProfile>(FailureCode.invalidArgument, 'provider 不能为空');
-    }
-    if (model.trim().isEmpty) {
-      return err<VoiceProfile>(FailureCode.invalidArgument, 'model 不能为空');
-    }
-    if (voiceId.trim().isEmpty) {
-      return err<VoiceProfile>(FailureCode.invalidArgument, 'voice_id 不能为空');
-    }
-    if (consentRef.trim().isEmpty) {
-      return err<VoiceProfile>(
-        FailureCode.invalidArgument,
-        '必须提供 consent_ref',
-      );
-    }
+    final invalid = validateVoiceCreation(
+      provider: provider,
+      model: model,
+      voiceId: voiceId,
+      consentRef: consentRef,
+    );
+    if (invalid != null) return Err<VoiceProfile>(invalid);
 
     final now = _clock.now();
     final profile = VoiceProfile(
@@ -412,7 +461,7 @@ class InMemoryVoiceProfiles implements VoiceProfiles {
     required VoiceSampleMeta sample,
     required String consentRef,
   }) async {
-    final failure = _sampleFailure(sample, consentRef);
+    final failure = validateVoiceSample(sample, consentRef);
     if (failure != null) {
       return Err<String>(failure);
     }
@@ -425,41 +474,6 @@ class InMemoryVoiceProfiles implements VoiceProfiles {
       grantedAt: _clock.now(),
     );
     return Ok<String>(sampleId);
-  }
-
-  Failure? _sampleFailure(VoiceSampleMeta sample, String consentRef) {
-    if (consentRef.trim().isEmpty) {
-      return const Failure(FailureCode.invalidArgument, '必须提供 consent_ref');
-    }
-    final seconds = sample.duration.inMilliseconds / 1000.0;
-    if (seconds < 10 || seconds > 30) {
-      return const Failure(
-        FailureCode.invalidArgument,
-        '样本时长必须在 10–30s',
-      );
-    }
-    if (sample.channels != 1) {
-      return const Failure(FailureCode.invalidArgument, '样本必须单声道');
-    }
-    if (sample.sampleRateHz < 16000) {
-      return const Failure(FailureCode.invalidArgument, '采样率必须 ≥16kHz');
-    }
-    if (sample.hasBgm || sample.hasReverb) {
-      return const Failure(FailureCode.invalidArgument, '样本不能含 BGM 或混响');
-    }
-    if (sample.multiVoice) {
-      return const Failure(FailureCode.invalidArgument, '样本不能含多人声');
-    }
-    if (sample.silenceRatio > 0.5) {
-      return const Failure(FailureCode.invalidArgument, '静音比例过高');
-    }
-    if (sample.clippingRatio > 0.01) {
-      return const Failure(FailureCode.invalidArgument, '削波比例过高');
-    }
-    if (sample.snrDb < 15) {
-      return const Failure(FailureCode.invalidArgument, '信噪比过低');
-    }
-    return null;
   }
 
   void _recordConsent({
