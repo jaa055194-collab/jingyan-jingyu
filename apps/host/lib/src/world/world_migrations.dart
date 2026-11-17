@@ -1,10 +1,8 @@
 import '../storage/migrations.dart';
 
-/// M10 world 迁移（预留号段 900–999）。
+/// M10 world migrations (reserved range 900–999).
 ///
-/// 本切片仅交付内存实现；这些 schema 供后续接入 SQLite 持久化时并入
-/// `apps/host/lib/jingyu_host.dart` 的迁移列表（属装配建议，见交付报告）。
-/// 已发布迁移号与 SQL 为 append-only，不得改动语义。
+/// Migration numbers and SQL are append-only; never change published semantics.
 const List<Migration> worldMigrations = [
   Migration(900, 'world space layout', '''
 CREATE TABLE world_space_layouts (
@@ -95,5 +93,48 @@ CREATE TABLE world_invitations (
 );
 CREATE INDEX idx_world_invitations_pair
   ON world_invitations(host_owner_id, visitor_id);
+'''),
+  Migration(905, 'world avatars store references only', '''
+CREATE TABLE world_avatars_v905 (
+  avatar_id TEXT PRIMARY KEY NOT NULL,
+  owner_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('vrm','live2d')),
+  model_id TEXT NOT NULL,
+  profile_rev INTEGER NOT NULL CHECK(profile_rev > 0),
+  updated_at TEXT NOT NULL
+);
+INSERT INTO world_avatars_v905(avatar_id, owner_id, kind, model_id, profile_rev, updated_at)
+  SELECT avatar_id, owner_id, kind,
+    CASE
+      WHEN length(model_id) BETWEEN 1 AND 128
+       AND substr(model_id, 1, 1) GLOB '[A-Za-z0-9]'
+       AND model_id NOT GLOB '*[^A-Za-z0-9._-]*'
+       AND model_id NOT GLOB 'legacy_*'
+      THEN model_id
+      ELSE 'legacy_' || lower(hex(CAST(avatar_id AS BLOB)))
+    END,
+    profile_rev, updated_at
+  FROM world_avatars;
+DROP TABLE world_avatars;
+ALTER TABLE world_avatars_v905 RENAME TO world_avatars;
+CREATE INDEX idx_world_avatars_owner ON world_avatars(owner_id);
+'''),
+  Migration(906, 'world avatars per device', '''
+ALTER TABLE world_avatars ADD COLUMN device_id TEXT NOT NULL DEFAULT 'legacy';
+CREATE INDEX idx_world_avatars_owner_device
+  ON world_avatars(owner_id, device_id);
+
+CREATE TABLE world_avatar_active_v906 (
+  owner_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  avatar_id TEXT NOT NULL,
+  profile_rev INTEGER NOT NULL,
+  PRIMARY KEY(owner_id, device_id)
+);
+INSERT INTO world_avatar_active_v906(owner_id, device_id, avatar_id, profile_rev)
+  SELECT owner_id, 'legacy', avatar_id, profile_rev
+  FROM world_avatar_active;
+DROP TABLE world_avatar_active;
+ALTER TABLE world_avatar_active_v906 RENAME TO world_avatar_active;
 '''),
 ];

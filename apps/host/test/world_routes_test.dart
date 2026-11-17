@@ -19,6 +19,10 @@ const _me = Principal(accountId: 'me', deviceId: 'd1');
 const _guest = Principal(accountId: 'guest', deviceId: 'd2');
 const _stranger = Principal(accountId: 'stranger', deviceId: 'd3');
 
+// Same owner, different devices: avatar state is per device.
+const _mePhone = Principal(accountId: 'me', deviceId: 'phone');
+const _mePc = Principal(accountId: 'me', deviceId: 'pc');
+
 class _Harness {
   _Harness() {
     router = Router();
@@ -289,6 +293,126 @@ void main() {
       principal: _guest,
     );
     expect(missing.status, 404);
+  });
+
+  test(
+    'avatar creation accepts only kind and stable modelId references',
+    () async {
+      final h = _Harness();
+      for (final body in <Map<String, Object?>>[
+        {
+          'kind': 'live2d',
+          'modelId': 'model_local',
+          'paramMap': {'mouthOpen': 'Param'},
+        },
+        {
+          'kind': 'live2d',
+          'modelId': 'model_local',
+          'modelFile': 'avatar.moc3',
+        },
+        {'kind': 'live2d', 'modelId': 'model_local', 'unexpected': true},
+        // The device must come from the authenticated principal, never the body.
+        {'kind': 'live2d', 'modelId': 'model_local', 'deviceId': 'pc'},
+        {'kind': 'live2d', 'modelId': '../avatar.moc3'},
+        {'kind': 'live2d', 'modelId': 'https://example.test/model'},
+      ]) {
+        final response = await h.call(
+          'POST',
+          Routes.worldAvatars,
+          principal: _me,
+          body: body,
+        );
+        expect(response.status, 400, reason: '$body');
+      }
+      final accepted = await h.call(
+        'POST',
+        Routes.worldAvatars,
+        principal: _me,
+        body: {'kind': 'live2d', 'modelId': 'local_model-v2'},
+      );
+      expect(accepted.status, 200);
+      expect(
+        (accepted.json! as Map<String, Object?>).keys,
+        isNot(contains('paramMap')),
+      );
+      expect(
+        (accepted.json! as Map<String, Object?>).keys,
+        isNot(contains('modelFile')),
+      );
+    },
+  );
+
+  test('avatars：同一 owner 手机与 PC 各自 active，跨设备不可见', () async {
+    final h = _Harness();
+
+    // 手机登记并启用手机形象。
+    final phoneCreated = await h.call(
+      'POST',
+      Routes.worldAvatars,
+      principal: _mePhone,
+      body: {'kind': 'vrm', 'modelId': 'vrm_phone'},
+    );
+    expect(phoneCreated.status, 200);
+    final phoneId = (phoneCreated.json! as Map<String, Object?>)['avatarId']!
+        as String;
+    final phoneEnabled = await h.call(
+      'POST',
+      _enablePath(phoneId),
+      principal: _mePhone,
+      body: {'expectedRevision': 1},
+    );
+    expect(phoneEnabled.status, 200);
+
+    // PC 与手机同 owner，但看不到也启用不了手机形象。
+    final pcList = await h.call('GET', Routes.worldAvatars, principal: _mePc);
+    expect(pcList.status, 200);
+    expect(
+      (pcList.json! as Map<String, Object?>)['avatars']! as List<Object?>,
+      isEmpty,
+    );
+    final pcForeignEnable = await h.call(
+      'POST',
+      _enablePath(phoneId),
+      principal: _mePc,
+      body: {'expectedRevision': 1},
+    );
+    expect(pcForeignEnable.status, 404);
+    final pcActiveBefore = await h.call(
+      'GET',
+      Routes.worldAvatarActive,
+      principal: _mePc,
+    );
+    expect(pcActiveBefore.status, 404);
+
+    // PC 登记并启用自己的形象，手机 active 不受影响。
+    final pcCreated = await h.call(
+      'POST',
+      Routes.worldAvatars,
+      principal: _mePc,
+      body: {'kind': 'live2d', 'modelId': 'l2d_pc'},
+    );
+    expect(pcCreated.status, 200);
+    final pcId = (pcCreated.json! as Map<String, Object?>)['avatarId']! as String;
+    final pcEnabled = await h.call(
+      'POST',
+      _enablePath(pcId),
+      principal: _mePc,
+      body: {'expectedRevision': 1},
+    );
+    expect(pcEnabled.status, 200);
+
+    final phoneActive = await h.call(
+      'GET',
+      Routes.worldAvatarActive,
+      principal: _mePhone,
+    );
+    expect((phoneActive.json! as Map<String, Object?>)['modelId'], 'vrm_phone');
+    final pcActive = await h.call(
+      'GET',
+      Routes.worldAvatarActive,
+      principal: _mePc,
+    );
+    expect((pcActive.json! as Map<String, Object?>)['modelId'], 'l2d_pc');
   });
 
   test('avatars：owner 隔离 + 创建/启用/active 广播', () async {
