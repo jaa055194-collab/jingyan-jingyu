@@ -75,6 +75,9 @@ abstract final class Routes {
   static const String friendDeny = '$prefix/friends/{accountId}/deny';
   static const String friendBlock = '$prefix/friends/{accountId}/block';
 
+  /// Owner-scoped notifications/inbox (metadata only; currently friend invites).
+  static const String notifications = '$prefix/notifications';
+
   /// Group owner adds an existing account after approving membership.
   static const String conversationMembers =
       '$prefix/conversations/{conversationId}/members';

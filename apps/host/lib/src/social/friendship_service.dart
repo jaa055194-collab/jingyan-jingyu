@@ -314,6 +314,43 @@ ORDER BY state ASC, other.id ASC
         return Ok(List<FriendContact>.unmodifiable(contacts));
       });
 
+  /// Owner-scoped notifications for the authenticated account. Metadata only:
+  /// `kind/title/status/createdAt/refId`; no private body, message or blob.
+  /// Today the only source is incoming pending friend invitations
+  /// (`friend_requests.target = actor`). System notices / consent prompts are
+  /// intentionally absent rather than fabricated.
+  Future<Result<List<Map<String, Object?>>>> listNotifications({
+    int limit = 50,
+  }) => _db.transaction((tx) async {
+    if (await activeKindInTx(tx, _actor) != 'human') {
+      return err(FailureCode.notFound, 'Active human not found');
+    }
+    if (limit < 1 || limit > 100) {
+      return err(FailureCode.invalidArgument, 'invalid limit');
+    }
+    final rows = await tx.query(
+      "SELECT sender, status, updated_at FROM friend_requests "
+      "WHERE target = ? AND status = 'pending' "
+      'ORDER BY updated_at DESC, sender ASC LIMIT ?',
+      [_actor, limit],
+    );
+    final items = <Map<String, Object?>>[];
+    for (final row in rows) {
+      final at = DateTime.fromMillisecondsSinceEpoch(
+        row['updated_at'] as int,
+        isUtc: true,
+      ).toIso8601String();
+      items.add(<String, Object?>{
+        'kind': 'friendRequest',
+        'title': '好友邀请',
+        'status': row['status'],
+        'createdAt': at,
+        'refId': row['sender'],
+      });
+    }
+    return Ok(List<Map<String, Object?>>.unmodifiable(items));
+  });
+
   /// Internal policy query, not a client-visible arbitrary-pair lookup.
   Future<bool> areFriends(AccountId a, AccountId b) => _db.transaction(
     (tx) async =>
