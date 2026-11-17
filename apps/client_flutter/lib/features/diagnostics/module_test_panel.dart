@@ -81,6 +81,14 @@ class _ModuleTestPanelState extends State<ModuleTestPanel> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        const Text(
+          '本面板证明：外壳可路由到哪些模块、各模块的真实接入状态，以及本机的实际'
+          '渲染帧耗时/帧率与进程内存（RSS）。\n'
+          '本面板不证明：模型可用、配置已授权、预算已获批，或任何端到端 AI 回复能力；'
+          '也不代表 GPU 显存（需真机原生工具）。',
+          key: Key('module-test-help'),
+        ),
+        const Divider(height: 32),
         Text('模块清单', style: Theme.of(context).textTheme.titleMedium),
         const Text('当前外壳可路由到的模块及真实接入状态；占位/未接入不会伪装成功。'),
         const SizedBox(height: 8),
@@ -89,20 +97,19 @@ class _ModuleTestPanelState extends State<ModuleTestPanel> {
             key: Key('module-row-${module.id}'),
             contentPadding: EdgeInsets.zero,
             title: Text(module.title),
-            subtitle: Text(module.description),
+            subtitle: Text(
+              '${module.description}\n${_availabilityExplain(module.availability)}',
+            ),
+            isThreeLine: true,
             trailing: Chip(
+              key: Key('module-availability-${module.id}'),
               label: Text(module.availabilityLabel),
               visualDensity: VisualDensity.compact,
             ),
           ),
         const Divider(height: 32),
-        Text(
-          '帧率 / 帧耗时 / 内存探针',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        const Text(
-          '在本机测量实际渲染帧耗时与进程内存（RSS）；这不等于 GPU 显存，显存需真机原生工具单独采集。',
-        ),
+        Text('帧率 / 帧耗时 / 内存探针', style: Theme.of(context).textTheme.titleMedium),
+        const Text('在本机测量实际渲染帧耗时与进程内存（RSS）；这不等于 GPU 显存，显存需真机原生工具单独采集。'),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
@@ -130,11 +137,17 @@ class _ModuleTestPanelState extends State<ModuleTestPanel> {
         const SizedBox(height: 8),
         Text(_measuring ? '状态：测量中…' : '状态：未开始（点击开始测量）'),
         Card(
+          key: const Key('module-test-probe-result'),
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(
+                  _probeStatus(summary, _measuring),
+                  key: const Key('module-test-probe-status'),
+                ),
+                const SizedBox(height: 8),
                 Text('FPS：${_fmt(summary.fps)}'),
                 Text('平均帧耗时：${_fmt(summary.avgMillis)} ms'),
                 Text('P95 帧耗时：${_fmt(summary.p95Millis)} ms'),
@@ -142,11 +155,30 @@ class _ModuleTestPanelState extends State<ModuleTestPanel> {
                   '卡顿帧（>${_fmt(kDefaultJankThresholdMillis, 0)}ms）：${summary.jankFrames} / ${summary.totalFrames}',
                 ),
                 Text('进程内存 RSS：$rssText'),
+                const SizedBox(height: 4),
+                const Text('以上为本机实测值，不代表宿主可用性或任何 AI 能力。'),
               ],
             ),
           ),
         ),
       ],
     );
+  }
+
+  /// One-line explanation per module availability, honest and non-promotional.
+  String _availabilityExplain(ModuleAvailability availability) =>
+      switch (availability) {
+        ModuleAvailability.available => '已实现：可路由并具备真实功能，但不代表模型可用或已授权',
+        ModuleAvailability.placeholder => '占位：入口存在，宿主数据未接入，界面为诚实空态',
+        ModuleAvailability.unavailable => '未接入：渲染/能力尚未接入外壳，无法使用',
+      };
+
+  /// Honest probe state: distinguishes 未配置 / 测量中 / 已测得数据 / 未知.
+  String _probeStatus(PerfSummary summary, bool measuring) {
+    if (measuring) return '探针状态：测量中（数据实时更新）';
+    if (summary.totalFrames == 0) {
+      return '探针状态：未配置（尚未开始测量，数值为 0，不代表性能差）';
+    }
+    return '探针状态：已测得 ${summary.totalFrames} 帧数据（停止后数值保留，可清零）';
   }
 }
