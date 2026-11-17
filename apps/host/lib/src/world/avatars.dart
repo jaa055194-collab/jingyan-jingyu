@@ -3,6 +3,11 @@
 /// Model-specific parameters, model files and their safe import belong to each
 /// device. This registry publishes only modelId/profileRev/kind references;
 /// reference activation does not prove a device can load or render that model.
+///
+/// Avatar selection is per DEVICE, not per account: the same owner may keep
+/// independent active models on their phone and PC. Every read/write is scoped
+/// to `(ownerId, deviceId)`; a lookup from another device (or another owner)
+/// returns notFound.
 library;
 
 import 'package:jingyu_core/jingyu_core.dart';
@@ -37,7 +42,7 @@ class AvatarProfile {
   final String ownerId;
   final AvatarKind kind;
 
-  /// 稳定的模型标识（导入内容指纹或素材 id），双端据此一致。
+  /// 稳定的模型标识（导入内容指纹或素材 id），设备本地据此加载。
   final String modelId;
 
   /// 单调递增的档案版本号，变更即前进。
@@ -55,7 +60,7 @@ class AvatarProfile {
   };
 }
 
-/// 下发给客户端的形象广播：双端拿到的 `model_id + profile_rev` 必须一致。
+/// 下发给客户端的形象广播：单设备拿到的 `model_id + profile_rev` 必须一致。
 class AvatarBroadcast {
   const AvatarBroadcast({
     required this.modelId,
@@ -74,11 +79,15 @@ class AvatarBroadcast {
   };
 }
 
-/// 形象登记契约。ownerId 来自可信认证边界，绝不信请求 JSON。
+/// 形象登记契约。
+///
+/// `ownerId` 与 `deviceId` 都来自可信认证边界，绝不信请求 JSON。所有操作都
+/// 以 `(ownerId, deviceId)` 为隔离维度：跨设备或跨 owner 一律 notFound。
 abstract interface class AvatarRegistry {
   /// 登记一个设备本地可解析的模型引用。
   Future<Result<AvatarProfile>> register({
     required String ownerId,
+    required String deviceId,
     required AvatarKind kind,
     required String modelId,
   });
@@ -86,6 +95,7 @@ abstract interface class AvatarRegistry {
   /// 启用某形象（切换），要求 revision 匹配。
   Future<Result<AvatarProfile>> enable({
     required String ownerId,
+    required String deviceId,
     required String avatarId,
     required int expectedRevision,
   });
@@ -93,22 +103,24 @@ abstract interface class AvatarRegistry {
   /// 停用某形象，profileRev 前进。
   Future<Result<AvatarProfile>> disable({
     required String ownerId,
+    required String deviceId,
     required String avatarId,
     required int expectedRevision,
   });
 
   Future<Result<AvatarProfile>> get({
     required String ownerId,
+    required String deviceId,
     required String avatarId,
   });
 
-  Future<List<AvatarProfile>> list(String ownerId);
+  Future<List<AvatarProfile>> list(String ownerId, String deviceId);
 
-  /// 当前启用的形象广播；没有启用形象返回 notFound。
-  Future<Result<AvatarBroadcast>> active(String ownerId);
+  /// 当前启用设备的形象广播；没有启用形象返回 notFound。
+  Future<Result<AvatarBroadcast>> active(String ownerId, String deviceId);
 }
 
-/// 内存实现。owner 隔离：跨 owner 一律 notFound。
+/// 内存实现。`(owner, device)` 隔离：跨 owner 或跨设备一律 notFound。
 class InMemoryAvatarRegistry implements AvatarRegistry {
   InMemoryAvatarRegistry({
     this.clock = const SystemClock(),
@@ -118,9 +130,10 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
   final Clock clock;
   final String Function() _newId;
 
-  final Map<String, Map<String, AvatarProfile>> _byOwner =
-      <String, Map<String, AvatarProfile>>{};
-  final Map<String, String> _active = <String, String>{};
+  final Map<(String, String), Map<String, AvatarProfile>> _byOwnerDevice =
+      <(String, String), Map<String, AvatarProfile>>{};
+  final Map<(String, String), String> _active =
+      <(String, String), String>{};
 
   static String Function() _counterIds() {
     var n = 0;
@@ -132,19 +145,21 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
       !value.toLowerCase().startsWith('legacy_') &&
       RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*$').hasMatch(value);
 
-  AvatarProfile? _find(String ownerId, String avatarId) =>
-      _byOwner[ownerId]?[avatarId];
+  AvatarProfile? _find(String ownerId, String deviceId, String avatarId) =>
+      _byOwnerDevice[(ownerId, deviceId)]?[avatarId];
 
   @override
   Future<Result<AvatarProfile>> register({
     required String ownerId,
+    required String deviceId,
     required AvatarKind kind,
     required String modelId,
   }) async {
     try {
       validateId(ownerId, kind: 'owner');
+      validateId(deviceId, kind: 'device');
     } on FormatException {
-      return err(FailureCode.invalidArgument, 'bad owner id');
+      return err(FailureCode.invalidArgument, 'bad owner or device id');
     }
     if (!_validModelId(modelId)) {
       return err(FailureCode.invalidArgument, 'bad model id');
@@ -157,8 +172,8 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
       profileRev: 1,
       updatedAt: clock.now().toUtc(),
     );
-    _byOwner.putIfAbsent(
-      ownerId,
+    _byOwnerDevice.putIfAbsent(
+      (ownerId, deviceId),
       () => <String, AvatarProfile>{},
     )[profile.avatarId] = profile;
     return Ok(profile);
@@ -167,10 +182,11 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
   @override
   Future<Result<AvatarProfile>> enable({
     required String ownerId,
+    required String deviceId,
     required String avatarId,
     required int expectedRevision,
   }) async {
-    final profile = _find(ownerId, avatarId);
+    final profile = _find(ownerId, deviceId, avatarId);
     if (profile == null) return err(FailureCode.notFound, 'avatar not found');
     if (profile.profileRev != expectedRevision) {
       return err(FailureCode.conflict, 'profile revision mismatch');
@@ -183,18 +199,19 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
       profileRev: profile.profileRev + 1,
       updatedAt: clock.now().toUtc(),
     );
-    _byOwner[ownerId]![avatarId] = updated;
-    _active[ownerId] = avatarId;
+    _byOwnerDevice[(ownerId, deviceId)]![avatarId] = updated;
+    _active[(ownerId, deviceId)] = avatarId;
     return Ok(updated);
   }
 
   @override
   Future<Result<AvatarProfile>> disable({
     required String ownerId,
+    required String deviceId,
     required String avatarId,
     required int expectedRevision,
   }) async {
-    final profile = _find(ownerId, avatarId);
+    final profile = _find(ownerId, deviceId, avatarId);
     if (profile == null) return err(FailureCode.notFound, 'avatar not found');
     if (profile.profileRev != expectedRevision) {
       return err(FailureCode.conflict, 'profile revision mismatch');
@@ -207,24 +224,27 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
       profileRev: profile.profileRev + 1,
       updatedAt: clock.now().toUtc(),
     );
-    _byOwner[ownerId]![avatarId] = updated;
-    if (_active[ownerId] == avatarId) _active.remove(ownerId);
+    _byOwnerDevice[(ownerId, deviceId)]![avatarId] = updated;
+    if (_active[(ownerId, deviceId)] == avatarId) {
+      _active.remove((ownerId, deviceId));
+    }
     return Ok(updated);
   }
 
   @override
   Future<Result<AvatarProfile>> get({
     required String ownerId,
+    required String deviceId,
     required String avatarId,
   }) async {
-    final profile = _find(ownerId, avatarId);
+    final profile = _find(ownerId, deviceId, avatarId);
     if (profile == null) return err(FailureCode.notFound, 'avatar not found');
     return Ok(profile);
   }
 
   @override
-  Future<List<AvatarProfile>> list(String ownerId) async {
-    final owned = _byOwner[ownerId];
+  Future<List<AvatarProfile>> list(String ownerId, String deviceId) async {
+    final owned = _byOwnerDevice[(ownerId, deviceId)];
     if (owned == null) return const <AvatarProfile>[];
     final list = owned.values.toList()
       ..sort((a, b) => a.avatarId.compareTo(b.avatarId));
@@ -232,10 +252,13 @@ class InMemoryAvatarRegistry implements AvatarRegistry {
   }
 
   @override
-  Future<Result<AvatarBroadcast>> active(String ownerId) async {
-    final avatarId = _active[ownerId];
+  Future<Result<AvatarBroadcast>> active(
+    String ownerId,
+    String deviceId,
+  ) async {
+    final avatarId = _active[(ownerId, deviceId)];
     if (avatarId == null) return err(FailureCode.notFound, 'no active avatar');
-    final profile = _find(ownerId, avatarId);
+    final profile = _find(ownerId, deviceId, avatarId);
     if (profile == null) return err(FailureCode.notFound, 'avatar not found');
     return Ok(
       AvatarBroadcast(

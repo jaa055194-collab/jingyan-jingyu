@@ -124,4 +124,7 @@
 
 | REQ-057 | FR-39；本地模型包导入安全 | 设备本地压缩包安全校验与资源预检 | 已批准 | 拒非 zip/空/路径穿越/绝对路径/重复条目/脚本可执行扩展名；条目与体积/压缩比上限；要求唯一 model3、严格 JSON 与深度上限；校验 Moc/Textures 引用存在、MOC3 魔数与版本、PNG 魔数与纹理像素预算；纯函数不改文件系统 | client_kit `validateLive2DPackage` | `live2d_package_test` 13 项；用用户提供的真实模型包本地实测 `ok=true`、5 纹理、155,189,248 像素、正确解析 model3/MOC3 引用 | 元数据/字节子集通过；未渲染、未校验参数名/几何、无设备持久化/UI/热切换/真实设备显存与帧率；必须按设备下调 `maxTotalPixels` 或做降采样 |
 
+| REQ-058 | FR-38/39 修订；AC-25/26 | 取消双端形象一致，形象选择按设备隔离 | 已批准 | 同一 owner 手机/电脑可各自拥有不同 active 模型；跨设备/跨 owner 读取或启用返回 notFound；注册体只收 kind/modelId；迁移906把已有记录归到 legacy 设备并保留 revision/active | world avatar registry/HTTP；迁移906 | world_routes/world_sqlite/world_test/world_module 共63项通过；host assembly 2项；host analyze clean | 已实现设备级隔离；AvatarProfile 不暴露 deviceId；旧记录需各设备重新登记；真实设备渲染/热切换仍未交付 |
+| REQ-059 | FR-35/FR-39；CR-13；02-assets | 基于 feiyu-room-template 方向的按对话建屋生成器 | 已批准 | 五个预设；brief→RoomLayout 确定性布局数据、无下载/可执行字段；未知风格拒绝；空房间用默认；自由文本→brief 容错 | client_kit `FeiyuRoomGenerator`/`briefFromConversation` | room_generator_test 19项；先 RED（缺类）后 GREEN；client kit 全套235项、analyze clean | 仅布局数据生成；未接宿主 space_layout 持久化、未接模型调用/对话管道、无 WebView 渲染 |
+
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。

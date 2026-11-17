@@ -119,4 +119,22 @@ DROP TABLE world_avatars;
 ALTER TABLE world_avatars_v905 RENAME TO world_avatars;
 CREATE INDEX idx_world_avatars_owner ON world_avatars(owner_id);
 '''),
+  Migration(906, 'world avatars per device', '''
+ALTER TABLE world_avatars ADD COLUMN device_id TEXT NOT NULL DEFAULT 'legacy';
+CREATE INDEX idx_world_avatars_owner_device
+  ON world_avatars(owner_id, device_id);
+
+CREATE TABLE world_avatar_active_v906 (
+  owner_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  avatar_id TEXT NOT NULL,
+  profile_rev INTEGER NOT NULL,
+  PRIMARY KEY(owner_id, device_id)
+);
+INSERT INTO world_avatar_active_v906(owner_id, device_id, avatar_id, profile_rev)
+  SELECT owner_id, 'legacy', avatar_id, profile_rev
+  FROM world_avatar_active;
+DROP TABLE world_avatar_active;
+ALTER TABLE world_avatar_active_v906 RENAME TO world_avatar_active;
+'''),
 ];

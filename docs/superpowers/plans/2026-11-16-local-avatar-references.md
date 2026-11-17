@@ -26,4 +26,6 @@
 - [ ] Run focused tests and final full repository check after collision review fix; final diff review; then commit/push and create ticket PR with accurate limitations.
 - [x] Assess an open runtime against the actual supplied model before selecting a rendering integration; never infer working Live2D from metadata tests.
 - [x] Add a pure-Dart safe importer (`validateLive2DPackage`) with archive/JSON/MOC3/PNG/texture-budget checks and validate the supplied package locally.
-- [ ] Add device-persisted profiles, a WebView renderer/bridge, hot-switch and verified VRM fallback; validate real-device GPU limits, memory and frame rate in follow-up increments.
+- [x] Make avatar selection per device (cancel dual-end consistency; phone/PC independent) with migration 906 and cross-device isolation tests.
+- [x] Add `FeiyuRoomGenerator` + `briefFromConversation` (five presets, deterministic layout data) in the client kit.
+- [ ] Add device-persisted profiles, a WebView renderer/bridge, hot-switch and verified VRM fallback; validate Snapdragon 888 30–60fps, GPU limits and memory after the overall shell lands.

@@ -17,4 +17,5 @@ export 'src/plugin_bundle.dart';
 export 'src/plugin_host.dart';
 export 'src/plugin_package.dart';
 export 'src/plugin_package_builder.dart';
+export 'src/room_generator.dart';
 export 'src/sync_cursor.dart';

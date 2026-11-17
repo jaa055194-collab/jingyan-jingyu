@@ -263,7 +263,7 @@ class WorldModule extends HostModule {
   Future<HostResponse> _listAvatars(HostRequest request) async {
     final principal = request.principal;
     if (principal == null) return _unauth();
-    final list = await _avatars.list(principal.accountId);
+    final list = await _avatars.list(principal.accountId, principal.deviceId);
     return HostResponse.ok({
       'avatars': [for (final profile in list) profile.toJson()],
     });
@@ -277,6 +277,7 @@ class WorldModule extends HostModule {
       return HostResponse.failure(body.failure);
     }
     final json = body.value;
+    // 设备身份只取自已认证 principal；请求体严格只允许 {kind, modelId}。
     if (json.keys.toSet().difference(const {'kind', 'modelId'}).isNotEmpty ||
         !json.keys.toSet().containsAll(const {'kind', 'modelId'})) {
       return _bad();
@@ -288,6 +289,7 @@ class WorldModule extends HostModule {
     if (kind == null) return _bad();
     final result = await _avatars.register(
       ownerId: principal.accountId,
+      deviceId: principal.deviceId,
       kind: kind,
       modelId: modelId,
     );
@@ -306,6 +308,7 @@ class WorldModule extends HostModule {
     if (revision is! int) return _bad();
     final result = await _avatars.enable(
       ownerId: principal.accountId,
+      deviceId: principal.deviceId,
       avatarId: avatarId,
       expectedRevision: revision,
     );
@@ -315,7 +318,10 @@ class WorldModule extends HostModule {
   Future<HostResponse> _activeAvatar(HostRequest request) async {
     final principal = request.principal;
     if (principal == null) return _unauth();
-    final result = await _avatars.active(principal.accountId);
+    final result = await _avatars.active(
+      principal.accountId,
+      principal.deviceId,
+    );
     return HostResponse.fromResult(result, (broadcast) => broadcast.toJson());
   }
 }

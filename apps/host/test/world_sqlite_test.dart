@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/src/storage/migrations.dart';
 import 'package:jingyu_host/src/storage/sqlite_database.dart';
+import 'package:jingyu_host/src/world/avatars.dart';
 import 'package:jingyu_host/src/world/sqlite_avatar_registry.dart';
 import 'package:jingyu_host/src/world/sqlite_presence_service.dart';
 import 'package:jingyu_host/src/world/sqlite_space_layout_store.dart';
@@ -132,16 +133,17 @@ void main() {
         final registry = SqliteAvatarRegistry(database: reopened, clock: clock);
         final profile = (await registry.get(
           ownerId: 'owner',
+          deviceId: 'legacy',
           avatarId: 'av_legacy',
         )).value;
         expect(profile.modelId, matches(RegExp(r'^legacy_[0-9a-f]+$')));
         expect(profile.modelId, isNot(contains('https')));
         expect(profile.profileRev, 7);
         expect(profile.toJson().keys, isNot(contains('paramMap')));
-        final active = (await registry.active('owner')).value;
+        final active = (await registry.active('owner', 'legacy')).value;
         expect(active.modelId, profile.modelId);
         expect(active.profileRev, 7);
-        final aliases = await registry.list('owner');
+        final aliases = await registry.list('owner', 'legacy');
         expect(aliases, hasLength(4));
         expect(aliases.map((item) => item.modelId).toSet().length, 4);
         for (final item in aliases.where((item) => item.avatarId != 'av_legacy')) {
@@ -159,4 +161,142 @@ void main() {
       }
     },
   );
+
+  test('906 preserves pre-906 active as legacy device and isolates per device',
+      () async {
+    final path = '${directory.path}/upgrade906.sqlite';
+    final legacy = await SqliteDatabase.open(
+      path,
+      migrations: [
+        ...allMigrations,
+        ...worldMigrations.where((m) => m.version <= 905),
+      ],
+    );
+    await legacy.execute(
+      'INSERT INTO world_avatars('
+      'avatar_id, owner_id, kind, model_id, profile_rev, updated_at'
+      ') VALUES(?,?,?,?,?,?)',
+      [
+        'av_pre906',
+        'owner',
+        'vrm',
+        'vrm_legacy',
+        5,
+        DateTime.utc(2026, 11, 16).toIso8601String(),
+      ],
+    );
+    await legacy.execute(
+      'INSERT INTO world_avatar_active(owner_id, avatar_id, profile_rev) '
+      'VALUES(?,?,?)',
+      ['owner', 'av_pre906', 5],
+    );
+    await legacy.close();
+
+    final upgraded = await SqliteDatabase.open(
+      path,
+      migrations: [...allMigrations, ...worldMigrations],
+    );
+    try {
+      final registry = SqliteAvatarRegistry(database: upgraded, clock: clock);
+
+      // Pre-906 rows are preserved and surfaced on the synthetic 'legacy' device.
+      final legacyProfile = (await registry.get(
+        ownerId: 'owner',
+        deviceId: 'legacy',
+        avatarId: 'av_pre906',
+      )).value;
+      expect(legacyProfile.modelId, 'vrm_legacy');
+      expect(legacyProfile.profileRev, 5);
+      final legacyActive = (await registry.active('owner', 'legacy')).value;
+      expect(legacyActive.modelId, 'vrm_legacy');
+      expect(legacyActive.profileRev, 5);
+
+      // A different device starts empty: isolation from the migrated legacy rows.
+      expect(
+        (await registry.active('owner', 'pc')).failureOrNull?.code,
+        FailureCode.notFound,
+      );
+      expect(await registry.list('owner', 'pc'), isEmpty);
+      expect(
+        (await registry.get(
+          ownerId: 'owner',
+          deviceId: 'pc',
+          avatarId: 'av_pre906',
+        )).failureOrNull?.code,
+        FailureCode.notFound,
+      );
+
+      // The new device can activate its own model without touching legacy state.
+      final pc = (await registry.register(
+        ownerId: 'owner',
+        deviceId: 'pc',
+        kind: AvatarKind.vrm,
+        modelId: 'vrm_pc',
+      )).value;
+      await registry.enable(
+        ownerId: 'owner',
+        deviceId: 'pc',
+        avatarId: pc.avatarId,
+        expectedRevision: pc.profileRev,
+      );
+      expect((await registry.active('owner', 'pc')).value.modelId, 'vrm_pc');
+      expect((await registry.active('owner', 'legacy')).value.modelId, 'vrm_legacy');
+    } finally {
+      await upgraded.close();
+    }
+  });
+
+  test('device avatar references and active state survive reopen', () async {
+    final path = '${directory.path}/reopen.sqlite';
+    final first = await SqliteDatabase.open(
+      path,
+      migrations: [...allMigrations, ...worldMigrations],
+    );
+    final firstRegistry = SqliteAvatarRegistry(database: first, clock: clock);
+    final phone = (await firstRegistry.register(
+      ownerId: 'owner',
+      deviceId: 'phone',
+      kind: AvatarKind.vrm,
+      modelId: 'vrm_phone',
+    )).value;
+    await firstRegistry.enable(
+      ownerId: 'owner',
+      deviceId: 'phone',
+      avatarId: phone.avatarId,
+      expectedRevision: phone.profileRev,
+    );
+    await first.close();
+
+    final second = await SqliteDatabase.open(
+      path,
+      migrations: [...allMigrations, ...worldMigrations],
+    );
+    try {
+      final reloadedRegistry = SqliteAvatarRegistry(
+        database: second,
+        clock: clock,
+      );
+      final reloaded = (await reloadedRegistry.get(
+        ownerId: 'owner',
+        deviceId: 'phone',
+        avatarId: phone.avatarId,
+      )).value;
+      expect(reloaded.modelId, 'vrm_phone');
+      expect(reloaded.profileRev, 2);
+      final active = (await reloadedRegistry.active('owner', 'phone')).value;
+      expect(active.modelId, 'vrm_phone');
+      expect(active.profileRev, 2);
+      // The PC device never saw this avatar.
+      expect(
+        (await reloadedRegistry.get(
+          ownerId: 'owner',
+          deviceId: 'pc',
+          avatarId: phone.avatarId,
+        )).failureOrNull?.code,
+        FailureCode.notFound,
+      );
+    } finally {
+      await second.close();
+    }
+  });
 }
