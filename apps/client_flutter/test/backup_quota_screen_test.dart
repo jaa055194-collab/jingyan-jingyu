@@ -38,10 +38,11 @@ void main() {
     expect(find.textContaining('配额：20.0 GiB'), findsOneWidget);
     expect(find.textContaining('conversations：2'), findsOneWidget);
     expect(find.textContaining('对象合计：5'), findsOneWidget);
-    // Read-only: no inputs or action buttons that could write/authorize.
+    // No free-form input; explicit actions exist but stay disabled without api.
     expect(find.byType(TextField), findsNothing);
-    expect(find.byType(FilledButton), findsNothing);
-    expect(find.byType(TextButton), findsNothing);
+    expect(find.byKey(const Key('export-lifecycle')), findsOneWidget);
+    expect(find.byKey(const Key('import-lifecycle')), findsOneWidget);
+    expect(find.byKey(const Key('cleanup-lifecycle')), findsOneWidget);
     expect(find.textContaining('不代表可用'), findsWidgets);
   });
 
