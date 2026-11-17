@@ -27,9 +27,39 @@ class AiConfigSnapshot {
 /// but the server-masked key mask. When no loader is available or a read fails
 /// it reports an honest unknown state without leaking transport details.
 class AiConfigPanel extends StatefulWidget {
-  const AiConfigPanel({super.key, this.title = 'AI 运行配置体检', this.load});
+  const AiConfigPanel({
+    super.key,
+    this.title = 'AI 运行配置体检',
+    this.load,
+    this.loadForAccount,
+    this.ownedAiAccountIds = const <String>[],
+  });
   final String title;
   final Future<AiConfigSnapshot> Function()? load;
+
+  /// Real-data loader for one selected owned AI account. When present the panel
+  /// resolves the profile and reads host readiness metadata sequentially.
+  final Future<AiConfigSnapshot> Function(String aiAccountId)? loadForAccount;
+
+  /// Owned AI account ids offered in the in-panel selector (read-only).
+  final List<String> ownedAiAccountIds;
+
+  /// Resolve the AI profile then read its readiness metadata (GET only).
+  ///
+  /// `registerOrResolve` is idempotent and grants no consent; the subsequent
+  /// readiness reads are sequential and are **not** an atomic snapshot.
+  static Future<AiConfigSnapshot> resolveAndLoad(
+    OwnerAiDirectApi direct,
+    OwnerAiReadinessApi readiness, {
+    required String aiAccountId,
+    required String expectedOwnerAccountId,
+  }) async {
+    final identity = await direct.registerOrResolve(
+      aiAccountId,
+      expectedOwnerAccountId: expectedOwnerAccountId,
+    );
+    return loadFrom(readiness, identity);
+  }
 
   /// Maps read-only API results to the panel view model. Sequential GETs; the
   /// two reads are not an atomic snapshot and this does not claim they are.
@@ -62,9 +92,7 @@ class AiConfigPanel extends StatefulWidget {
     ]);
   }
 
-  static AiConfigEntry _personaEntry(
-    ConfigurationRead<OwnerPersonaCard> read,
-  ) {
+  static AiConfigEntry _personaEntry(ConfigurationRead<OwnerPersonaCard> read) {
     final card = read.value;
     if (read.status != ConfigurationReadStatus.configurationPresent ||
         card == null) {
@@ -90,7 +118,8 @@ class AiConfigPanel extends StatefulWidget {
       return AiConfigEntry('绑定', read.status, _lines(read));
     }
     return AiConfigEntry('绑定', read.status, <String>[
-      for (final row in rows) '${row.capability} → ${row.providerId} · ${row.model}',
+      for (final row in rows)
+        '${row.capability} → ${row.providerId} · ${row.model}',
     ]);
   }
 
@@ -126,14 +155,15 @@ class AiConfigPanel extends StatefulWidget {
     ]);
   }
 
-  static List<String> _lines<T>(ConfigurationRead<T> read) => switch (read.status) {
-    ConfigurationReadStatus.configurationPresent => const ['已配置'],
-    ConfigurationReadStatus.unconfigured => const ['未配置'],
-    ConfigurationReadStatus.personaMissing => const ['人格尚未初始化'],
-    ConfigurationReadStatus.ownershipUnknown => const ['归属未知，请刷新后重试'],
-    ConfigurationReadStatus.denied => const ['未认证或无权限'],
-    ConfigurationReadStatus.unknown => const ['读取失败或结果未知'],
-  };
+  static List<String> _lines<T>(ConfigurationRead<T> read) =>
+      switch (read.status) {
+        ConfigurationReadStatus.configurationPresent => const ['已配置'],
+        ConfigurationReadStatus.unconfigured => const ['未配置'],
+        ConfigurationReadStatus.personaMissing => const ['人格尚未初始化'],
+        ConfigurationReadStatus.ownershipUnknown => const ['归属未知，请刷新后重试'],
+        ConfigurationReadStatus.denied => const ['未认证或无权限'],
+        ConfigurationReadStatus.unknown => const ['读取失败或结果未知'],
+      };
 
   @override
   State<AiConfigPanel> createState() => _AiConfigPanelState();
@@ -143,26 +173,67 @@ class _AiConfigPanelState extends State<AiConfigPanel> {
   AiConfigSnapshot? _snapshot;
   bool _loading = true;
   bool _unknown = false;
+  String? _selected;
 
   @override
   void initState() {
     super.initState();
+    final forAccount = widget.loadForAccount;
+    if (forAccount != null) {
+      if (widget.ownedAiAccountIds.isEmpty) {
+        _loading = false;
+        _unknown = true;
+        return;
+      }
+      _selected = widget.ownedAiAccountIds.first;
+    }
+    _load();
+  }
+
+  void _select(String? accountId) {
+    if (accountId == null || accountId == _selected) return;
+    setState(() {
+      _selected = accountId;
+      _snapshot = null;
+      _unknown = false;
+      _loading = true;
+    });
     _load();
   }
 
   Future<void> _load() async {
-    final load = widget.load;
-    if (load == null) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _unknown = true;
-        });
-      }
-      return;
-    }
+    final forAccount = widget.loadForAccount;
     try {
-      final snapshot = await load();
+      final AiConfigSnapshot snapshot;
+      if (forAccount != null) {
+        final id = _selected;
+        if (id == null || id.isEmpty) {
+          if (!mounted) return;
+          setState(() {
+            _loading = false;
+            _unknown = true;
+          });
+          return;
+        }
+        if (mounted) {
+          setState(() {
+            _loading = true;
+            _unknown = false;
+          });
+        }
+        snapshot = await forAccount(id);
+      } else {
+        final load = widget.load;
+        if (load == null) {
+          if (!mounted) return;
+          setState(() {
+            _loading = false;
+            _unknown = true;
+          });
+          return;
+        }
+        snapshot = await load();
+      }
       if (!mounted) return;
       setState(() {
         _snapshot = snapshot;
@@ -181,14 +252,15 @@ class _AiConfigPanelState extends State<AiConfigPanel> {
     }
   }
 
-  static String _statusLabel(ConfigurationReadStatus status) => switch (status) {
-    ConfigurationReadStatus.configurationPresent => '已配置',
-    ConfigurationReadStatus.unconfigured => '未配置',
-    ConfigurationReadStatus.personaMissing => '人格缺失',
-    ConfigurationReadStatus.ownershipUnknown => '归属未知',
-    ConfigurationReadStatus.denied => '无权限/未认证',
-    ConfigurationReadStatus.unknown => '未知',
-  };
+  static String _statusLabel(ConfigurationReadStatus status) =>
+      switch (status) {
+        ConfigurationReadStatus.configurationPresent => '已配置',
+        ConfigurationReadStatus.unconfigured => '未配置',
+        ConfigurationReadStatus.personaMissing => '人格缺失',
+        ConfigurationReadStatus.ownershipUnknown => '归属未知',
+        ConfigurationReadStatus.denied => '无权限/未认证',
+        ConfigurationReadStatus.unknown => '未知',
+      };
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -200,6 +272,25 @@ class _AiConfigPanelState extends State<AiConfigPanel> {
           '只读体检：以下为宿主返回的已保存配置元数据，不等于模型可用、不等于预算获批、不等于已授权回复；本页不写入配置、不配置密钥、不发起模型调用。',
         ),
         const SizedBox(height: 12),
+        if (widget.loadForAccount != null &&
+            widget.ownedAiAccountIds.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: InputDecorator(
+              decoration: const InputDecoration(labelText: '选择自有 AI 档案'),
+              child: DropdownButton<String>(
+                key: const Key('ai-config-select'),
+                value: _selected,
+                isExpanded: true,
+                underline: const SizedBox.shrink(),
+                items: [
+                  for (final id in widget.ownedAiAccountIds)
+                    DropdownMenuItem<String>(value: id, child: Text(id)),
+                ],
+                onChanged: _loading ? null : _select,
+              ),
+            ),
+          ),
         if (_loading)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
@@ -228,7 +319,10 @@ class _AiConfigPanelState extends State<AiConfigPanel> {
                 children: [
                   Text('${entry.title} · ${_statusLabel(entry.status)}'),
                   for (final line in entry.lines)
-                    SelectableText(line, style: Theme.of(context).textTheme.bodySmall),
+                    SelectableText(
+                      line,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                 ],
               ),
             ),
