@@ -16,6 +16,8 @@ The provided model references five textures. Their IHDR sizes include an 8192 x 
 
 The repository's pure-Dart `validateLive2DPackage` was also run against the supplied archive locally: it returned `ok=true`, resolved the model3/MOC3 references and five PNG textures, and measured 155,189,248 total texture pixels under its default 200M limit. That is a metadata/byte check only, not a render or device-memory test.
 
+A first mobile optimization adds `planLive2DTextures`: with a conservative Snapdragon-888-class budget (max edge 8192, decoded RGBA8 total 256 MiB) it caps the long edge and uniformly halves textures until the total fits. This planning targets the supplied ~592 MiB raw texture set without changing the source assets; actual `MAX_TEXTURE_SIZE`, memory and fps still require device/log validation after the project is complete.
+
 The supplied model notice separately asks for attribution and prohibits redistribution; some commercial product-inclusion cases ask users to contact the author. Do not bundle or redistribute this model. PurismCore's MIT runtime license does not establish model rights, Cubism SDK rights or trademark/format legal conclusions. Retain creator attribution when the user's local model is used. No Cubism SDK/Core binary was downloaded or bundled.
 
 ## Candidate integration, not implemented

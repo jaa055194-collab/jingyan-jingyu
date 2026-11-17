@@ -129,4 +129,6 @@
 
 | REQ-060 | FR-39；设备本地 profile 存储 | 设备侧形象档案与当前选择的记录契约 | 已批准 | 保存/列表（按 modelId 排序）；同 id 需 revision 严格递增否则拒绝；激活不存在模型抛错；删除清空激活；JSON 快照导出/导入原子且拒绝重复/未知字段/悬空激活；快照不含模型字节或绝对路径 | client_kit `Live2DModelStore` + `Live2DProfile.toJson` | live2d_store_test 8项 + profile 38项；client kit 全套243项、analyze clean | 纯内存契约与快照；真实文件持久化/加密/设备 UI 未接；未渲染 |
 
+| REQ-061 | FR-39/NFR-04；移动端优化 | 面向骁龙888级别的纹理/显存预算规划 | 已批准 | 按长边与 RGBA8 总字节预算规划纹理；超长边等比缩放；总量超预算则统一减半至 1x1；返回是否在预算内；非正尺寸拒绝 | client_kit `planLive2DTextures`/`Live2DTextureLimits` | live2d_texture_budget_test 7项；默认8192边/256MiB预算对提供的5纹理产出移动端可接受总量；analyze clean | 规划器为保守静态估算，未查询真实 GL `MAX_TEXTURE_SIZE`、无真实显存/帧率；按用户要求后续以使用日志优化 |
+
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
