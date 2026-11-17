@@ -5,9 +5,11 @@ import '../../app/shell_view_model.dart';
 import '../../net/lifecycle_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
+import '../../net/voice_api.dart';
 import '../ai_config/ai_config_panel.dart';
 import '../diagnostics/module_test_panel.dart';
 import '../lifecycle/backup_quota_screen.dart';
+import '../voice/voice_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.model, required this.onBack});
@@ -207,6 +209,30 @@ class SettingsScreen extends StatelessWidget {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => AiConfigPanel(load: load),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('open-voice-profile'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.graphic_eq_outlined),
+              title: const Text('语音音色'),
+              subtitle: const Text('只读查看某 AI 的音色档案；需显式输入 AI 档案 id，不代表可用或已授权'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                Future<VoiceProfileView> Function(String aiId)? loadProfile;
+                if (connection != null) {
+                  final api = VoiceApi(connection);
+                  loadProfile = (aiId) => api.readProfile(aiId);
+                }
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => VoiceScreen(loadProfile: loadProfile),
                   ),
                 );
               },
