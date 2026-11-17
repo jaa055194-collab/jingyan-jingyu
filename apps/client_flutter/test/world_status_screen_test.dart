@@ -103,6 +103,39 @@ void main() {
     expect(find.text('已读取'), findsOneWidget);
   });
 
+  testWidgets(
+    'help copy states explicit spaceId, safe metadata, unknown!=error',
+    (tester) async {
+      await _pump(tester, (spaceId) async => _snapshot());
+      expect(find.byKey(const Key('world-help')), findsOneWidget);
+      expect(find.textContaining('需显式填写空间标识'), findsOneWidget);
+      expect(find.textContaining('不做 3D 渲染'), findsOneWidget);
+      expect(find.textContaining('密钥'), findsOneWidget);
+      expect(find.textContaining('未知≠错误'), findsWidgets);
+    },
+  );
+
+  testWidgets('explicit-spaceId hint appears empty and clears once typed', (
+    tester,
+  ) async {
+    await _pump(tester, (spaceId) async => _snapshot());
+    final hint = find.byKey(const Key('world-space-unconfigured'));
+    expect(hint, findsOneWidget);
+    expect(find.textContaining('未填写空间标识'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('world-space-id')), 'home');
+    await tester.pump();
+    expect(hint, findsNothing);
+  });
+
+  testWidgets('unknown copy distinguishes unknown from error/config', (
+    tester,
+  ) async {
+    await _pump(tester, null);
+    expect(find.byKey(const Key('world-status-unknown')), findsOneWidget);
+    expect(find.textContaining('未知≠错误'), findsWidgets);
+    expect(find.textContaining('未知不代表已配置，也不代表未配置'), findsOneWidget);
+  });
+
   testWidgets('settings exposes one world status entry and opens the screen', (
     tester,
   ) async {

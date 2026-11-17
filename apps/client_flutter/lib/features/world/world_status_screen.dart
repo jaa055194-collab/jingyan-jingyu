@@ -146,11 +146,18 @@ class _WorldStatusScreenState extends State<WorldStatusScreen> {
   void initState() {
     super.initState();
     _space = TextEditingController(text: widget.initialSpaceId);
+    _space.addListener(_onSpaceChanged);
     _load();
+  }
+
+  void _onSpaceChanged() {
+    // Display-only rebuild so the empty/unconfigured hint tracks the field.
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _space.removeListener(_onSpaceChanged);
     _space.dispose();
     super.dispose();
   }
@@ -196,19 +203,26 @@ class _WorldStatusScreenState extends State<WorldStatusScreen> {
       padding: const EdgeInsets.all(16),
       children: [
         const Text(
-          '只读世界状态：展示宿主已返回的安全元数据；不做 3D 渲染、不读取模型字节或路径、不包含任何密钥。'
-          '未找到/无权限/未知均如实标注，未知不代表已配置。',
+          '只读世界状态：展示宿主已返回的安全元数据；不做 3D 渲染、不读取模型字节、文件路径或任何密钥。'
+          '世界布局与在场按空间查询，需显式填写空间标识；未找到/无权限/未知均如实标注，未知≠错误。',
+          key: Key('world-help'),
         ),
         const SizedBox(height: 12),
         TextField(
           key: const Key('world-space-id'),
           controller: _space,
           decoration: const InputDecoration(
-            labelText: '空间标识（可选）',
-            helperText: '世界布局与在场按空间查询；不填则无法读取这两段',
+            labelText: '空间标识（需显式填写）',
+            helperText: '留空则不读取世界布局/在场（形象仍按当前账号读取）；不填不做默认推断',
           ),
           onSubmitted: (_) => _load(),
         ),
+        if (widget.load != null && !_loading && _space.text.trim().isEmpty)
+          const Padding(
+            key: Key('world-space-unconfigured'),
+            padding: EdgeInsets.only(top: 4),
+            child: Text('未填写空间标识：布局/在场为空不读取，形象仍按当前账号读取。未知≠错误，不代表未配置。'),
+          ),
         Align(
           alignment: AlignmentDirectional.centerStart,
           child: TextButton(
@@ -229,9 +243,9 @@ class _WorldStatusScreenState extends State<WorldStatusScreen> {
             child: const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('状态未知：未连接宿主或读取失败；不会自动重试。'),
+                Text('状态未知（未知≠错误）：未连接宿主或读取失败；不会自动重试。'),
                 SizedBox(height: 4),
-                Text('未知不代表已配置，也不代表未配置。'),
+                Text('未知不代表已配置，也不代表未配置；这不是错误，也不是权限判定。'),
               ],
             ),
           ),
