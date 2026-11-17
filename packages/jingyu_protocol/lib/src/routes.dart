@@ -65,6 +65,10 @@ abstract final class Routes {
   /// Current human's explicit ownerTextOnly consent (GET/POST/DELETE), no dispatch.
   static const String ownerAiDirectConsent =
       '$prefix/ai-profiles/{aiId}/direct-conversation';
+
+  /// Current human's owner-scoped contacts list (friends/pending/blocked).
+  /// Read-only; never accepts an owner or actor from the request.
+  static const String friends = '$prefix/friends';
   static const String friendState = '$prefix/friends/{accountId}';
   static const String friendRequest = '$prefix/friends/{accountId}/requests';
   static const String friendAccept = '$prefix/friends/{accountId}/accept';

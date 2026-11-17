@@ -55,6 +55,16 @@ void mountFriendshipRoutes(
   FriendshipService service(AccountId actor) =>
       FriendshipService(actorId: actor, database: db, clock: clock);
 
+  router.get(Routes.friends, (request) async {
+    final actor = await principalAccountId(request);
+    if (actor == null) return unauthenticated();
+    if (request.query.isNotEmpty || request.body != null) return invalid();
+    return HostResponse.fromResult(
+      await service(actor).listContacts(),
+      (items) => [for (final item in items) item.toJson()],
+    );
+  });
+
   router.get(Routes.friendState, (request) async {
     final actor = await principalAccountId(request);
     if (actor == null) return unauthenticated();
