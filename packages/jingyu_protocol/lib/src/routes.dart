@@ -220,6 +220,9 @@ abstract final class Routes {
   /// 创建 1v1 通话（POST）。
   static const String voiceCalls = '$prefix/voice/calls';
 
+  /// 通话列表（GET）：当前账号可见通话元数据。与 [voiceCalls] 同路径，按方法区分。
+  static const String voiceCallList = '$prefix/voice/calls';
+
   /// 单通通话的状态（GET）。
   static const String voiceCall = '$prefix/voice/calls/{callId}';
 

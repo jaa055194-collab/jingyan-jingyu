@@ -46,7 +46,8 @@ class VoiceModule extends HostModule {
     final resolvedProfiles = profiles ?? InMemoryVoiceProfiles(clock: clock);
     return VoiceModule._(
       profiles: resolvedProfiles,
-      gateway: gateway ??
+      gateway:
+          gateway ??
           VoiceGateway(
             profiles: resolvedProfiles,
             tts: tts ?? const UnavailableTtsAdapter(),
@@ -121,6 +122,7 @@ class VoiceModule extends HostModule {
   void mount(Router router) {
     router.get(Routes.aiVoiceProfile, _readProfile);
     router.post(Routes.aiVoiceTicket, _issueTicket);
+    router.get(Routes.voiceCallList, _listCalls);
     router.post(Routes.voiceCalls, _createCall);
     router.get(Routes.voiceCall, _readCall);
     router.post(Routes.voiceCallAnswer, _answerCall);
@@ -149,11 +151,12 @@ class VoiceModule extends HostModule {
   // ---- 路由辅助 ----
 
   HostResponse _unauthenticated() => HostResponse.failure(
-        const Failure(FailureCode.unauthenticated, 'Authentication required'),
-      );
+    const Failure(FailureCode.unauthenticated, 'Authentication required'),
+  );
 
-  HostResponse _invalid() =>
-      HostResponse.failure(const Failure(FailureCode.invalidArgument, 'Invalid input'));
+  HostResponse _invalid() => HostResponse.failure(
+    const Failure(FailureCode.invalidArgument, 'Invalid input'),
+  );
 
   HostResponse _hidden() =>
       HostResponse.failure(const Failure(FailureCode.notFound, 'Not found'));
@@ -278,6 +281,49 @@ class VoiceModule extends HostModule {
       peerAccountId: owner.value,
     );
     return HostResponse.fromResult(result, (session) => session.toJson());
+  }
+
+  /// 只读通话列表：仅返回当前账号发起的通话元数据（存储按 peer 过滤）。
+  ///
+  /// query 仅允许 `status`/`limit`/`before`；只读，不产生任何音频/转写，
+  /// 也不做应答/结束等写操作。
+  Future<HostResponse> _listCalls(HostRequest request) async {
+    final principal = await _principal(request);
+    if (principal == null) return _unauthenticated();
+    if (!_isEmptyBody(request)) return _invalid();
+    const allowed = {'status', 'limit', 'before'};
+    if (request.query.keys.any((key) => !allowed.contains(key))) {
+      return _invalid();
+    }
+    CallState? status;
+    if (request.query.containsKey('status')) {
+      final raw = request.query['status'];
+      for (final value in CallState.values) {
+        if (value.name == raw) status = value;
+      }
+      if (status == null) return _invalid();
+    }
+    var limit = 50;
+    if (request.query.containsKey('limit')) {
+      final parsed = int.tryParse(request.query['limit'] ?? '');
+      if (parsed == null || parsed < 1 || parsed > 100) return _invalid();
+      limit = parsed;
+    }
+    DateTime? before;
+    if (request.query.containsKey('before')) {
+      before = DateTime.tryParse(request.query['before'] ?? '');
+      if (before == null) return _invalid();
+    }
+    final result = await calls.list(
+      accountId: principal.accountId,
+      status: status,
+      before: before,
+      limit: limit,
+    );
+    if (result.isErr) return HostResponse.failure(result.failureOrNull!);
+    return HostResponse.ok({
+      'calls': [for (final session in result.value) session.toJson()],
+    });
   }
 
   Future<HostResponse> _readCall(HostRequest request) async {
