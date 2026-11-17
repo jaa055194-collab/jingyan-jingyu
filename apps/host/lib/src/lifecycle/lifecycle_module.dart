@@ -91,7 +91,8 @@ class LifecycleModule extends HostModule {
   final DepartureService departure;
   final ImportSink importSink;
 
-  final Map<String, _PendingUpload> _pendingUploads = <String, _PendingUpload>{};
+  final Map<String, _PendingUpload> _pendingUploads =
+      <String, _PendingUpload>{};
   var _uploadSeq = 0;
 
   Timer? _cleanupTimer;
@@ -116,6 +117,7 @@ class LifecycleModule extends HostModule {
   @override
   void mount(Router router) {
     router.get(Routes.lifecycleQuota, _quotaState);
+    router.get(Routes.lifecycleCleanupPreview, _cleanupPreview);
     router.post(Routes.lifecycleUploadPreview, _previewUpload);
     router.post(Routes.lifecycleUploadCommit, _commitUpload);
     router.post(Routes.lifecycleExport, _exportData);
@@ -170,6 +172,25 @@ class LifecycleModule extends HostModule {
       'diskFreeBytes': disk.freeBytes,
       'diskTotalBytes': disk.totalBytes,
     });
+  }
+
+  Future<HostResponse> _cleanupPreview(HostRequest request) async {
+    if (request.query.isNotEmpty || request.body != null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'Invalid cleanup preview'),
+      );
+    }
+    try {
+      final preview = await cleanup.retentionPreview(
+        ownerAccountId: request.principal!.accountId,
+      );
+      return HostResponse.ok(preview.toJson());
+    } catch (_) {
+      // Never surface store/transport details; preview is read-only.
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'Cleanup preview unavailable'),
+      );
+    }
   }
 
   Future<HostResponse> _previewUpload(HostRequest request) async {

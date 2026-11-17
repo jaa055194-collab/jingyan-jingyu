@@ -292,6 +292,10 @@ abstract final class Routes {
   /// 离开并生成删除回执（当前账号）。
   static const String lifecycleDepartureReceipt = '$prefix/lifecycle/departure';
 
+  /// 清理策略只读预览（当前账号；将提醒/将过期对象计数，不执行删除）。
+  static const String lifecycleCleanupPreview =
+      '$prefix/lifecycle/cleanup/preview';
+
   /// Owner-only consent for report scopes and radio generation.
   static const String creativeOwnerConsent =
       '$prefix/creative/authorizations/{aiId}';

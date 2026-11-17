@@ -127,10 +127,11 @@ class InMemoryCleanupStore implements CleanupStore {
   }
 
   @override
-  Future<List<MediaPlaceholder>> placeholdersFor(String ownerAccountId) async => [
-    for (final p in _placeholders)
-      if (p.ownerAccountId == ownerAccountId) p,
-  ];
+  Future<List<MediaPlaceholder>> placeholdersFor(String ownerAccountId) async =>
+      [
+        for (final p in _placeholders)
+          if (p.ownerAccountId == ownerAccountId) p,
+      ];
 
   @override
   Future<bool> ranOn(String dayKey) async => _ranDays.contains(dayKey);
@@ -280,4 +281,70 @@ class CleanupService {
       ),
     );
   }
+
+  /// Owner-scoped read-only retention preview. Does NOT delete blobs, write
+  /// reminders or audit; real deletion stays with [run] (daily system task).
+  Future<RetentionPreview> retentionPreview({
+    required String ownerAccountId,
+    DateTime? at,
+  }) async {
+    final now = (at ?? clock.now()).toUtc();
+    final remindThreshold = ttl - reminderLead;
+    final remindSoon = <MediaKind, int>{};
+    final expiring = <MediaKind, int>{};
+    final totalHeld = <MediaKind, int>{};
+
+    for (final asset in await _store.expirableAssets()) {
+      if (!asset.blobPresent) continue;
+      if (!asset.holderMessageIds.containsKey(ownerAccountId)) continue;
+      totalHeld[asset.kind] = (totalHeld[asset.kind] ?? 0) + 1;
+      final age = now.difference(asset.createdAt.toUtc());
+      if (age >= ttl) {
+        expiring[asset.kind] = (expiring[asset.kind] ?? 0) + 1;
+      } else if (age >= remindThreshold &&
+          await _store.remindedAt(asset.id) == null) {
+        remindSoon[asset.kind] = (remindSoon[asset.kind] ?? 0) + 1;
+      }
+    }
+    return RetentionPreview(
+      dayKey: dayKey(now),
+      remindSoon: remindSoon,
+      expiring: expiring,
+      totalHeld: totalHeld,
+    );
+  }
+}
+
+/// 一个 owner 视角的保留策略预览。只读；执行仍归 [CleanupService.run]。
+class RetentionPreview {
+  const RetentionPreview({
+    required this.dayKey,
+    required this.remindSoon,
+    required this.expiring,
+    required this.totalHeld,
+  });
+
+  final String dayKey;
+
+  /// 将在提醒窗口内（≥ ttl-lead 且未提醒过）的资产计数，按类别。
+  final Map<MediaKind, int> remindSoon;
+
+  /// 已到期（≥ ttl）即将被删除 blob 的资产计数，按类别。
+  final Map<MediaKind, int> expiring;
+
+  /// 该 owner 仍是持有者、blob 仍在的全部资产计数，按类别。
+  final Map<MediaKind, int> totalHeld;
+
+  Map<String, Object?> toJson() => {
+    'dayKey': dayKey,
+    'remindSoon': {
+      for (final kind in MediaKind.values) kind.name: remindSoon[kind] ?? 0,
+    },
+    'expiring': {
+      for (final kind in MediaKind.values) kind.name: expiring[kind] ?? 0,
+    },
+    'totalHeld': {
+      for (final kind in MediaKind.values) kind.name: totalHeld[kind] ?? 0,
+    },
+  };
 }
