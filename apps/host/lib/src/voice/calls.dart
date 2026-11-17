@@ -50,26 +50,25 @@ class CallSession {
     CallState? state,
     DateTime? answeredAt,
     DateTime? endedAt,
-  }) =>
-      CallSession(
-        callId: callId,
-        aiId: aiId,
-        peerAccountId: peerAccountId,
-        state: state ?? this.state,
-        startedAt: startedAt,
-        answeredAt: answeredAt ?? this.answeredAt,
-        endedAt: endedAt ?? this.endedAt,
-      );
+  }) => CallSession(
+    callId: callId,
+    aiId: aiId,
+    peerAccountId: peerAccountId,
+    state: state ?? this.state,
+    startedAt: startedAt,
+    answeredAt: answeredAt ?? this.answeredAt,
+    endedAt: endedAt ?? this.endedAt,
+  );
 
   Map<String, Object?> toJson() => {
-        'callId': callId,
-        'aiId': aiId.value,
-        'peerAccountId': peerAccountId,
-        'state': state.name,
-        'startedAt': startedAt.toUtc().toIso8601String(),
-        if (answeredAt != null) 'answeredAt': answeredAt!.toUtc().toIso8601String(),
-        if (endedAt != null) 'endedAt': endedAt!.toUtc().toIso8601String(),
-      };
+    'callId': callId,
+    'aiId': aiId.value,
+    'peerAccountId': peerAccountId,
+    'state': state.name,
+    'startedAt': startedAt.toUtc().toIso8601String(),
+    if (answeredAt != null) 'answeredAt': answeredAt!.toUtc().toIso8601String(),
+    if (endedAt != null) 'endedAt': endedAt!.toUtc().toIso8601String(),
+  };
 }
 
 /// 被截断的一句话。`interrupted=true` 时不得计入完整发言。
@@ -87,10 +86,10 @@ class CallUtterance {
   bool get complete => !interrupted;
 
   Map<String, Object?> toJson() => {
-        'text': text,
-        'interrupted': interrupted,
-        if (marker != null) 'marker': marker,
-      };
+    'text': text,
+    'interrupted': interrupted,
+    if (marker != null) 'marker': marker,
+  };
 }
 
 /// 打断结果：三项清理是否都完成 + 是否发生截断。
@@ -112,12 +111,12 @@ class InterruptionOutcome {
   bool get clean => llmCancelled && ttsQueueEmpty && playbackStopped;
 
   Map<String, Object?> toJson() => {
-        'llmCancelled': llmCancelled,
-        'ttsQueueEmpty': ttsQueueEmpty,
-        'playbackStopped': playbackStopped,
-        'truncated': truncated,
-        'marker': marker,
-      };
+    'llmCancelled': llmCancelled,
+    'ttsQueueEmpty': ttsQueueEmpty,
+    'playbackStopped': playbackStopped,
+    'truncated': truncated,
+    'marker': marker,
+  };
 }
 
 /// 通话服务接口，登记到 [HostServices]。
@@ -134,6 +133,18 @@ abstract interface class CallService {
   Future<Result<CallSession>> end({required String callId});
 
   Future<Result<CallSession>> get({required String callId});
+
+  /// 只读列表：按 startedAt 倒序，可按账号/状态过滤、按 startedAt 游标分页。
+  ///
+  /// [accountId] 限定为该账号发起（peer）的通话——路由创建时把发起账号写入
+  /// `peer_account_id`，因此这是 owner 范围的真实过滤，且分页在过滤之后进行。
+  /// 只返回会话状态元数据（无音频/转写）。
+  Future<Result<List<CallSession>>> list({
+    String? accountId,
+    CallState? status,
+    DateTime? before,
+    int limit = 50,
+  });
 
   /// 打断当前发言：取消 LLM、清 TTS 队列、停播，并标记被截断的话。
   Future<Result<InterruptionOutcome>> interrupt({required String callId});
@@ -199,10 +210,7 @@ class InMemoryCallService implements CallService, CallRuntimeDriver {
     if (existing != null) {
       if (existing.session.aiId != ai ||
           existing.session.peerAccountId != peerAccountId) {
-        return err<CallSession>(
-          FailureCode.conflict,
-          'call_id 已用于另一通话',
-        );
+        return err<CallSession>(FailureCode.conflict, 'call_id 已用于另一通话');
       }
       return Ok<CallSession>(existing.session);
     }
@@ -265,6 +273,37 @@ class InMemoryCallService implements CallService, CallRuntimeDriver {
   }
 
   @override
+  Future<Result<List<CallSession>>> list({
+    String? accountId,
+    CallState? status,
+    DateTime? before,
+    int limit = 50,
+  }) async {
+    if (limit < 1 || limit > 100) {
+      return err<List<CallSession>>(FailureCode.invalidArgument, 'limit 非法');
+    }
+    final beforeUtc = before?.toUtc();
+    final sessions =
+        _calls.values
+            .map((runtime) => runtime.session)
+            .where(
+              (session) =>
+                  accountId == null || session.peerAccountId == accountId,
+            )
+            .where((session) => status == null || session.state == status)
+            .where(
+              (session) =>
+                  beforeUtc == null ||
+                  session.startedAt.toUtc().isBefore(beforeUtc),
+            )
+            .toList()
+          ..sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    return Ok<List<CallSession>>(
+      List<CallSession>.unmodifiable(sessions.take(limit)),
+    );
+  }
+
+  @override
   Future<Result<InterruptionOutcome>> interrupt({
     required String callId,
   }) async {
@@ -282,11 +321,7 @@ class InMemoryCallService implements CallService, CallRuntimeDriver {
     final truncated = partial != null && partial.isNotEmpty;
     if (truncated) {
       runtime.utterances.add(
-        CallUtterance(
-          text: partial,
-          interrupted: true,
-          marker: '中途被打断',
-        ),
+        CallUtterance(text: partial, interrupted: true, marker: '中途被打断'),
       );
       runtime.partialText = null;
     }

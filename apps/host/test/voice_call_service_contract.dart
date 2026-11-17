@@ -20,10 +20,7 @@ abstract class CallFixture {
 }
 
 /// 对任意 [CallService] 实现运行契约测试。
-void callServiceContract(
-  String label,
-  Future<CallFixture> Function() create,
-) {
+void callServiceContract(String label, Future<CallFixture> Function() create) {
   group(label, () {
     final ai = AiId.parse('ai1');
     late CallFixture fixture;
@@ -89,11 +86,7 @@ void callServiceContract(
     test(
       'AC-13 interrupt cancels LLM, clears TTS queue, stops playback and marks truncation',
       () async {
-        await fixture.calls.start(
-          callId: 'c4',
-          ai: ai,
-          peerAccountId: 'human',
-        );
+        await fixture.calls.start(callId: 'c4', ai: ai, peerAccountId: 'human');
         await fixture.calls.answer(callId: 'c4');
         fixture.runtime.beginAssistantTurn('c4', '这句话说到一半');
         fixture.runtime.enqueueTts('c4', 'seg-1');
@@ -128,6 +121,52 @@ void callServiceContract(
       await fixture.calls.start(callId: 'c5', ai: ai, peerAccountId: 'human');
       final result = await fixture.calls.interrupt(callId: 'c5');
       expect(result.failureOrNull?.code, FailureCode.conflict);
+    });
+
+    test(
+      'list is newest-first, filters by state and pages with before',
+      () async {
+        await fixture.calls.start(callId: 'l1', ai: ai, peerAccountId: 'human');
+        fixture.clock.advance(const Duration(seconds: 10));
+        await fixture.calls.start(callId: 'l2', ai: ai, peerAccountId: 'human');
+        fixture.clock.advance(const Duration(seconds: 10));
+        await fixture.calls.start(callId: 'l3', ai: ai, peerAccountId: 'human');
+        await fixture.calls.end(callId: 'l1');
+
+        final all = (await fixture.calls.list()).value;
+        expect(all.map((c) => c.callId).toList(), ['l3', 'l2', 'l1']);
+
+        final ended = (await fixture.calls.list(status: CallState.ended)).value;
+        expect(ended.map((c) => c.callId).toList(), ['l1']);
+
+        final newest = (await fixture.calls.list(limit: 1)).value;
+        expect(newest.single.callId, 'l3');
+
+        final older = (await fixture.calls.list(
+          before: all.first.startedAt,
+        )).value;
+        expect(older.map((c) => c.callId).toList(), ['l2', 'l1']);
+
+        final bad = await fixture.calls.list(limit: 0);
+        expect(bad.failureOrNull?.code, FailureCode.invalidArgument);
+
+        final mine = (await fixture.calls.list(accountId: 'human')).value;
+        expect(mine.map((c) => c.callId).toList(), ['l3', 'l2', 'l1']);
+        final foreign = (await fixture.calls.list(accountId: 'nope')).value;
+        expect(foreign, isEmpty);
+      },
+    );
+
+    test('list snapshots are metadata-only (no audio or transcript)', () async {
+      await fixture.calls.start(callId: 'l4', ai: ai, peerAccountId: 'human');
+      final json = (await fixture.calls.list()).value.single.toJson();
+      expect(json.keys.toSet(), {
+        'callId',
+        'aiId',
+        'peerAccountId',
+        'state',
+        'startedAt',
+      });
     });
   });
 }

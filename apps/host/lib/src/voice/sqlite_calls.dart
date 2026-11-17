@@ -45,14 +45,12 @@ class SqliteCallService implements CallService, CallRuntimeDriver {
       return err<CallSession>(FailureCode.invalidArgument, 'call_id 非法');
     }
     return database.transaction((tx) async {
-      final rows = await tx.query(
-        'SELECT * FROM voice_calls WHERE call_id=?',
-        [callId],
-      );
+      final rows = await tx.query('SELECT * FROM voice_calls WHERE call_id=?', [
+        callId,
+      ]);
       if (rows.isNotEmpty) {
         final existing = _sessionFromRow(rows.single);
-        if (existing.aiId != ai ||
-            existing.peerAccountId != peerAccountId) {
+        if (existing.aiId != ai || existing.peerAccountId != peerAccountId) {
           return err<CallSession>(FailureCode.conflict, 'call_id 已用于另一通话');
         }
         return Ok<CallSession>(existing);
@@ -60,7 +58,13 @@ class SqliteCallService implements CallService, CallRuntimeDriver {
       final now = clock.now().toUtc();
       await tx.execute(
         'INSERT INTO voice_calls(call_id,ai_id,peer_account_id,state,started_at) VALUES(?,?,?,?,?)',
-        [callId, ai.value, peerAccountId, CallState.ringing.name, now.toIso8601String()],
+        [
+          callId,
+          ai.value,
+          peerAccountId,
+          CallState.ringing.name,
+          now.toIso8601String(),
+        ],
       );
       createdCount++;
       return Ok<CallSession>(
@@ -138,6 +142,44 @@ class SqliteCallService implements CallService, CallRuntimeDriver {
       return err<CallSession>(FailureCode.notFound, '通话不存在');
     }
     return Ok<CallSession>(_sessionFromRow(rows.single));
+  }
+
+  @override
+  Future<Result<List<CallSession>>> list({
+    String? accountId,
+    CallState? status,
+    DateTime? before,
+    int limit = 50,
+  }) async {
+    if (limit < 1 || limit > 100) {
+      return err<List<CallSession>>(FailureCode.invalidArgument, 'limit 非法');
+    }
+    final conditions = <String>[];
+    final args = <Object?>[];
+    if (accountId != null) {
+      conditions.add('peer_account_id=?');
+      args.add(accountId);
+    }
+    if (status != null) {
+      conditions.add('state=?');
+      args.add(status.name);
+    }
+    if (before != null) {
+      conditions.add('started_at<?');
+      args.add(before.toUtc().toIso8601String());
+    }
+    final where = conditions.isEmpty
+        ? ''
+        : ' WHERE ${conditions.join(' AND ')}';
+    final rows = await database.query(
+      'SELECT * FROM voice_calls$where ORDER BY started_at DESC LIMIT ?',
+      [...args, limit],
+    );
+    return Ok<List<CallSession>>(
+      List<CallSession>.unmodifiable([
+        for (final row in rows) _sessionFromRow(row),
+      ]),
+    );
   }
 
   @override

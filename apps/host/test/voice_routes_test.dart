@@ -111,26 +111,33 @@ void main() {
     Object? body,
     String token = _ownerToken,
     Map<String, String> query = const {},
-  }) =>
-      pipeline.handle(
-        HostRequest(
-          method: method,
-          path: path,
-          body: body,
-          query: query,
-          headers: {'authorization': 'Bearer $token'},
-        ),
-      );
+  }) => pipeline.handle(
+    HostRequest(
+      method: method,
+      path: path,
+      body: body,
+      query: query,
+      headers: {'authorization': 'Bearer $token'},
+    ),
+  );
 
   group('auth', () {
     test('missing or invalid bearer returns 401', () async {
       expect((await call('GET', profilePath('ai1'), token: '')).status, 401);
-      expect((await call('GET', profilePath('ai1'), token: 'nope')).status, 401);
+      expect(
+        (await call('GET', profilePath('ai1'), token: 'nope')).status,
+        401,
+      );
       expect((await call('POST', ticketPath('ai1'), token: '')).status, 401);
-      expect((await call('POST', callsPath, token: 'nope', body: {
-        'callId': 'c1',
-        'aiId': 'ai1',
-      })).status, 401);
+      expect(
+        (await call(
+          'POST',
+          callsPath,
+          token: 'nope',
+          body: {'callId': 'c1', 'aiId': 'ai1'},
+        )).status,
+        401,
+      );
     });
   });
 
@@ -146,8 +153,10 @@ void main() {
     });
 
     test('foreign owner or missing AI is hidden as 404', () async {
-      expect((await call('GET', profilePath('ai1'), token: _otherToken)).status,
-          404);
+      expect(
+        (await call('GET', profilePath('ai1'), token: _otherToken)).status,
+        404,
+      );
       // other 的 AI 对 owner 不可见。
       expect((await call('GET', profilePath('ai-other'))).status, 404);
       expect((await call('GET', profilePath('missing'))).status, 404);
@@ -155,8 +164,10 @@ void main() {
 
     test('malformed AI id or body is 400', () async {
       expect((await call('GET', profilePath('bad%2Fid'))).status, 400);
-      expect((await call('GET', profilePath('ai1'), body: {'x': 1})).status,
-          400);
+      expect(
+        (await call('GET', profilePath('ai1'), body: {'x': 1})).status,
+        400,
+      );
     });
   });
 
@@ -173,13 +184,17 @@ void main() {
       );
       expect(response.encodeBody().contains(tts.vendorKey), isFalse);
 
-      expect((await call('POST', ticketPath('ai1'), token: _otherToken)).status,
-          404);
+      expect(
+        (await call('POST', ticketPath('ai1'), token: _otherToken)).status,
+        404,
+      );
     });
 
     test('unexpected body or query is 400', () async {
-      expect((await call('POST', ticketPath('ai1'), body: {'k': 1})).status,
-          400);
+      expect(
+        (await call('POST', ticketPath('ai1'), body: {'k': 1})).status,
+        400,
+      );
       expect(
         (await call('POST', ticketPath('ai1'), query: {'k': 'v'})).status,
         400,
@@ -233,18 +248,24 @@ void main() {
     });
 
     test('foreign or missing call is hidden as 404', () async {
-      await call(
-        'POST',
-        callsPath,
-        body: {'callId': 'c2', 'aiId': 'ai1'},
+      await call('POST', callsPath, body: {'callId': 'c2', 'aiId': 'ai1'});
+      expect(
+        (await call('GET', callPath('c2'), token: _otherToken)).status,
+        404,
       );
-      expect((await call('GET', callPath('c2'), token: _otherToken)).status,
-          404);
-      expect((await call('POST', '${callPath('c2')}/answer', token: _otherToken))
-          .status, 404);
+      expect(
+        (await call(
+          'POST',
+          '${callPath('c2')}/answer',
+          token: _otherToken,
+        )).status,
+        404,
+      );
       expect((await call('GET', callPath('missing'))).status, 404);
-      expect((await call('POST', '${callPath('missing')}/interrupt')).status,
-          404);
+      expect(
+        (await call('POST', '${callPath('missing')}/interrupt')).status,
+        404,
+      );
     });
 
     test('strict body and id validation returns 400', () async {
@@ -260,6 +281,101 @@ void main() {
         expect((await call('POST', callsPath, body: body)).status, 400);
       }
       expect((await call('GET', callPath('bad%2Fid'))).status, 400);
+    });
+  });
+
+  group('call list', () {
+    Future<void> seed() async {
+      await call('POST', callsPath, body: {'callId': 'm1', 'aiId': 'ai1'});
+      clock.advance(const Duration(seconds: 10));
+      await call('POST', callsPath, body: {'callId': 'm2', 'aiId': 'ai2'});
+      clock.advance(const Duration(seconds: 10));
+      await call('POST', callsPath, body: {'callId': 'm3', 'aiId': 'ai1'});
+      // 别人的通话：对 owner 不可见。
+      await call(
+        'POST',
+        callsPath,
+        token: _otherToken,
+        body: {'callId': 'o1', 'aiId': 'ai-other'},
+      );
+    }
+
+    test('returns only own call metadata, newest first', () async {
+      await seed();
+      final response = await call('GET', callsPath);
+      expect(response.status, 200);
+      final json = response.json! as Map<String, Object?>;
+      expect(json.keys.toSet(), {'calls'});
+      final list = json['calls']! as List<Object?>;
+      expect(list.map((c) => (c as Map)['callId']).toList(), [
+        'm3',
+        'm2',
+        'm1',
+      ]);
+      expect(list.every((c) => (c as Map)['callId'] != 'o1'), isTrue);
+      expect(response.encodeBody().contains('utterances'), isFalse);
+      expect(response.encodeBody().contains(tts.vendorKey), isFalse);
+    });
+
+    test('status, limit and before page the list', () async {
+      await seed();
+      await call('POST', '${callPath('m1')}/end');
+
+      final ended = await call('GET', callsPath, query: {'status': 'ended'});
+      expect(ended.status, 200);
+      expect(
+        ((ended.json! as Map)['calls']! as List)
+            .map((c) => (c as Map)['callId'])
+            .toList(),
+        ['m1'],
+      );
+
+      final newest = await call('GET', callsPath, query: {'limit': '1'});
+      expect(
+        ((newest.json! as Map)['calls']! as List)
+            .map((c) => (c as Map)['callId'])
+            .toList(),
+        ['m3'],
+      );
+
+      final first =
+          (await call('GET', callsPath, query: {'limit': '2'})).json!
+              as Map<String, Object?>;
+      final oldestOfFirstPage =
+          ((first['calls']! as List).last as Map)['startedAt'] as String;
+      final older = await call(
+        'GET',
+        callsPath,
+        query: {'before': oldestOfFirstPage},
+      );
+      // before 是严格游标：等于最旧项时间戳时该项不再返回。
+      expect(
+        ((older.json! as Map)['calls']! as List)
+            .map((c) => (c as Map)['callId'])
+            .toList(),
+        ['m1'],
+      );
+    });
+
+    test('unauthenticated, bad params and body are rejected', () async {
+      await seed();
+      expect((await call('GET', callsPath, token: '')).status, 401);
+      expect(
+        (await call('GET', callsPath, query: {'status': 'nope'})).status,
+        400,
+      );
+      expect((await call('GET', callsPath, query: {'limit': '0'})).status, 400);
+      expect(
+        (await call('GET', callsPath, query: {'limit': '101'})).status,
+        400,
+      );
+      expect((await call('GET', callsPath, query: {'limit': 'x'})).status, 400);
+      expect(
+        (await call('GET', callsPath, query: {'before': 'not-a-time'})).status,
+        400,
+      );
+      expect((await call('GET', callsPath, query: {'other': '1'})).status, 400);
+      expect((await call('GET', callsPath, body: {'x': 1})).status, 400);
     });
   });
 
