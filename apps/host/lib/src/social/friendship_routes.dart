@@ -65,6 +65,26 @@ void mountFriendshipRoutes(
     );
   });
 
+  router.get(Routes.notifications, (request) async {
+    final actor = await principalAccountId(request);
+    if (actor == null) return unauthenticated();
+    if (request.body != null) return invalid();
+    const allowed = {'limit'};
+    if (request.query.keys.any((key) => !allowed.contains(key))) {
+      return invalid();
+    }
+    var limit = 50;
+    final rawLimit = request.query['limit'];
+    if (rawLimit != null) {
+      final parsed = int.tryParse(rawLimit);
+      if (parsed == null) return invalid();
+      limit = parsed;
+    }
+    return HostResponse.fromResult(
+      await service(actor).listNotifications(limit: limit),
+    );
+  });
+
   router.get(Routes.friendState, (request) async {
     final actor = await principalAccountId(request);
     if (actor == null) return unauthenticated();
