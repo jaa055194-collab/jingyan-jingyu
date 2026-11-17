@@ -42,4 +42,50 @@ void main() {
       expect(script.toLowerCase(), isNot(contains('model3')));
     });
   });
+
+  group('live2d webgl renderer adapter', () {
+    test('renderer js exists and defines the Live2DRenderer surface', () {
+      expect(File('web/live2d_renderer_webgl.js').existsSync(), isTrue);
+      final js = _read('web/live2d_renderer_webgl.js');
+      expect(js, contains('window.Live2DRenderer'));
+      for (final member in [
+        'prepare',
+        'draw',
+        'setExpression',
+        'setMotion',
+        'dispose',
+      ]) {
+        expect(js, contains(member), reason: 'missing renderer member: $member');
+      }
+      // The adapter consumes PurismCore drawable output.
+      expect(js, contains('drawables'));
+      expect(js, contains('vertexPositions'));
+    });
+
+    test('renderer requests WebGL2 first and falls back to WebGL1', () {
+      final js = _read('web/live2d_renderer_webgl.js');
+      expect(js, contains("getContext('webgl2'"));
+      expect(js, contains("getContext('webgl'"));
+    });
+
+    test('html includes the renderer script before live2d_viewer.js', () {
+      final html = _read('web/live2d_viewer.html');
+      final rendererIndex = html.indexOf('src="live2d_renderer_webgl.js"');
+      final viewerIndex = html.indexOf('src="live2d_viewer.js"');
+      expect(rendererIndex, isNonNegative,
+          reason: 'renderer script tag is missing from the html');
+      expect(viewerIndex, isNonNegative,
+          reason: 'viewer script tag is missing from the html');
+      expect(rendererIndex, lessThan(viewerIndex),
+          reason: 'renderer must load before live2d_viewer.js');
+    });
+
+    test('renderer carries no remote model urls or model bytes', () {
+      final js = _read('web/live2d_renderer_webgl.js');
+      expect(js, isNot(contains('http://')));
+      expect(js, isNot(contains('https://')));
+      expect(js.toLowerCase(), isNot(contains('.moc3')));
+      expect(js, isNot(contains('fromArrayBuffer')));
+    });
+  });
 }
