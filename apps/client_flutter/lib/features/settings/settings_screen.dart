@@ -203,14 +203,29 @@ class SettingsScreen extends StatelessWidget {
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 final runtime = model;
-                final connected =
-                    runtime is ClientRuntime && runtime.connection != null;
-                final load = connected
-                    ? () => _loadAiConfigSnapshot(runtime)
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                final owner = model.connectedAccountId;
+                final owned = <String>[
+                  for (final ai in model.ownAiAccounts)
+                    if (!ai.disabled) ai.accountId,
+                ];
+                final canLoad = connection != null && owner != null;
+                final loadForAccount = canLoad
+                    ? (String aiAccountId) => AiConfigPanel.resolveAndLoad(
+                        OwnerAiDirectApi(connection),
+                        OwnerAiReadinessApi(connection),
+                        aiAccountId: aiAccountId,
+                        expectedOwnerAccountId: owner,
+                      )
                     : null;
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) => AiConfigPanel(load: load),
+                    builder: (_) => AiConfigPanel(
+                      loadForAccount: loadForAccount,
+                      ownedAiAccountIds: canLoad ? owned : const <String>[],
+                    ),
                   ),
                 );
               },
@@ -712,49 +727,6 @@ class _CreateOwnAiDialogState extends State<_CreateOwnAiDialog> {
       );
     },
   );
-}
-
-/// Read-only run-config snapshot. Identity is assembled from values the runtime
-/// already resolved (profile id, AI account, connected owner); no registration
-/// or other write is performed.
-Future<AiConfigSnapshot> _loadAiConfigSnapshot(ShellViewModel model) async {
-  final connection = model is ClientRuntime ? model.connection : null;
-  if (connection == null) {
-    return const AiConfigSnapshot([
-      AiConfigEntry('AI 档案', ConfigurationReadStatus.ownershipUnknown, [
-        '未连接宿主；未知不代表未配置，也不代表已配置',
-      ]),
-    ]);
-  }
-  final owner = model.connectedAccountId;
-  OwnedAiProfileIdentity? identity;
-  for (final ai in model.ownAiAccounts) {
-    if (ai.disabled) continue;
-    final profile = model.ownAiDirectState(ai.accountId).profileId;
-    if (owner == null || profile == null || profile.isEmpty) continue;
-    try {
-      identity = OwnedAiProfileIdentity.fromJson(
-        <String, Object?>{
-          'profileId': profile,
-          'accountId': ai.accountId,
-          'ownerAccountId': owner,
-        },
-        expectedAccountId: ai.accountId,
-        expectedOwnerAccountId: owner,
-      );
-      break;
-    } on FormatException {
-      continue;
-    }
-  }
-  if (identity == null) {
-    return const AiConfigSnapshot([
-      AiConfigEntry('AI 档案', ConfigurationReadStatus.ownershipUnknown, [
-        '尚未确认可体检的 AI 档案；请先在“我的 AI”刷新并确认档案',
-      ]),
-    ]);
-  }
-  return AiConfigPanel.loadFrom(OwnerAiReadinessApi(connection), identity);
 }
 
 class UnlockScreen extends StatefulWidget {

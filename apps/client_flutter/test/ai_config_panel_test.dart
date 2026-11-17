@@ -93,4 +93,67 @@ void main() {
     // The test model is not the runtime, so there is no host connection.
     expect(find.byKey(const Key('ai-config-unknown')), findsOneWidget);
   });
+
+  testWidgets('selects an owned AI and renders its readiness snapshot', (
+    tester,
+  ) async {
+    final loaded = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiConfigPanel(
+          ownedAiAccountIds: const ['ai-one', 'ai-two'],
+          loadForAccount: (id) async {
+            loaded.add(id);
+            return _snapshot();
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(loaded, ['ai-one']); // first owned AI auto-selected
+    expect(find.textContaining('人格 · 已配置'), findsOneWidget);
+    expect(find.byKey(const Key('ai-config-unknown')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('ai-config-select')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ai-two').last);
+    await tester.pumpAndSettle();
+    expect(loaded, ['ai-one', 'ai-two']);
+  });
+
+  testWidgets('empty owned AI list stays honest unknown', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiConfigPanel(
+          ownedAiAccountIds: const [],
+          loadForAccount: (_) async {
+            calls++;
+            return _snapshot();
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('ai-config-unknown')), findsOneWidget);
+    expect(calls, 0);
+  });
+
+  testWidgets(
+    'account loader failure becomes unknown without leaking details',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AiConfigPanel(
+            ownedAiAccountIds: const ['ai-one'],
+            loadForAccount: (_) async =>
+                throw const FormatException('secret-detail-xyz'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('ai-config-unknown')), findsOneWidget);
+      expect(find.textContaining('secret-detail-xyz'), findsNothing);
+    },
+  );
 }
