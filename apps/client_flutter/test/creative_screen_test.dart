@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:client_flutter/features/creative/creative_screen.dart';
 import 'package:client_flutter/net/creative_api.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -56,9 +58,17 @@ void main() {
     (tester) async {
       await tester.pumpWidget(const MaterialApp(home: CreativeScreen()));
       await tester.pumpAndSettle();
+      expect(find.byKey(const Key('creative-unbound')), findsOneWidget);
       expect(find.textContaining('创作内容需要接入宿主连接后显示'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing);
       expect(find.byType(ListTile), findsNothing);
+      // Unbound has no loaders: the explicit refresh action is disabled.
+      expect(
+        tester
+            .widget<TextButton>(find.byKey(const Key('creative-refresh')))
+            .onPressed,
+        isNull,
+      );
     },
   );
 
@@ -105,7 +115,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('暂无周报或年报。'), findsOneWidget);
     expect(find.text('暂无电台期次。'), findsOneWidget);
+    expect(find.byKey(const Key('creative-empty-reports')), findsOneWidget);
+    expect(find.byKey(const Key('creative-empty-radio')), findsOneWidget);
     expect(find.textContaining('创作内容需要接入宿主连接后显示'), findsNothing);
+    expect(find.byKey(const Key('creative-retry')), findsNothing);
   });
 
   testWidgets(
@@ -123,6 +136,78 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining('读取失败，请稍后重试；不会自动重试'), findsOneWidget);
       expect(find.textContaining('PRIVATE-UPSTREAM-SENTINEL'), findsNothing);
+      // Failure offers an explicit manual retry only; no auto-retry loop.
+      expect(find.byKey(const Key('creative-retry')), findsOneWidget);
     },
   );
+
+  testWidgets('refresh action re-runs the loader with honest loading state', (
+    tester,
+  ) async {
+    var reportCalls = 0, radioCalls = 0;
+    final gate = Completer<void>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CreativeScreen(
+          loadReports: () async {
+            reportCalls++;
+            if (reportCalls > 1) await gate.future;
+            return [_summary(report: _report())];
+          },
+          loadRadio: () async {
+            radioCalls++;
+            return [_episode()];
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(reportCalls, 1);
+    expect(radioCalls, 1);
+
+    await tester.tap(find.byKey(const Key('creative-refresh')));
+    await tester.pump();
+    // Loading indicator while the second load is still pending.
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(reportCalls, 2);
+
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text('周报 · 2026-11-15'), findsOneWidget);
+    // Exactly the manual refresh; no automatic repeated loads.
+    expect(reportCalls, 2);
+    expect(radioCalls, 2);
+  });
+
+  testWidgets('failed load retries only on explicit manual action', (
+    tester,
+  ) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CreativeScreen(
+          loadReports: () async {
+            calls++;
+            if (calls == 1) throw StateError('PRIVATE');
+            return [_summary(report: _report())];
+          },
+          loadRadio: () async => [_episode()],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // One initial attempt, then a stable failure state (no auto retries).
+    expect(calls, 1);
+    expect(find.byKey(const Key('creative-retry')), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(calls, 1);
+    expect(find.textContaining('PRIVATE'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('creative-retry')));
+    await tester.pumpAndSettle();
+    expect(calls, 2);
+    expect(find.text('周报 · 2026-11-15'), findsOneWidget);
+    expect(find.byKey(const Key('creative-retry')), findsNothing);
+  });
 }
