@@ -105,28 +105,72 @@ class _CreativeScreenState extends State<CreativeScreen> {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final bound = widget.loadReports != null && widget.loadRadio != null;
     return Scaffold(
       body: SafeArea(
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _unbound
-            ? _message(
-                icon: Icons.photo_library_outlined,
-                title: '动态',
-                detail: '创作内容需要接入宿主连接后显示；宿主读取接口已就绪。',
-                text: text,
-              )
-            : _failed
-            ? _message(
-                icon: Icons.cloud_off_outlined,
-                title: '动态',
-                detail: '读取失败，请稍后重试；不会自动重试。',
-                text: text,
-              )
-            : _content(text),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _loading ? '正在读取宿主创作数据…' : '只读展示；可下拉或点右侧刷新重新读取（无自动重试）。',
+                      style: text.bodySmall,
+                    ),
+                  ),
+                  TextButton.icon(
+                    key: const Key('creative-refresh'),
+                    onPressed: _loading || !bound ? null : _load,
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('刷新'),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _unbound
+                  ? _message(
+                      key: const Key('creative-unbound'),
+                      icon: Icons.photo_library_outlined,
+                      title: '动态',
+                      detail: '创作内容需要接入宿主连接后显示；宿主读取接口已就绪。',
+                      text: text,
+                    )
+                  : _failed
+                  ? _failedView(text)
+                  : _content(text),
+            ),
+          ],
+        ),
       ),
     );
   }
+
+  Widget _failedView(TextTheme text) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.cloud_off_outlined, size: 40),
+          const SizedBox(height: 16),
+          Text('动态', style: text.titleMedium),
+          const SizedBox(height: 8),
+          const Text('读取失败，请稍后重试；不会自动重试。', textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          FilledButton.tonal(
+            key: const Key('creative-retry'),
+            onPressed: _load,
+            child: const Text('手动重试'),
+          ),
+        ],
+      ),
+    ),
+  );
 
   Widget _content(TextTheme text) {
     final reports = _reports ?? const <CreativeReportSummary>[];
@@ -143,7 +187,7 @@ class _CreativeScreenState extends State<CreativeScreen> {
           ),
           _sectionTitle('关系周报 / 年报', text),
           if (reports.isEmpty)
-            _emptyRow('暂无周报或年报。')
+            _emptyRow('暂无周报或年报。', const Key('creative-empty-reports'))
           else
             for (final summary in reports)
               ListTile(
@@ -161,7 +205,7 @@ class _CreativeScreenState extends State<CreativeScreen> {
           const Divider(),
           _sectionTitle('深夜电台', text),
           if (radio.isEmpty)
-            _emptyRow('暂无电台期次。')
+            _emptyRow('暂无电台期次。', const Key('creative-empty-radio'))
           else
             for (final episode in radio)
               ListTile(
@@ -196,17 +240,20 @@ class _CreativeScreenState extends State<CreativeScreen> {
     child: Text(title, style: text.titleSmall),
   );
 
-  Widget _emptyRow(String message) => Padding(
+  Widget _emptyRow(String message, Key key) => Padding(
+    key: key,
     padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
     child: Text(message),
   );
 
   Widget _message({
+    Key? key,
     required IconData icon,
     required String title,
     required String detail,
     required TextTheme text,
   }) => Center(
+    key: key,
     child: Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
