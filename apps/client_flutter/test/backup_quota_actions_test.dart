@@ -60,6 +60,14 @@ class _FakeApi extends LifecycleApi {
   Object? importError;
   int exportCalls = 0;
   int importCalls = 0;
+  int previewCalls = 0;
+  Object? previewError;
+  LifecycleCleanupPreview preview = LifecycleCleanupPreview.fromJson({
+    'dayKey': '2026-03-01',
+    'remindSoon': {'video': 1, 'voice': 0},
+    'expiring': {'video': 2, 'voice': 1},
+    'totalHeld': {'video': 3, 'voice': 4},
+  });
   LifecycleImportMode? lastMode;
   Map<String, String>? lastFiles;
 
@@ -72,6 +80,16 @@ class _FakeApi extends LifecycleApi {
   Future<LifecycleDepartureSurvey> readDepartureSurvey({
     bool retryAuthentication = true,
   }) async => _survey();
+
+  @override
+  Future<LifecycleCleanupPreview> readCleanupPreview({
+    bool retryAuthentication = true,
+  }) async {
+    previewCalls++;
+    final error = previewError;
+    if (error != null) throw error;
+    return preview;
+  }
 
   @override
   Future<LifecycleExportBundle> exportBundle({
@@ -101,6 +119,15 @@ class _FakeApi extends LifecycleApi {
 void main() {
   Future<void> pump(WidgetTester tester, LifecycleApi api) async {
     await tester.pumpWidget(MaterialApp(home: BackupQuotaScreen(api: api)));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> ensureVisible(WidgetTester tester, String key) async {
+    await tester.scrollUntilVisible(
+      find.byKey(Key(key)),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.pumpAndSettle();
   }
 
@@ -155,15 +182,15 @@ void main() {
     expect(api.importCalls, 0);
   });
 
-  testWidgets('cleanup has no host route: disabled and gap reported', (
+  testWidgets('cleanup stays non-destructive: no execute button remains', (
     tester,
   ) async {
     await pump(tester, _FakeApi());
-    final cleanup = tester.widget<FilledButton>(
-      find.byKey(const Key('cleanup-lifecycle')),
-    );
-    expect(cleanup.onPressed, isNull);
-    expect(find.textContaining('宿主未提供清理 HTTP 接口'), findsOneWidget);
+    // The old disabled "cleanup" button is replaced by a read-only preview.
+    expect(find.byKey(const Key('cleanup-lifecycle')), findsNothing);
+    await ensureVisible(tester, 'cleanup-execution-gap');
+    expect(find.textContaining('执行尚未提供'), findsOneWidget);
+    expect(find.textContaining('不会删除任何数据'), findsOneWidget);
   });
 
   testWidgets('export failure is safe and shows no secret details', (
@@ -195,5 +222,78 @@ void main() {
       isNull,
     );
     expect(find.textContaining('未接线宿主连接'), findsOneWidget);
+  });
+
+  testWidgets('cleanup section shows read-only preview with execution gap', (
+    tester,
+  ) async {
+    final api = _FakeApi();
+    await pump(tester, api);
+    await ensureVisible(tester, 'cleanup-execution-gap');
+    expect(api.previewCalls, 1);
+    expect(find.textContaining('运行日：2026-03-01'), findsOneWidget);
+    expect(find.textContaining('视频：1'), findsOneWidget);
+    expect(find.textContaining('视频：2'), findsOneWidget);
+    expect(find.textContaining('视频：3'), findsOneWidget);
+    expect(find.textContaining('语音：1'), findsOneWidget);
+    expect(find.textContaining('语音：4'), findsOneWidget);
+    expect(find.textContaining('执行尚未提供'), findsOneWidget);
+    // Non-destructive: cleanup is a preview, never an execution button.
+    expect(find.byKey(const Key('cleanup-lifecycle')), findsNothing);
+    expect(find.byKey(const Key('cleanup-preview-refresh')), findsOneWidget);
+  });
+
+  testWidgets('cleanup preview refresh reloads counts explicitly', (
+    tester,
+  ) async {
+    final api = _FakeApi();
+    await pump(tester, api);
+    api.preview = LifecycleCleanupPreview.fromJson({
+      'dayKey': '2026-03-02',
+      'remindSoon': {'video': 0, 'voice': 2},
+      'expiring': {'video': 0, 'voice': 0},
+      'totalHeld': {'video': 1, 'voice': 2},
+    });
+    await ensureVisible(tester, 'cleanup-preview-refresh');
+    await tester.tap(find.byKey(const Key('cleanup-preview-refresh')));
+    await tester.pumpAndSettle();
+    expect(api.previewCalls, 2);
+    expect(find.textContaining('运行日：2026-03-02'), findsOneWidget);
+    expect(find.textContaining('语音：2'), findsWidgets);
+    expect(find.textContaining('视频：0'), findsWidgets);
+  });
+
+  testWidgets('cleanup preview failure is honest without details', (
+    tester,
+  ) async {
+    final api = _FakeApi()
+      ..previewError = const HostRequestException(
+        Failure(FailureCode.unavailable, 'secret-cleanup-xyz'),
+      );
+    await pump(tester, api);
+    await ensureVisible(tester, 'cleanup-preview-unknown');
+    expect(find.textContaining('清理预览读取失败'), findsOneWidget);
+    expect(find.textContaining('secret-cleanup-xyz'), findsNothing);
+    // No automatic retry: preview stays unknown until an explicit refresh.
+    expect(api.previewCalls, 1);
+    await tester.ensureVisible(
+      find.byKey(const Key('cleanup-preview-refresh')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('cleanup-preview-refresh')));
+    await tester.pumpAndSettle();
+    expect(api.previewCalls, 2);
+    expect(find.textContaining('执行尚未提供'), findsOneWidget);
+  });
+
+  testWidgets('no api keeps the honest cleanup gap text', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: BackupQuotaScreen(loadQuota: null, loadSurvey: null),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('cleanup-execution-gap')).evaluate().length, 1);
+    expect(find.textContaining('宿主未提供清理 HTTP 接口'), findsOneWidget);
   });
 }

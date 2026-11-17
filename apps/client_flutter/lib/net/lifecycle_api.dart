@@ -50,6 +50,61 @@ class LifecycleQuotaStatus {
   }
 }
 
+/// Read-only retention cleanup preview from the host (M12 task-72 route).
+///
+/// Counts media the caller still holds that retention policy will remind about
+/// or delete. This is **not** an execution and never deletes anything.
+class LifecycleCleanupPreview {
+  const LifecycleCleanupPreview._({
+    required this.dayKey,
+    required this.remindSoon,
+    required this.expiring,
+    required this.totalHeld,
+  });
+
+  final String dayKey;
+  final Map<String, int> remindSoon;
+  final Map<String, int> expiring;
+  final Map<String, int> totalHeld;
+
+  static const Set<String> _kinds = {'video', 'voice'};
+
+  static Map<String, int> _counts(Object? value) {
+    if (value is! Map ||
+        value.keys.any((key) => key is! String || !_kinds.contains(key))) {
+      throw const FormatException();
+    }
+    final result = <String, int>{};
+    for (final kind in _kinds) {
+      final count = value[kind];
+      if (count is! int || count < 0) throw const FormatException();
+      result[kind] = count;
+    }
+    return result;
+  }
+
+  factory LifecycleCleanupPreview.fromJson(Map<String, Object?> json) {
+    const keys = {'dayKey', 'remindSoon', 'expiring', 'totalHeld'};
+    final dayKey = json['dayKey'];
+    try {
+      if (json.length != keys.length ||
+          json.keys.any((key) => !keys.contains(key)) ||
+          dayKey is! String ||
+          !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(dayKey)) {
+        throw const FormatException();
+      }
+      return LifecycleCleanupPreview._(
+        dayKey: dayKey,
+        remindSoon: _counts(json['remindSoon']),
+        expiring: _counts(json['expiring']),
+        totalHeld: _counts(json['totalHeld']),
+      );
+    } on FormatException {
+      throw const FormatException('Lifecycle cleanup preview invalid');
+    }
+  }
+}
+
 /// Read-only current-account departure object counts. Not a deletion receipt.
 class LifecycleDepartureSurvey {
   LifecycleDepartureSurvey._({
@@ -290,6 +345,16 @@ class LifecycleApi {
     Routes.lifecycleDepartureSurvey,
     retryAuthentication,
     LifecycleDepartureSurvey.fromJson,
+  );
+
+  /// Read-only retention cleanup preview (what a cleanup WOULD remove).
+  /// Never executes a cleanup and never deletes anything.
+  Future<LifecycleCleanupPreview> readCleanupPreview({
+    bool retryAuthentication = true,
+  }) => _read(
+    Routes.lifecycleCleanupPreview,
+    retryAuthentication,
+    LifecycleCleanupPreview.fromJson,
   );
 
   /// Explicit export (POST) of the current account bundle. Not a mutation.
