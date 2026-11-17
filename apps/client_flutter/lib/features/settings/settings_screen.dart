@@ -7,11 +7,13 @@ import '../../net/ai_config_write_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
 import '../../net/voice_api.dart';
+import '../../net/voice_call_api.dart';
 import '../../net/world_api.dart';
 import '../ai_config/ai_config_editor.dart';
 import '../ai_config/ai_config_panel.dart';
 import '../diagnostics/module_test_panel.dart';
 import '../lifecycle/backup_quota_screen.dart';
+import '../voice/voice_call_list_screen.dart';
 import '../voice/voice_screen.dart';
 import '../world/world_status_screen.dart';
 
@@ -230,6 +232,42 @@ class SettingsScreen extends StatelessWidget {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => VoiceScreen(loadProfile: loadProfile),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('open-voice-call-list'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.call_outlined),
+              title: const Text('语音通话列表'),
+              subtitle: const Text(
+                '只读列出当前账号发起的通话元数据（状态/AI/对端/时间戳）。'
+                '不接听、不结束、不播放音频，也不显示转写正文',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                VoiceCallLister? listCalls;
+                if (connection != null) {
+                  final api = VoiceCallApi(connection);
+                  listCalls =
+                      ({
+                        String? status,
+                        required int limit,
+                        DateTime? before,
+                      }) => api.listCalls(
+                        status: status,
+                        limit: limit,
+                        before: before,
+                      );
+                }
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => VoiceCallListScreen(listCalls: listCalls),
                   ),
                 );
               },

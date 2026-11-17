@@ -137,4 +137,62 @@ class VoiceCallApi {
       );
     }
   }
+
+  /// Owner-scoped call list: `GET /voice/calls` (same path as POST create).
+  ///
+  /// Contract (host PR #118): query is exactly `status`/`limit`/`before`; the
+  /// response is `{calls:[...]}` of metadata-only snapshots (no audio, no
+  /// transcript); owner scope and filtering happen on the host. [before] pages
+  /// older items (exclusive cursor = oldest `startedAt` of the previous page).
+  Future<List<VoiceCallView>> listCalls({
+    String? status,
+    int limit = 50,
+    DateTime? before,
+    bool retryAuthentication = true,
+  }) async {
+    if (limit < 1 || limit > 100) {
+      throw const FormatException('通话列表分页参数无效');
+    }
+    const states = {'ringing', 'active', 'missed', 'ended'};
+    final query = <String, String>{'limit': '$limit'};
+    if (status != null) {
+      if (!states.contains(status)) throw const FormatException('状态参数无效');
+      query['status'] = status;
+    }
+    if (before != null) query['before'] = before.toUtc().toIso8601String();
+    try {
+      final json = await connection.request(
+        'GET',
+        // Same path as POST create; host #118 mounts GET on Routes.voiceCalls
+        // (its `voiceCallList` alias carries the identical value).
+        Routes.voiceCalls,
+        query: query,
+        retryAuthentication: retryAuthentication,
+      );
+      if (json.keys.any((key) => key != 'calls') || json['calls'] is! List) {
+        throw const FormatException();
+      }
+      return [
+        for (final item in json['calls']! as List)
+          if (item is Map<String, dynamic>)
+            VoiceCallView.fromJson(item.cast<String, Object?>())
+          else
+            throw const FormatException(),
+      ];
+    } on FormatException {
+      throw const FormatException('通话列表响应无效');
+    } on SocketException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on HttpException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on TimeoutException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    }
+  }
 }
