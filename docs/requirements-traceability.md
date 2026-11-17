@@ -127,4 +127,6 @@
 | REQ-058 | FR-38/39 修订；AC-25/26 | 取消双端形象一致，形象选择按设备隔离 | 已批准 | 同一 owner 手机/电脑可各自拥有不同 active 模型；跨设备/跨 owner 读取或启用返回 notFound；注册体只收 kind/modelId；迁移906把已有记录归到 legacy 设备并保留 revision/active | world avatar registry/HTTP；迁移906 | world_routes/world_sqlite/world_test/world_module 共63项通过；host assembly 2项；host analyze clean | 已实现设备级隔离；AvatarProfile 不暴露 deviceId；旧记录需各设备重新登记；真实设备渲染/热切换仍未交付 |
 | REQ-059 | FR-35/FR-39；CR-13；02-assets | 基于 feiyu-room-template 方向的按对话建屋生成器 | 已批准 | 五个预设；brief→RoomLayout 确定性布局数据、无下载/可执行字段；未知风格拒绝；空房间用默认；自由文本→brief 容错 | client_kit `FeiyuRoomGenerator`/`briefFromConversation` | room_generator_test 19项；先 RED（缺类）后 GREEN；client kit 全套235项、analyze clean | 仅布局数据生成；未接宿主 space_layout 持久化、未接模型调用/对话管道、无 WebView 渲染 |
 
+| REQ-060 | FR-39；设备本地 profile 存储 | 设备侧形象档案与当前选择的记录契约 | 已批准 | 保存/列表（按 modelId 排序）；同 id 需 revision 严格递增否则拒绝；激活不存在模型抛错；删除清空激活；JSON 快照导出/导入原子且拒绝重复/未知字段/悬空激活；快照不含模型字节或绝对路径 | client_kit `Live2DModelStore` + `Live2DProfile.toJson` | live2d_store_test 8项 + profile 38项；client kit 全套243项、analyze clean | 纯内存契约与快照；真实文件持久化/加密/设备 UI 未接；未渲染 |
+
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。

@@ -23,6 +23,14 @@ class Live2DParamMap {
   final Map<String, String> expressions;
   final Map<String, String> motions;
 
+  Map<String, Object?> toJson() => {
+    'mouthOpen': mouthOpen,
+    'blinkLeft': blinkLeft,
+    'blinkRight': blinkRight,
+    'expressions': expressions,
+    'motions': motions,
+  };
+
   factory Live2DParamMap.fromJson(Object? value) {
     if (value is! Map<String, Object?>) {
       throw const FormatException('paramMap must be an object');
@@ -90,6 +98,14 @@ class Live2DProfile {
   final int profileRev;
   final String modelFile;
   final Live2DParamMap paramMap;
+
+  Map<String, Object?> toJson() => {
+    'schemaVersion': 1,
+    'modelId': modelId,
+    'profileRev': profileRev,
+    'modelFile': modelFile,
+    'paramMap': paramMap.toJson(),
+  };
 
   /// Parses profile metadata without touching the referenced file system path.
   factory Live2DProfile.fromJson(Map<String, Object?> json) {

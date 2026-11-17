@@ -28,4 +28,5 @@
 - [x] Add a pure-Dart safe importer (`validateLive2DPackage`) with archive/JSON/MOC3/PNG/texture-budget checks and validate the supplied package locally.
 - [x] Make avatar selection per device (cancel dual-end consistency; phone/PC independent) with migration 906 and cross-device isolation tests.
 - [x] Add `FeiyuRoomGenerator` + `briefFromConversation` (five presets, deterministic layout data) in the client kit.
+- [x] Add `Live2DModelStore` device-local profile/active records with revision checks and JSON snapshot import/export (no model bytes).
 - [ ] Add device-persisted profiles, a WebView renderer/bridge, hot-switch and verified VRM fallback; validate Snapdragon 888 30–60fps, GPU limits and memory after the overall shell lands.
