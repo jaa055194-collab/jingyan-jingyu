@@ -9,6 +9,9 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(home: Scaffold(body: InboxScreen())),
     );
-    expect(find.text('宿主尚未提供收件箱接口；邀请与通知在接入后显示。'), findsOneWidget);
+    // Post PR#101 copy: explicitly lists the current gap and what will appear
+    // once the host route is wired.
+    expect(find.text('当前缺口：宿主未提供收件箱/通知路由。'), findsOneWidget);
+    expect(find.text('接入后此处将显示邀请与通知；数据来自宿主实时读取。'), findsOneWidget);
   });
 }

@@ -135,7 +135,11 @@ class TestShellModel extends ShellViewModel {
   @override
   bool get canMentionAi => false;
   @override
-  Future<void> sendMentionedMessage({required String conversationId,required String expectedDraft,required String aiAccountId}) async {}
+  Future<void> sendMentionedMessage({
+    required String conversationId,
+    required String expectedDraft,
+    required String aiAccountId,
+  }) async {}
 
   @override
   Future<void> sendMessage() async {
@@ -808,27 +812,20 @@ void main() {
       // host exposes no friend-list route yet, so no contacts are fabricated.
       await tester.tap(find.text('联系人'));
       await tester.pumpAndSettle();
-      expect(
-        find.text('宿主未提供好友列表路由；接入好友列表后可在此显示。'),
-        findsOneWidget,
-      );
+      expect(find.text('宿主未提供好友列表路由；接入好友列表后可在此显示。'), findsOneWidget);
 
-      // Inbox is likewise a real module surface with an honest unavailable state.
+      // Inbox is likewise a real module surface with an honest unavailable state
+      // (post PR#101 copy): it lists the current gap and what appears once wired.
       await tester.tap(find.text('收件箱'));
       await tester.pumpAndSettle();
-      expect(
-        find.text('宿主尚未提供收件箱接口；邀请与通知在接入后显示。'),
-        findsOneWidget,
-      );
+      expect(find.text('当前缺口：宿主未提供收件箱/通知路由。'), findsOneWidget);
+      expect(find.text('接入后此处将显示邀请与通知；数据来自宿主实时读取。'), findsOneWidget);
 
       // 动态 is now the CreativeScreen module surface; with no host connection
       // wired it reports an honest unbound state instead of inventing content.
       await tester.tap(find.text('动态'));
       await tester.pumpAndSettle();
-      expect(
-        find.text('创作内容需要接入宿主连接后显示；宿主读取接口已就绪。'),
-        findsOneWidget,
-      );
+      expect(find.text('创作内容需要接入宿主连接后显示；宿主读取接口已就绪。'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
