@@ -160,6 +160,9 @@ class SettingsScreen extends StatelessWidget {
             const Text('此设置同时应用于导航、消息和输入区域。'),
             const Divider(height: 32),
             Text('开发者', style: Theme.of(context).textTheme.titleMedium),
+            Text('只读检查', style: Theme.of(context).textTheme.labelLarge),
+            const Text('以下入口只读展示宿主安全元数据，不代表可用、已授权或已清理。'),
+            const SizedBox(height: 4),
             ListTile(
               key: const Key('open-module-test'),
               contentPadding: EdgeInsets.zero,
@@ -177,16 +180,52 @@ class SettingsScreen extends StatelessWidget {
               ),
             ),
             ListTile(
-              key: const Key('open-lifecycle-status'),
+              key: const Key('open-world-status'),
               contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.storage_outlined),
-              title: const Text('配额与生命周期状态'),
-              subtitle: const Text('只读查看当前账号配额与生命周期对象清点；不代表可用或已授权'),
+              leading: const Icon(Icons.public_outlined),
+              title: const Text('世界状态'),
+              subtitle: const Text(
+                '只读查看世界布局/在场/形象的安全元数据；不做 3D 渲染、不含模型字节或密钥，未知如实标注',
+              ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                final load = connection == null
+                    ? null
+                    : (String spaceId) => WorldStatusScreen.loadFrom(
+                        WorldApi(connection),
+                        spaceId,
+                      );
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) => lifecycleScreenFor(model),
+                    builder: (_) => WorldStatusScreen(load: load),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('open-voice-profile'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.graphic_eq_outlined),
+              title: const Text('语音音色'),
+              subtitle: const Text('只读查看某 AI 的音色档案；需显式输入 AI 档案 id，不代表可用或已授权'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                Future<VoiceProfileView> Function(String aiId)? loadProfile;
+                if (connection != null) {
+                  final api = VoiceApi(connection);
+                  loadProfile = (aiId) => api.readProfile(aiId);
+                }
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => VoiceScreen(loadProfile: loadProfile),
                   ),
                 );
               },
@@ -230,6 +269,25 @@ class SettingsScreen extends StatelessWidget {
               },
             ),
             ListTile(
+              key: const Key('open-lifecycle-status'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.storage_outlined),
+              title: const Text('配额与生命周期状态'),
+              subtitle: const Text('只读查看当前账号配额与生命周期对象清点；不代表可用或已授权'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => lifecycleScreenFor(model),
+                  ),
+                );
+              },
+            ),
+            const Divider(height: 24),
+            Text('AI 运行配置编辑', style: Theme.of(context).textTheme.labelLarge),
+            const Text('以下入口会修改配置；api_key 遮蔽输入，绝不明文回显或记录。'),
+            const SizedBox(height: 4),
+            ListTile(
               key: const Key('open-ai-config-write'),
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.edit_note_outlined),
@@ -266,57 +324,6 @@ class SettingsScreen extends StatelessWidget {
                       resolveProfileId: resolve,
                       ownedAiAccountIds: owned,
                     ),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              key: const Key('open-voice-profile'),
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.graphic_eq_outlined),
-              title: const Text('语音音色'),
-              subtitle: const Text('只读查看某 AI 的音色档案；需显式输入 AI 档案 id，不代表可用或已授权'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                final runtime = model;
-                final connection = runtime is ClientRuntime
-                    ? runtime.connection
-                    : null;
-                Future<VoiceProfileView> Function(String aiId)? loadProfile;
-                if (connection != null) {
-                  final api = VoiceApi(connection);
-                  loadProfile = (aiId) => api.readProfile(aiId);
-                }
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => VoiceScreen(loadProfile: loadProfile),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              key: const Key('open-world-status'),
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.public_outlined),
-              title: const Text('世界状态'),
-              subtitle: const Text(
-                '只读查看世界布局/在场/形象的安全元数据；不做 3D 渲染、不含模型字节或密钥，未知如实标注',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                final runtime = model;
-                final connection = runtime is ClientRuntime
-                    ? runtime.connection
-                    : null;
-                final load = connection == null
-                    ? null
-                    : (String spaceId) => WorldStatusScreen.loadFrom(
-                        WorldApi(connection),
-                        spaceId,
-                      );
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => WorldStatusScreen(load: load),
                   ),
                 );
               },
