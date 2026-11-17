@@ -6,6 +6,8 @@ import '../features/onboarding/onboarding_screen.dart';
 import '../features/chat/chat_pane.dart';
 import '../features/settings/settings_screen.dart';
 import '../features/world/world_screen.dart';
+import '../features/contacts/contacts_screen.dart';
+import '../features/inbox/inbox_screen.dart';
 
 class WhaleChatApp extends StatelessWidget {
   const WhaleChatApp({super.key, required this.model});
@@ -161,6 +163,10 @@ class _ShellHomeState extends State<_ShellHome> {
             )
           : destination == 4
           ? world()
+          : destination == 1
+          ? const ContactsScreen()
+          : destination == 3
+          ? const InboxScreen()
           : destination != 0
           ? empty()
           : wide
