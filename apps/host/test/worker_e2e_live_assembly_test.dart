@@ -129,8 +129,12 @@ void main() {
           cipher: cipher,
           clock: clock,
           urlGuard: guard,
-          // Same guarded in-process transport the production worker runs.
-          adapter: OpenAiCompatibleChatAdapter(GuardedHttpTransport()),
+          // Same guarded transport the production worker runs. autoUncompress
+          // is opted in for live providers that always gzip (PR#93 diagnosis);
+          // the inflated body stays bounded by maxResponseBytes.
+          adapter: OpenAiCompatibleChatAdapter(
+            GuardedHttpTransport(autoUncompress: true),
+          ),
         );
         observer = OwnerAiDirectReplyObserver(
           database: db,
