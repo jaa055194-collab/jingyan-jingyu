@@ -228,7 +228,10 @@ class AttachmentService {
       );
       if (existing.isNotEmpty &&
           (existing.single['size'] as int) == bytes.length) {
-        return Ok(<String, Object?>{'received': received, 'nextChunk': nextChunk});
+        return Ok(<String, Object?>{
+          'received': received,
+          'nextChunk': nextChunk,
+        });
       }
       return err(FailureCode.invalidArgument, 'duplicate chunk size mismatch');
     }
@@ -408,7 +411,8 @@ class AttachmentService {
       'extractionStatus': row['extraction_status'],
       'createdAt': row['created_at'],
     };
-    if (row['extraction_status'] == 'extracted' && row['extracted_text'] != null) {
+    if (row['extraction_status'] == 'extracted' &&
+        row['extracted_text'] != null) {
       final decoded = _cipher.decrypt(
         row['extracted_text'] as String,
         aad: 'attachments:text:$attachmentId',
@@ -475,8 +479,7 @@ class AttachmentService {
       'SELECT owner_account_id, conversation_id FROM attachments WHERE id = ?',
       [attachmentId],
     );
-    if (rows.isEmpty ||
-        rows.single['owner_account_id'] != ownerAccountId) {
+    if (rows.isEmpty || rows.single['owner_account_id'] != ownerAccountId) {
       return err(FailureCode.notFound, 'attachment not found');
     }
     if (rows.single['conversation_id'] != conversationId) {
@@ -491,7 +494,10 @@ class AttachmentService {
     required String query,
     int limit = 50,
   }) async {
-    if (query.trim().isEmpty || query.length > 200 || limit < 1 || limit > 100) {
+    if (query.trim().isEmpty ||
+        query.length > 200 ||
+        limit < 1 ||
+        limit > 100) {
       return err(FailureCode.invalidArgument, 'invalid query');
     }
     try {
@@ -513,7 +519,10 @@ class AttachmentService {
       final id = row['id'] as String;
       final decoded = _cipher.decrypt(sealed, aad: 'attachments:text:$id');
       if (decoded.isErr) {
-        return err(FailureCode.internal, 'stored attachment text cannot be decoded');
+        return err(
+          FailureCode.internal,
+          'stored attachment text cannot be decoded',
+        );
       }
       final text = decoded.value;
       final at = text.toLowerCase().indexOf(needle);
@@ -528,6 +537,71 @@ class AttachmentService {
         'snippet': _snippet(text, at, needle.length),
       });
     }
+    return Ok(items);
+  }
+
+  /// 列出本人附件元数据（只读）。仅返回安全元数据：`id/conversationId/kind/
+  /// mime/size/extractionStatus/createdAt`，绝不含抽取正文或 blob 字节。按
+  /// `created_at` 倒序、同一时刻按 rowid 倒序稳定排序；[before] 为上一页末项的
+  /// `createdAt`，返回严格早于该时间的项。[limit] 为 1..100。
+  Future<Result<List<Map<String, Object?>>>> listOwn({
+    required String ownerAccountId,
+    String? conversationId,
+    int limit = 50,
+    String? before,
+  }) async {
+    try {
+      validateId(ownerAccountId, kind: 'account');
+    } on FormatException {
+      return err(FailureCode.invalidArgument, 'invalid owner id');
+    }
+    if (limit < 1 || limit > 100) {
+      return err(FailureCode.invalidArgument, 'invalid limit');
+    }
+    String? normalizedBefore;
+    if (before != null) {
+      final parsed = DateTime.tryParse(before);
+      if (parsed == null) {
+        return err(FailureCode.invalidArgument, 'invalid before');
+      }
+      normalizedBefore = parsed.toUtc().toIso8601String();
+    }
+    if (conversationId != null) {
+      try {
+        validateId(conversationId, kind: 'conversation');
+      } on FormatException {
+        return err(FailureCode.invalidArgument, 'invalid conversation id');
+      }
+    }
+    final clauses = <String>['owner_account_id = ?'];
+    final args = <Object?>[ownerAccountId];
+    if (conversationId != null) {
+      clauses.add('conversation_id = ?');
+      args.add(conversationId);
+    }
+    if (normalizedBefore != null) {
+      clauses.add('created_at < ?');
+      args.add(normalizedBefore);
+    }
+    args.add(limit);
+    final rows = await _database.query(
+      'SELECT id, conversation_id, kind, mime, size, extraction_status, created_at '
+      'FROM attachments WHERE ${clauses.join(' AND ')} '
+      'ORDER BY created_at DESC, rowid DESC LIMIT ?',
+      args,
+    );
+    final items = <Map<String, Object?>>[
+      for (final row in rows)
+        <String, Object?>{
+          'id': row['id'],
+          'conversationId': row['conversation_id'],
+          'kind': row['kind'],
+          'mime': row['mime'],
+          'size': row['size'],
+          'extractionStatus': row['extraction_status'],
+          'createdAt': row['created_at'],
+        },
+    ];
     return Ok(items);
   }
 

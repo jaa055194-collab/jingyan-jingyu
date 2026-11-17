@@ -31,6 +31,7 @@ class AttachmentsModule extends HostModule {
     router.post(Routes.attachmentUploads, _initiate);
     router.put(Routes.attachmentUploadChunk, _chunk);
     router.post(Routes.attachmentUploadComplete, _complete);
+    router.get(Routes.attachments, _list);
     router.get(Routes.attachment, _get);
     router.delete(Routes.attachment, _delete);
   }
@@ -125,6 +126,39 @@ class AttachmentsModule extends HostModule {
       ownerAccountId: principal.accountId,
       uploadId: uploadId,
       expectedSha256: expectedSha256,
+    );
+    return HostResponse.fromResult(result);
+  }
+
+  Future<HostResponse> _list(HostRequest request) async {
+    final principal = request.principal!;
+    if (request.body != null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad body'),
+      );
+    }
+    const allowed = {'limit', 'before', 'conversationId'};
+    if (request.query.keys.any((key) => !allowed.contains(key))) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad query'),
+      );
+    }
+    var limit = 50;
+    final rawLimit = request.query['limit'];
+    if (rawLimit != null) {
+      final parsed = int.tryParse(rawLimit);
+      if (parsed == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.invalidArgument, 'bad limit'),
+        );
+      }
+      limit = parsed;
+    }
+    final result = await _attachments.listOwn(
+      ownerAccountId: principal.accountId,
+      conversationId: request.query['conversationId'],
+      limit: limit,
+      before: request.query['before'],
     );
     return HostResponse.fromResult(result);
   }
