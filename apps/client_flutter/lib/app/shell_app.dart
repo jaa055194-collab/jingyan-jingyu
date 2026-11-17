@@ -4,6 +4,7 @@ import 'shell_view_model.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/chat/chat_pane.dart';
 import '../features/settings/settings_screen.dart';
+import '../features/world/world_screen.dart';
 
 class WhaleChatApp extends StatelessWidget {
   const WhaleChatApp({super.key, required this.model});
@@ -105,34 +106,8 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
-  Widget world() => Center(
-    child: SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.public, size: 40),
-          const SizedBox(height: 16),
-          Text('世界与形象', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(
-            widget.model.onboarded
-                ? '形象与房间设置已完成。'
-                : '形象和房间属于可选世界设置，可稍后在这里完成；聊天不受影响。',
-            textAlign: TextAlign.center,
-          ),
-          if (!widget.model.onboarded) ...[
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: widget.model.authenticated ? openWorldSetup : null,
-              icon: const Icon(Icons.tune),
-              label: const Text('设置形象与房间（可选）'),
-            ),
-          ],
-        ],
-      ),
-    ),
-  );
+  Widget world() =>
+      WorldScreen(model: widget.model, onOpenSetup: openWorldSetup);
 
   Widget empty() {
     const titles = ['', '暂无联系人', '暂无动态', '暂无通知', '世界尚未开放'];

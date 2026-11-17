@@ -16,12 +16,17 @@
 - `ProcessInfo.currentRss` 是进程常驻内存的粗略代理，**不是 GPU 显存**。显存/GPU 帧率需真机原生工具（如 Android `dumpsys gfxinfo` / GPU 驱动计数器 / DevTools）单独采集，后续以平台通道接入。
 - 本增量不含 3D 渲染；`world` 模块标记为“未接入”。
 
+## 产品方向（需求方 2026-11-17 确认）
+
+1. **房间**：沿用 feiyu-room-template（`https://github.com/sh2234113/feiyu-room-template` v3.0.0，MIT），保留“按提示词/对话生成房间”的能力（对应 `RoomGenerator`+`RoomBrief` 预设，onboarding 已具备生成→预览→确认流程）。
+2. **性能基准**：暂无 Android 真机；以**骁龙888 稳定 30–60fps** 为目标，真机实测待设备可用或整体完成后进行；在那之前不冒称达标。
+3. **形象**：**取消双端形象一致性**，以各终端本地上传的模型为准（手机与电脑可用不同模型）；**Live2D 上传即用、不做授权校验**（个人使用，NFR-12 官方授权不再作为前置）。
+
 ## 3D 世界 / 形象接入的前置（待后续切片）
 
-- 按 M10-world 设计：3D 页面为独立模块（不嵌入聊天页），Android 用 WebView、Windows 用 WebView2，加载 `feiyu-room-template` 的 Three.js 房间；VRM 默认形象、Live2D 仅宿主机。
-- 需要：新增 WebView 依赖（需联网 `pub get`/`flutter pub add`）、Three.js 房间与 VRM/Live2D 运行时素材、真机（Android）设备、以及 NFR-12 素材授权。
-- 待确认（不自行拍板）：双端形象一致性的确切含义、远端资源获取与失败处理、Live2D 开放前的官方授权。
-- 真机显存/帧率验收：需在接入真实渲染后，用原生工具采集同屏 ≤8、中端安卓室内目标 30fps 的实测值，并如实标注达标/未达标。
+- 按 M10-world 设计：3D 页面为独立模块（不嵌入聊天页），Android 用 WebView、Windows 用 WebView2，加载 `feiyu-room-template` 的 Three.js 房间。
+- 需要：新增 WebView 依赖（需联网 `pub get`/`flutter pub add`，Windows 无现成离线包）、feiyu 模板的 Three.js 房间与模型素材（当前仓库缺失，需按固定 commit 获取并随附许可/署名；`da-feiyu.glb` 58.9MB 不入库，首运行下载并校验 sha256、过 UrlGuard）。
+- 真机显存/帧率验收：接入真实渲染后，用原生工具采集同屏 ≤8、骁龙888 目标稳定 30–60fps 的实测值，并如实标注达标/未达标。
 
 ## 验收
 
