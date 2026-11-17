@@ -11,6 +11,8 @@ import 'dart:io';
 
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/src/accounts/accounts_migrations.dart';
+import 'package:jingyu_host/src/ai/persona/persona_migrations.dart';
+import 'package:jingyu_host/src/ai/persona/persona_service.dart';
 import 'package:jingyu_host/src/models/ai_identity.dart';
 import 'package:jingyu_host/src/models/binding_matrix.dart';
 import 'package:jingyu_host/src/models/binding_migrations.dart';
@@ -86,6 +88,7 @@ void main() {
         bindingMigration,
         ...usageMigrations,
         budgetTimezoneMigration,
+        ...personaMigrations,
       ],
     );
     cipher = AesGcmColumnCipher(List.generate(32, (i) => i));
@@ -198,6 +201,45 @@ void main() {
       expect(payload['model'], 'auto');
       expect(payload['stream'], false);
       expect(payload['max_tokens'], 8);
+    },
+  );
+
+  test(
+    'persona + budget + provider + binding assembly composes before chat',
+    () async {
+      transportBehavior = 'ok';
+      // Persona is part of the PR#92 client write contract set; a chain that
+      // carries a persona must still reach the provider and record usage.
+      final persona =
+          await SqlitePersonaService.forOwner(
+            ownerId: 'alice',
+            actorAccountId: 'alice',
+            database: db,
+            cipher: cipher,
+            clock: clock,
+          ).initialize(
+            ai,
+            initial: PersonaLayers(
+              p0: const {'name': 'Nora'},
+              p1: const {'style': 'warm and concise'},
+              p2: const {'mood': 'calm'},
+            ),
+          );
+      expect(persona.isOk, isTrue);
+      final loaded = await SqlitePersonaService.forOwner(
+        ownerId: 'alice',
+        actorAccountId: 'alice',
+        database: db,
+        cipher: cipher,
+        clock: clock,
+      ).current(ai);
+      expect(loaded.isOk, isTrue);
+      expect(loaded.value.layers.p0, {'name': 'Nora'});
+
+      final result = await call('chain-persona-1');
+      expect(result.isOk, isTrue, reason: result.failureOrNull?.code.name);
+      expect(result.value.text, _replyText);
+      expect((await db.query('SELECT * FROM usage_ledger')), hasLength(1));
     },
   );
 
