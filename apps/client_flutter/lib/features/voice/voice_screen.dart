@@ -170,6 +170,25 @@ class _VoiceScreenState extends State<VoiceScreen> {
               ),
             ),
           ),
+        const Divider(height: 32),
+        Text('语音文件', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Card(
+          key: const Key('voice-assets-unavailable'),
+          child: const Padding(
+            padding: EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('当前不可用：宿主未提供语音资产/文件列表路由。'),
+                SizedBox(height: 4),
+                Text('合成音频不落盘，仅返回短期可播放句柄；宿主没有可列的音频 blob 元数据。'),
+                SizedBox(height: 4),
+                Text('本页不列出语音文件、不播放、也不渲染任何音频内容；此处如实标注缺口，不代表没有配置音色。'),
+              ],
+            ),
+          ),
+        ),
       ],
     ),
   );
