@@ -7,9 +7,11 @@ import '../../net/lifecycle_api.dart';
 /// Reads are non-destructive. Export is non-destructive (returns the account
 /// bundle in memory; only summary metadata is rendered). Import is a mutation:
 /// it requires an explicit mode choice and a confirmation dialog, and is never
-/// auto-run. Cleanup has no merged host HTTP route, so it is shown as an honest
-/// unavailable gap and never fabricated. This screen opens no ticket, prints no
-/// secret or file contents, and does not change consent or model configuration.
+/// auto-run. Cleanup is a **read-only preview** (host retention-preview route):
+/// it shows what a cleanup WOULD remove and honestly states that execution is
+/// not provided — nothing on this screen deletes data. It opens no ticket,
+/// prints no secret or file contents, and does not change consent or model
+/// configuration.
 class BackupQuotaScreen extends StatefulWidget {
   const BackupQuotaScreen({
     super.key,
@@ -33,6 +35,9 @@ class BackupQuotaScreen extends StatefulWidget {
 class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
   LifecycleQuotaStatus? _quota;
   LifecycleDepartureSurvey? _survey;
+  LifecycleCleanupPreview? _cleanupPreview;
+  bool _cleanupLoading = false;
+  bool _cleanupUnknown = false;
   bool _loading = true;
   bool _unknown = false;
 
@@ -45,6 +50,49 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadCleanupPreview();
+  }
+
+  /// Read-only cleanup preview. Never executes anything; the host has no
+  /// user-triggered cleanup execution route, so the button stays non-destructive
+  /// and the section honestly notes that execution is not yet provided.
+  Future<void> _loadCleanupPreview() async {
+    final api = widget.api;
+    if (api == null) return;
+    setState(() => _cleanupLoading = true);
+    try {
+      final preview = await api.readCleanupPreview();
+      if (!mounted) return;
+      setState(() {
+        _cleanupPreview = preview;
+        _cleanupLoading = false;
+        _cleanupUnknown = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _cleanupPreview = null;
+        _cleanupLoading = false;
+        _cleanupUnknown = true;
+      });
+    }
+  }
+
+  static String _cleanupKindLabel(String kind) => switch (kind) {
+    'video' => '视频',
+    'voice' => '语音',
+    _ => kind,
+  };
+
+  Widget _cleanupRows(Map<String, int> counts) {
+    final lines = <Widget>[
+      for (final kind in counts.keys)
+        Text('${_cleanupKindLabel(kind)}：${counts[kind]}'),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: lines,
+    );
   }
 
   Future<void> _load() async {
@@ -215,7 +263,9 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('只读配额/清点；导出为非破坏性，导入为显式写操作（需确认），清理无宿主接口。不代表可用、已授权或已清理。'),
+          const Text(
+            '只读配额/清点；导出为非破坏性，导入为显式写操作（需确认），清理仅只读预览、不执行删除。不代表可用、已授权或已清理。',
+          ),
           const SizedBox(height: 12),
           if (_loading)
             const Padding(
@@ -295,19 +345,51 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
                     : null,
                 child: const Text('导入'),
               ),
-              FilledButton(
-                key: const Key('cleanup-lifecycle'),
-                // No merged host cleanup route exists.
-                onPressed: null,
-                child: const Text('清理（不可用）'),
-              ),
             ],
           ),
           const SizedBox(height: 4),
           if (!actionsAvailable)
             const Text('当前入口未接线宿主连接：导出/导入不可用（需装配 LifecycleApi）。'),
           if (actionsAvailable && _exported == null) const Text('导入需先成功导出到内存。'),
-          const Text('清理：宿主未提供清理 HTTP 接口（缺口），本页不执行清理。'),
+          if (actionsAvailable) ...[
+            Text(
+              '清理预览（只读，不执行）',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            if (_cleanupLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_cleanupUnknown)
+              const Text(
+                key: Key('cleanup-preview-unknown'),
+                '清理预览读取失败或结果未知；不会自动重试。',
+              )
+            else if (_cleanupPreview != null) ...[
+              Text('运行日：${_cleanupPreview!.dayKey}'),
+              const Text('将提醒（即将到期）：'),
+              _cleanupRows(_cleanupPreview!.remindSoon),
+              const Text('将过期删除（blob 将被清理，保留消息占位）：'),
+              _cleanupRows(_cleanupPreview!.expiring),
+              const Text('当前持有的可过期媒体：'),
+              _cleanupRows(_cleanupPreview!.totalHeld),
+            ],
+            OutlinedButton(
+              key: const Key('cleanup-preview-refresh'),
+              onPressed: _cleanupLoading ? null : _loadCleanupPreview,
+              child: const Text('刷新清理预览'),
+            ),
+            const Text(
+              key: Key('cleanup-execution-gap'),
+              '执行尚未提供：宿主仅有每日系统清理任务，本页只做只读预览，不会删除任何数据。',
+            ),
+          ] else
+            const Text(
+              key: Key('cleanup-execution-gap'),
+              '清理：宿主未提供清理 HTTP 接口（缺口），本页不执行清理。',
+            ),
           if (_actionNotice != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),

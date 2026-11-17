@@ -44,7 +44,8 @@ void main() {
     expect(find.byType(TextField), findsNothing);
     expect(find.byKey(const Key('export-lifecycle')), findsOneWidget);
     expect(find.byKey(const Key('import-lifecycle')), findsOneWidget);
-    expect(find.byKey(const Key('cleanup-lifecycle')), findsOneWidget);
+    // Cleanup is now a read-only preview fed by an api; no disabled button.
+    expect(find.byKey(const Key('cleanup-lifecycle')), findsNothing);
     expect(find.textContaining('不代表可用'), findsWidgets);
   });
 
