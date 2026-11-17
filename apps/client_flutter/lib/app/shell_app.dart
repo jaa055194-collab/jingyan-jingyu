@@ -1,5 +1,8 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../net/creative_api.dart';
+import '../net/host_connection.dart';
+import 'runtime.dart';
 import 'shell_view_model.dart';
 import 'module_catalog.dart';
 import '../features/onboarding/onboarding_screen.dart';
@@ -113,6 +116,22 @@ class _ShellHomeState extends State<_ShellHome> {
   Widget world() =>
       WorldScreen(model: widget.model, onOpenSetup: openWorldSetup);
 
+  /// Host-backed read-only creative loaders only when the runtime exposes a live
+  /// connection; otherwise the screen keeps its honest unbound/unknown state.
+  /// The shell only wires loaders here — tab layout and settings are untouched.
+  Widget creative() {
+    final model = widget.model;
+    final HostConnection? connection = model is ClientRuntime
+        ? model.connection
+        : null;
+    if (connection == null) return const CreativeScreen();
+    final api = CreativeApi(connection);
+    return CreativeScreen(
+      loadReports: api.listReports,
+      loadRadio: api.listRadio,
+    );
+  }
+
   Widget empty() {
     const titles = ['', '暂无联系人', '暂无动态', '暂无通知', '世界尚未开放'];
     const details = [
@@ -167,7 +186,7 @@ class _ShellHomeState extends State<_ShellHome> {
           : destination == 1
           ? const ContactsScreen()
           : destination == 2
-          ? const CreativeScreen()
+          ? creative()
           : destination == 3
           ? const InboxScreen()
           : destination != 0
