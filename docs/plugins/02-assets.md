@@ -18,7 +18,7 @@
 ## 2. 落地方式
 
 - 房间前端是 Three.js 网页。v4.2 FR-12 要求 3D 世界以**独立模块**接入客户端，不内嵌聊天页面。M10 用 WebView（Android）/ WebView2（Windows）承载模板的房间页面，作为独立的 3D 页面。
-- "按提示词生成房间"做成内置插件 `jingyu.room.generator`（能力 `roomScene` + `modelInvoke`）：
+- "按提示词生成房间"做成内置插件 `jingyu.room.generator`（能力 `roomScene` + `modelInvoke`），由 client kit 的 `FeiyuRoomGenerator` 实现（`packages/jingyu_client_kit/lib/src/room_generator.dart`）：
   - `presets` 取模板的五个方向：海边小屋、森林木屋、现代公寓、赛博小屋、中式小院；
   - `RoomBrief` 字段对应模板的 brief：风格、主色、氛围、户型、备注；
   - 生成结果是 `RoomLayout` 布局数据，存宿主 `space_layout` 并带版本号（FR-35），**不生成、不下载可执行代码**。

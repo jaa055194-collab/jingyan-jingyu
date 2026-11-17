@@ -131,3 +131,21 @@
 | REQ-061 | NFR-06/10、本人工单状态可见 | 仅owner读本人的回复attempt元数据 | livebearer/account/device复核；owner历史可读pending/completed/failed/discarded，foreign/AI/group拒绝；不读取正文/provider信息 | OwnerAiReplyStatusModule；15个status测试与默认host集成 | notAttempted只指未有ledger，不承诺回复；未知provider用量保留pending reconciliation |
 
 上述实现仍须以本PR最终检查记录为验证修订；离线fake-provider流不能替代真实模型服务或客户端设备验收。未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
+
+## 设备本地形象引用（2026-11-16）
+
+基线 `b96abb3`；按已批准的各端自行导入方向修订 FR-38/39、AC-25/26。模型文件与具体映射仅设备本地，宿主发布稳定引用。此记录不计入完整 Live2D 验收。
+
+| ID | 来源/章节 | 要求摘要 | 审批 | 可观察验收 | 实现 | 检查/证据 | 状态与缺口 |
+|---|---|---|---|---|---|---|---|
+| REQ-062 | FR-38/39 修订；AC-25 | 服务端只接受/保存/返回形象引用，不接收模型参数映射或路径 | 已批准 | 注册只收 kind/modelId；模型 ID 拒路径/URL；迁移旧库保留引用/revision/active 状态但移除 param_map；不安全旧 model_id 转成不透明 legacy token；跨 owner 与 stale revision 仍拒绝 | world avatar registry/HTTP；追加迁移 905 | world_routes_test、world_sqlite_test；旧映射响应/POST、路径/URL 输入、旧库路径、URL及回退别名碰撞先 RED；69 项 world 检查通过（第一次全仓 assembly 清单未更新，后已补） | 局部已验证；API 破坏性变更：旧客户端 paramMap 请求现 400，内部 setParamMap 被移除；迁移仅防旧映射和旧 ID继续广播，不追溯改造离线备份 |
+| REQ-063 | FR-39；本地 profile 子集 | 强制显式映射与安全 model3 相对路径 | 已批准 | 缺/空映射、未知字段、非整数 schema/revision、非规范/越界/远程路径拒绝；映射不可变 | client_kit Live2DProfile/Live2DParamMap，复用既有路径 sanitizer | live2d_profile_test：38 项；7 个行为缺口先 RED 后修；本地映射快照/Unicode 相对路径通过 | 元数据子集验证通过；未验证参数名或文件存在、JSON 字节/深度限额、真实解包/纹理/模型、设备持久化、UI、渲染、热切换或 VRM fallback |
+
+| REQ-057 | FR-39；本地模型包导入安全 | 设备本地压缩包安全校验与资源预检 | 已批准 | 拒非 zip/空/路径穿越/绝对路径/重复条目/脚本可执行扩展名；条目与体积/压缩比上限；要求唯一 model3、严格 JSON 与深度上限；校验 Moc/Textures 引用存在、MOC3 魔数与版本、PNG 魔数与纹理像素预算；纯函数不改文件系统 | client_kit `validateLive2DPackage` | `live2d_package_test` 13 项；用用户提供的真实模型包本地实测 `ok=true`、5 纹理、155,189,248 像素、正确解析 model3/MOC3 引用 | 元数据/字节子集通过；未渲染、未校验参数名/几何、无设备持久化/UI/热切换/真实设备显存与帧率；必须按设备下调 `maxTotalPixels` 或做降采样 |
+
+| REQ-058 | FR-38/39 修订；AC-25/26 | 取消双端形象一致，形象选择按设备隔离 | 已批准 | 同一 owner 手机/电脑可各自拥有不同 active 模型；跨设备/跨 owner 读取或启用返回 notFound；注册体只收 kind/modelId；迁移906把已有记录归到 legacy 设备并保留 revision/active | world avatar registry/HTTP；迁移906 | world_routes/world_sqlite/world_test/world_module 共63项通过；host assembly 2项；host analyze clean | 已实现设备级隔离；AvatarProfile 不暴露 deviceId；旧记录需各设备重新登记；真实设备渲染/热切换仍未交付 |
+| REQ-059 | FR-35/FR-39；CR-13；02-assets | 基于 feiyu-room-template 方向的按对话建屋生成器 | 已批准 | 五个预设；brief→RoomLayout 确定性布局数据、无下载/可执行字段；未知风格拒绝；空房间用默认；自由文本→brief 容错 | client_kit `FeiyuRoomGenerator`/`briefFromConversation` | room_generator_test 19项；先 RED（缺类）后 GREEN；client kit 全套235项、analyze clean | 仅布局数据生成；未接宿主 space_layout 持久化、未接模型调用/对话管道、无 WebView 渲染 |
+
+| REQ-060 | FR-39；设备本地 profile 存储 | 设备侧形象档案与当前选择的记录契约 | 已批准 | 保存/列表（按 modelId 排序）；同 id 需 revision 严格递增否则拒绝；激活不存在模型抛错；删除清空激活；JSON 快照导出/导入原子且拒绝重复/未知字段/悬空激活；快照不含模型字节或绝对路径 | client_kit `Live2DModelStore` + `Live2DProfile.toJson` | live2d_store_test 8项 + profile 38项；client kit 全套243项、analyze clean | 纯内存契约与快照；真实文件持久化/加密/设备 UI 未接；未渲染 |
+
+未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。

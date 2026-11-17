@@ -37,7 +37,7 @@ plugins/<plugin-id>/
 | `apiVersion` | 必须等于宿主 `pluginApiVersion`（当前 1），否则拒绝加载。 |
 | `capabilities` | 只能从下表选。**没声明的能力运行时一律拿不到**。 |
 | `platforms` | 只允许 `android`、`windows`。 |
-| `hostOnly` | `true` 表示只在宿主机客户端加载（如 Live2D `.moc3` 导入，FR-38/39）。 |
+| `hostOnly` | `true` 表示只在宿主机客户端加载。Live2D 模型导入不得以此限制：用户只操作自己的设备，模型文件必须留在本机。 |
 | `assetCredits` | 每条第三方素材一行署名，CC 素材必填。 |
 
 解析失败直接拒绝，不做宽松兜底。

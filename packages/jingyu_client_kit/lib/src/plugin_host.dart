@@ -29,7 +29,7 @@ class PluginEnvironment {
   /// `android` 或 `windows`。
   final String platform;
 
-  /// 是否运行在宿主机上（决定 hostOnly 插件能否加载，FR-38/39）。
+  /// 是否运行在宿主机上（决定通用 hostOnly 插件能否加载）。
   final bool isHostMachine;
 }
 
