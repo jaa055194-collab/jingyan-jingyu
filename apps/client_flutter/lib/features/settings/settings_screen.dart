@@ -1,7 +1,10 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../../app/runtime.dart';
 import '../../app/shell_view_model.dart';
+import '../../net/lifecycle_api.dart';
 import '../diagnostics/module_test_panel.dart';
+import '../lifecycle/backup_quota_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.model, required this.onBack});
@@ -152,6 +155,35 @@ class SettingsScreen extends StatelessWidget {
                   ),
                 ),
               ),
+            ),
+            ListTile(
+              key: const Key('open-lifecycle-status'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.storage_outlined),
+              title: const Text('配额与生命周期状态'),
+              subtitle: const Text('只读查看当前账号配额与生命周期对象清点；不代表可用或已授权'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                Future<LifecycleQuotaStatus> Function()? loadQuota;
+                Future<LifecycleDepartureSurvey> Function()? loadSurvey;
+                if (connection != null) {
+                  final api = LifecycleApi(connection);
+                  loadQuota = () => api.readQuota();
+                  loadSurvey = () => api.readDepartureSurvey();
+                }
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => BackupQuotaScreen(
+                      loadQuota: loadQuota,
+                      loadSurvey: loadSurvey,
+                    ),
+                  ),
+                );
+              },
             ),
             const Divider(height: 32),
             Text('我的 AI', style: Theme.of(context).textTheme.titleMedium),
