@@ -157,7 +157,7 @@
 |---|---|---|---|---|---|---|---|
 | REQ-M14-01 | FR-08/22，AC-03 | 当前账号只读好友列表 | 已授权局部 | 仅本人可见；空列表；friends/outgoing/incoming/blocked 状态映射；他人 block 不泄露；未认证 401 | `Routes.friends`；`FriendshipService.listContacts`；`friendship_routes`；SocialModule 装配 | `friends_list_route_test`（真 SQLite）；`m14_read_route_surfaces_test` 默认装配断言 | **已验证（host 单测/loopback）**；真实客户端展示与真机待 |
 | REQ-M14-02 | FR-63/AC-14 | 只读保留期清理预览（不执行删除） | 已授权局部 | owner-scoped；拒绝 query/body；异常 safe 500；不删除任何数据 | `Routes.lifecycleCleanupPreview`；`LifecycleModule._cleanupPreview` | `lifecycle_cleanup_preview_route_test`；`m14_read_route_surfaces_test` | **已验证（host 单测）**；真实清理执行/磁盘探测未接 |
-| REQ-M14-03 | FR-62/AC-20 | 附件列表（collection GET） | 已授权局部 | owner-scoped；DTO 仅 id/conversationId/kind/mime/size/extractionStatus/createdAt；不含 extractedText；未认证 401 | PR#107（commit `39723f0`）：`AttachmentService.listOwn` + `router.get(Routes.attachments, _list)`；**尚未合并进 main**（基线 8dafa17 早于它） | `m14_read_route_surfaces_test` 以 skip 记录（待 #107 合并后启用） | **已实现（PR#107 ready，待自动合并/合并后联调）**；客户端附件列表 task-84 待合并后完成 |
+| REQ-M14-03 | FR-62/AC-20 | 附件列表（collection GET） | 已授权局部 | owner-scoped；DTO 仅 id/conversationId/kind/mime/size/extractionStatus/createdAt；不含 extractedText；未认证 401 | PR#107（commit `39723f0`）：`AttachmentService.listOwn` + `router.get(Routes.attachments, _list)`；M14 基线 `8dafa17` 尚未包含该路由 | `m14_read_route_surfaces_test` 的历史跳过不计通过；合并后复核见文末 | **已实现；合并后路由已复测**；客户端与真实宿主联调待确认 |
 | REQ-M14-04 | FR-08/AC-03 | 联系人真实好友页 | 已授权局部 | 列表/空/denied/unknown 诚实态；无写入 | `features/contacts/contacts_screen` + `net/friends_api` | `contacts_screen_test`、`friends_api_test` | **已验证（widget/loopback）**；待真机 |
 | REQ-M14-05 | §14 CR-03/CR-07 | 创作运行时页（报告/电台只读） | 已授权局部 | 诚实空/未绑定/失败态；不触发生成/播放 | `features/creative/creative_screen` + `net/creative_api` | `creative_screen_test`、`creative_api_test` | **已验证（widget/loopback）**；真实宿主数据/真机待 |
 | REQ-M14-06 | FR-30/31 | 语音页 polish/gap | 已授权局部 | 诚实缺省/错误态；不配置真实密钥 | `features/voice/voice_screen` + `net/voice_api` | `voice_screen_test`、`voice_api_test` | **已验证（widget/loopback）**；真实厂商音频/真机待 |
@@ -166,3 +166,22 @@
 | REQ-M14-09 | FR-63/AC-14 | 客户端清理预览 | 已授权局部 | 只读预览；不执行清理；失败诚实 | `net/lifecycle_api.readCleanupPreview` + `features/lifecycle/backup_quota_screen` | `lifecycle_cleanup_preview_api_test`、`backup_quota_actions_test` | **已验证（API/loopback+widget）**；真实清理执行未做 |
 
 未验证/待确认项不得因同目录其它测试通过而计完成；真机与真实厂商验收另计。
+
+## M15 增量：通话、通知、好友动作与受信链回归（2026-11-18）
+
+复核基线 `origin/main 0c23edd`；Windows 本地复跑命令及总计见 [验收 §G.1](acceptance.md#g1-复跑方式与结果)。本次只有文档与默认装配测试改动，未运行全仓套件。
+
+| ID | 来源/范围 | 可观察验收 | 实现/修订 | 本次证据 | 状态/缺口 |
+|---|---|---|---|---|---|
+| REQ-M15-01 | #118；通话元数据读取子集 | 仅当前账号可见；支持状态、数量与游标；无音频或转写；拒绝未授权和无效请求 | `GET /api/v1/voice/calls`；#118 已合并 `a59fdef` | `voice_routes_test` 13/13，含列表 3 项 | 路由验证通过；真实宿主客户端联调、音频及真机未验 |
+| REQ-M15-02 | #115、#121 / task-97；客户端通话读与列表 | 单条按显式 ID；列表有诚实的未绑定、空、拒绝及失败态；无通话写入 | #115 `600f2a1`、#121 `981fbea` 已合并 | `voice_call_api_test`、`voice_call_screen_test` 8/8；列表 API、列表页、Settings 入口 13/13（loopback/widget） | 自动化验证通过；真实宿主联调及真机待验 |
+| REQ-M15-03 | #114；宿主好友邀请通知 | 当前账号只读待处理邀请元数据；已处理项消失；拒绝未授权和无效请求 | `GET /api/v1/notifications`；#114 已合并 `ddab908` | `notifications_routes_test` 3/3 | 路由验证通过；不计系统推送或端到端收件箱交付 |
+| REQ-M15-04 | #116；客户端收件箱接线 | 读取宿主通知；区分空、未绑定、拒绝及失败；不自动处理邀请 | #116 `d73ddc6`，OPEN、有冲突，未入基线 | 未在此基线验证该接线 | 受阻：待解决合并冲突；之后复跑 API/widget 并联调 |
+| REQ-M15-05 | task-95；客户端好友接受/拒绝 | 仅显式用户操作触发写入；安全错误；无自动动作 | 仅本地草稿；宿主既有写路由不等于客户端已交付 | 未验 | 未交付；待 PR、验证与联调 |
+| REQ-M15-06 | #120；受信模型链离线回归 | gzip opt-in 传输与适配器、`auto` 绑定、canonical `s2` 回存、用量与预算差一致 | #120 已合并 `a428757` | `trusted_real_model_path_test` 3/3（loopback + 假传输） | 离线回归通过；不证明实时供应商路由或生产端到端 |
+| REQ-M15-07 | #117 / task-73；live 测试辅助 | 共享环境门控、迁移与配置；没有 live 配置时跳过；离线覆盖人格装配 | #117 已合并 `f95547d` | `provider_trusted_chain_test` 5/5；live probe 与 worker E2E 两项跳过 | 离线验证通过；实时调用本次未验证 |
+| REQ-M15-08 | #122 / task-98；诊断面板说明 | 解释探针状态及能力边界，不把探针状态当作模型可用 | #122 已合并 `0c23edd` | `module_test_panel_test` 7/7 | 单测及 widget 验证通过；真机性能与真实宿主联调未验 |
+
+历史真实 `auto` 回复与 SQLite 回存证据见 [验收 §G.1](acceptance.md#g1-复跑方式与结果)：#102 的 `63f4c2e` 本地进程内集成测试显式启用 gzip，非本次复跑。生产 `ModelRuntime.withProcess` 使用子进程 worker，默认未开启 gzip；生产子进程出站及默认启动端到端均未验证。
+
+M14 附件列表后续复核见 [验收 §F.3](acceptance.md#f3-汇总与限制)：宿主 #107 已合并且路由测试 4/4 通过，保留上表的历史基线记录。
