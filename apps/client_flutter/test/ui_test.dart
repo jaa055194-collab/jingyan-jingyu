@@ -790,7 +790,7 @@ void main() {
   });
 
   testWidgets(
-    'mobile conversation route provides back navigation and honest empty tabs',
+    'mobile conversation route provides back navigation and honest module tabs',
     (tester) async {
       tester.view.physicalSize = const Size(390, 844);
       tester.view.devicePixelRatio = 1;
@@ -803,9 +803,29 @@ void main() {
       expect(find.byKey(const Key('composer')), findsOneWidget);
       await tester.tap(find.byTooltip('返回会话列表'));
       await tester.pumpAndSettle();
+
+      // Contacts is now a real module surface with an honest empty state: the
+      // host exposes no friend-list route yet, so no contacts are fabricated.
       await tester.tap(find.text('联系人'));
       await tester.pumpAndSettle();
-      expect(find.text('暂无联系人'), findsOneWidget);
+      expect(
+        find.text('宿主未提供好友列表路由；接入好友列表后可在此显示。'),
+        findsOneWidget,
+      );
+
+      // Inbox is likewise a real module surface with an honest unavailable state.
+      await tester.tap(find.text('收件箱'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('宿主尚未提供收件箱接口；邀请与通知在接入后显示。'),
+        findsOneWidget,
+      );
+
+      // Moments still renders the honest placeholder in this revision because
+      // the creative module page is not wired into this shell yet.
+      await tester.tap(find.text('动态'));
+      await tester.pumpAndSettle();
+      expect(find.text('暂无动态'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
