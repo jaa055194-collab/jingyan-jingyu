@@ -8,6 +8,7 @@ import '../features/settings/settings_screen.dart';
 import '../features/world/world_screen.dart';
 import '../features/contacts/contacts_screen.dart';
 import '../features/inbox/inbox_screen.dart';
+import '../features/creative/creative_screen.dart';
 
 class WhaleChatApp extends StatelessWidget {
   const WhaleChatApp({super.key, required this.model});
@@ -165,6 +166,8 @@ class _ShellHomeState extends State<_ShellHome> {
           ? world()
           : destination == 1
           ? const ContactsScreen()
+          : destination == 2
+          ? const CreativeScreen()
           : destination == 3
           ? const InboxScreen()
           : destination != 0
