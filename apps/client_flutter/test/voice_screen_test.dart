@@ -73,6 +73,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('未配置音色档案'), findsOneWidget);
+      expect(find.textContaining('不是权限问题'), findsOneWidget);
       expect(find.byKey(const Key('voice-profile')), findsNothing);
     },
   );
@@ -116,6 +117,31 @@ void main() {
     expect(button.onPressed, isNull);
     expect(find.byKey(const Key('voice-ai-id')), findsOneWidget);
   });
+
+  testWidgets(
+    'voice polish: help text explains id sourcing and metadata-only scope',
+    (tester) async {
+      await pumpScreen(tester, null);
+      expect(find.byKey(const Key('voice-help')), findsOneWidget);
+      expect(find.textContaining('ai_'), findsOneWidget);
+      expect(find.textContaining('不代表音色可用'), findsOneWidget);
+      expect(find.textContaining('当前入口未接线宿主连接'), findsOneWidget);
+      // The entry help text (settings) explains why the id is explicit.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SettingsScreen(model: TestShellModel(), onBack: () {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final entry = find.byKey(const Key('open-voice-profile'));
+      await tester.scrollUntilVisible(entry, 300);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('宿主按档案而非账户寻址'), findsOneWidget);
+      expect(find.textContaining('仅元数据'), findsOneWidget);
+    },
+  );
 
   testWidgets('settings developer entry opens the read-only voice screen', (
     tester,

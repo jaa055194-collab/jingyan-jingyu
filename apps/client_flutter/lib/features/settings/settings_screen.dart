@@ -211,7 +211,11 @@ class SettingsScreen extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.graphic_eq_outlined),
               title: const Text('语音音色'),
-              subtitle: const Text('只读查看某 AI 的音色档案；需显式输入 AI 档案 id，不代表可用或已授权'),
+              subtitle: const Text(
+                '只读查看某 AI 的音色档案（provider/model/voiceId/revision）。'
+                '需显式输入 AI 档案 id：宿主按档案而非账户寻址，客户端不做推断；'
+                '仅元数据，不代表可用、已授权或可发起语音。',
+              ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 final runtime = model;
