@@ -75,10 +75,11 @@ class FriendContact {
   }
 }
 
-/// Typed, read-only access to the host friendship state route.
+/// Typed access to the host friendship state routes.
 ///
-/// Exposes `GET /friends` (list) and `GET /friends/{accountId}` (single state).
-/// Request/accept/deny/block writes are intentionally not implemented here.
+/// Exposes `GET /friends` (list), `GET /friends/{accountId}` (single state) and
+/// explicit writes for pending incoming invitations (`POST .../accept` and
+/// `POST .../deny`). Block/unblock/request writes remain unimplemented here.
 /// Authentication renewal (bounded one-shot 401 replay) is inherited from
 /// [HostConnection]; this class adds no retry of its own.
 class FriendsApi {
@@ -94,6 +95,46 @@ class FriendsApi {
       return List<FriendContact>.unmodifiable(rows.map(FriendContact.fromJson));
     } on FormatException {
       throw const FormatException('好友列表响应无效');
+    } on SocketException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on HttpException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on TimeoutException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    }
+  }
+
+  /// Explicitly accept a pending incoming friend request. Only called from a
+  /// user action; bounded 401 renewal only, never retried automatically.
+  Future<void> acceptFriend(String accountId) =>
+      _respondFriend(Routes.friendAccept, accountId);
+
+  /// Explicitly deny a pending incoming friend request.
+  Future<void> denyFriend(String accountId) =>
+      _respondFriend(Routes.friendDeny, accountId);
+
+  Future<void> _respondFriend(String route, String accountId) async {
+    final AccountId id;
+    try {
+      id = AccountId.parse(accountId);
+    } on FormatException {
+      throw const FormatException('账号标识非法');
+    }
+    try {
+      await connection.request(
+        'POST',
+        route.replaceFirst('{accountId}', Uri.encodeComponent(id.value)),
+        retryAuthentication: true,
+        allowEmptySuccess: true,
+      );
+    } on FormatException {
+      throw const FormatException('好友操作响应无效');
     } on SocketException {
       throw const HostRequestException(
         Failure(FailureCode.unavailable, '宿主暂不可用'),
