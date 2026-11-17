@@ -180,6 +180,9 @@ Live2D 解包/渲染与热切换、托盘/自启/通知/Android 保活等端侧�
 - AC-10/17/18/19/20/32/33/34/35 等为“部分（内部能力/子集，多数未本票重跑）”；其余 未覆盖/未实现。
 - CR-01～CR-12：仅 CR-03/CR-07 有宿主基础切片，其余 未实现。
 - 本矩阵**不构成产品验收通过**；真实厂商连通、真机渲染/端侧行为均为**待实机验证**，不是通过。
+- **M14 增量（见 §F）**：`GET /api/v1/friends`、`GET /api/v1/lifecycle/cleanup/preview` 已验证
+  （host 单测/真 SQLite + 默认装配断言）；客户端联系人/创作/语音/附件查看/Settings 分组/清理预览
+  为 widget/loopback 已验证、**待真机**；`GET /attachments`（列表）**待实现**。
 
 ---
 
@@ -203,3 +206,39 @@ pwsh -File tool/init_host.ps1 -DataDir <全新空目录> -AdminName Root `
 结论：**AC-31 通过（子集）**——从零建库、唯一管理员、首个邀请码、监听配置写入均已实测。
 限制：本次用 `127.0.0.1` 回退（沙箱无 tailscale），脚本的 tailnet 地址自动探测逻辑未实测；
 管理端仍是 HTTP 后端，无 UI。
+
+---
+
+## F. M14 增量验收：新增路由与客户端页（2026-11-18）
+
+> 基线：`origin/main 8dafa17`。本票只更新文档与测试（新增
+> `apps/host/test/regression/m14_read_route_surfaces_test.dart`），**未改产品代码**。
+> 状态口径：`已验证（单测/loopback）` = 有可复现自动化检查；`待确认` = 依赖尚未合并的
+> 能力；`待真机` = 需真实设备/真实厂商/真实后端数据才能验收。
+
+### F.1 Host 只读路由
+
+| 项 | 实现位置 | 证据 | 状态 |
+|---|---|---|---|
+| `GET /api/v1/friends`（owner-scoped 好友列表） | `Routes.friends`；`FriendshipService.listContacts()`；`friendship_routes.dart`；默认宿主经 `SocialModule` 装配 | `apps/host/test/friends_list_route_test.dart`（真实 SQLite：空列表/owner 隔离/状态映射/schema 安全）；`m14_read_route_surfaces_test.dart` 断言默认装配已挂载且为 `[authenticated]` | **已验证（host 单测/真 SQLite）** |
+| `GET /api/v1/lifecycle/cleanup/preview`（只读保留期清理预览） | `Routes.lifecycleCleanupPreview`；`lifecycle_module.dart::_cleanupPreview`（owner-scoped、拒绝 query/body、异常 safe 500、绝不执行清理） | `apps/host/test/lifecycle_cleanup_preview_route_test.dart`；`m14_read_route_surfaces_test.dart` 断言默认装配挂载且为 `[authenticated]` | **已验证（host 单测）**；真实清理未执行（只读预览） |
+| `GET /api/v1/attachments`（附件**列表**） | 已由 m12 实现为 **PR#107**（commit `39723f0`：`AttachmentService.listOwn` + `router.get(Routes.attachments, _list)`，owner-scoped、不含 extractedText）；**尚未被外部自动合并进 main**（本基线 8dafa17 早于它） | `m14_read_route_surfaces_test.dart` 以 skip 记录（待 #107 合并后启用） | **已实现（PR#107 ready，待自动合并/合并后联调）** |
+
+### F.2 客户端页面
+
+| 项 | 实现位置 | 证据 | 状态 |
+|---|---|---|---|
+| 联系人（真实好友） | `features/contacts/contacts_screen.dart` + `net/friends_api.dart` | `contacts_screen_test.dart`、`friends_api_test.dart` | **已验证（widget/loopback）**；真机待 |
+| 创作运行时 | `features/creative/creative_screen.dart` + `net/creative_api.dart` | `creative_screen_test.dart`、`creative_api_test.dart` | **已验证（widget/loopback）**；真实宿主数据/真机待 |
+| 语音 polish/gap | `features/voice/voice_screen.dart` + `net/voice_api.dart` | `voice_screen_test.dart`、`voice_api_test.dart` | **已验证（widget/loopback）**；真实厂商音频/真机待 |
+| 附件诚实查看 | `features/attachments/attachments_screen.dart` | `attachments_screen_test.dart` | **部分已验证（查看器 widget）**；真实**列表**依赖 `GET /attachments`（PR#107 已实现、待合并） → **待确认** |
+| Settings 分组 | `features/settings/settings_screen.dart`（开发者区分组） | `settings_developer_groups_test.dart` | **已验证（widget）** |
+| 清理预览（客户端） | `net/lifecycle_api.dart::readCleanupPreview` + `features/lifecycle/backup_quota_screen.dart` | `lifecycle_cleanup_preview_api_test.dart`、`backup_quota_actions_test.dart` | **已验证（API/loopback + widget）**；真实清理执行未做 |
+
+### F.3 汇总与限制
+
+- Host 路由：`friends`、`lifecycle/cleanup/preview` **已验证**（单测/真 SQLite + 默认装配断言）；
+  `GET /attachments` 列表**待实现**。
+- 客户端：以上页面均以 **widget/loopback** 证据判为已实现/已验证；**全部未在真机运行**，
+  真实厂商、真实后端数据、通知/托盘/自启动等端侧行为仍属**待真机验证**。
+- 附件“列表”页在 host `GET /attachments` 列表路由（PR#107）合并前不计完成（查看器单页可查看 URL 直取的单附件）。

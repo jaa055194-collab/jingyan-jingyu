@@ -148,4 +148,21 @@
 
 | REQ-060 | FR-39；设备本地 profile 存储 | 设备侧形象档案与当前选择的记录契约 | 已批准 | 保存/列表（按 modelId 排序）；同 id 需 revision 严格递增否则拒绝；激活不存在模型抛错；删除清空激活；JSON 快照导出/导入原子且拒绝重复/未知字段/悬空激活；快照不含模型字节或绝对路径 | client_kit `Live2DModelStore` + `Live2DProfile.toJson` | live2d_store_test 8项 + profile 38项；client kit 全套243项、analyze clean | 纯内存契约与快照；真实文件持久化/加密/设备 UI 未接；未渲染 |
 
-未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
+## 增量验收：M14 新增路由与客户端页（2026-11-18，基线 origin/main 8dafa17）
+
+> 本票仅文档/测试增量，未改产品代码；新增 host 回归 `m14_read_route_surfaces_test.dart`
+> 断言默认宿主装配已挂载下列只读路由。客户端项均为 widget/loopback 证据，**未在真机运行**。
+
+| ID | 来源/章节 | 要求摘要 | 审批 | 可观察验收 | 实现 | 检查/证据 | 状态/缺口 |
+|---|---|---|---|---|---|---|---|
+| REQ-M14-01 | FR-08/22，AC-03 | 当前账号只读好友列表 | 已授权局部 | 仅本人可见；空列表；friends/outgoing/incoming/blocked 状态映射；他人 block 不泄露；未认证 401 | `Routes.friends`；`FriendshipService.listContacts`；`friendship_routes`；SocialModule 装配 | `friends_list_route_test`（真 SQLite）；`m14_read_route_surfaces_test` 默认装配断言 | **已验证（host 单测/loopback）**；真实客户端展示与真机待 |
+| REQ-M14-02 | FR-63/AC-14 | 只读保留期清理预览（不执行删除） | 已授权局部 | owner-scoped；拒绝 query/body；异常 safe 500；不删除任何数据 | `Routes.lifecycleCleanupPreview`；`LifecycleModule._cleanupPreview` | `lifecycle_cleanup_preview_route_test`；`m14_read_route_surfaces_test` | **已验证（host 单测）**；真实清理执行/磁盘探测未接 |
+| REQ-M14-03 | FR-62/AC-20 | 附件列表（collection GET） | 已授权局部 | owner-scoped；DTO 仅 id/conversationId/kind/mime/size/extractionStatus/createdAt；不含 extractedText；未认证 401 | PR#107（commit `39723f0`）：`AttachmentService.listOwn` + `router.get(Routes.attachments, _list)`；**尚未合并进 main**（基线 8dafa17 早于它） | `m14_read_route_surfaces_test` 以 skip 记录（待 #107 合并后启用） | **已实现（PR#107 ready，待自动合并/合并后联调）**；客户端附件列表 task-84 待合并后完成 |
+| REQ-M14-04 | FR-08/AC-03 | 联系人真实好友页 | 已授权局部 | 列表/空/denied/unknown 诚实态；无写入 | `features/contacts/contacts_screen` + `net/friends_api` | `contacts_screen_test`、`friends_api_test` | **已验证（widget/loopback）**；待真机 |
+| REQ-M14-05 | §14 CR-03/CR-07 | 创作运行时页（报告/电台只读） | 已授权局部 | 诚实空/未绑定/失败态；不触发生成/播放 | `features/creative/creative_screen` + `net/creative_api` | `creative_screen_test`、`creative_api_test` | **已验证（widget/loopback）**；真实宿主数据/真机待 |
+| REQ-M14-06 | FR-30/31 | 语音页 polish/gap | 已授权局部 | 诚实缺省/错误态；不配置真实密钥 | `features/voice/voice_screen` + `net/voice_api` | `voice_screen_test`、`voice_api_test` | **已验证（widget/loopback）**；真实厂商音频/真机待 |
+| REQ-M14-07 | FR-62 | 附件诚实查看页 | 已授权局部 | 单附件元数据诚实查看；无正文/字节越权 | `features/attachments/attachments_screen` | `attachments_screen_test` | **部分已验证（查看器 widget）**；列表依赖 REQ-M14-03 → 待确认 |
+| REQ-M14-08 | §15/AC-16 | Settings 开发者区分组 | 已授权局部 | 分组可见、标签/说明诚实；行为中性 | `features/settings/settings_screen` | `settings_developer_groups_test` | **已验证（widget）** |
+| REQ-M14-09 | FR-63/AC-14 | 客户端清理预览 | 已授权局部 | 只读预览；不执行清理；失败诚实 | `net/lifecycle_api.readCleanupPreview` + `features/lifecycle/backup_quota_screen` | `lifecycle_cleanup_preview_api_test`、`backup_quota_actions_test` | **已验证（API/loopback+widget）**；真实清理执行未做 |
+
+未验证/待确认项不得因同目录其它测试通过而计完成；真机与真实厂商验收另计。
