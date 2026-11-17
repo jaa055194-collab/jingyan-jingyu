@@ -6,10 +6,12 @@ import '../../net/lifecycle_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
 import '../../net/voice_api.dart';
+import '../../net/world_api.dart';
 import '../ai_config/ai_config_panel.dart';
 import '../diagnostics/module_test_panel.dart';
 import '../lifecycle/backup_quota_screen.dart';
 import '../voice/voice_screen.dart';
+import '../world/world_status_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.model, required this.onBack});
@@ -233,6 +235,33 @@ class SettingsScreen extends StatelessWidget {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => VoiceScreen(loadProfile: loadProfile),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('open-world-status'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.public_outlined),
+              title: const Text('世界状态'),
+              subtitle: const Text(
+                '只读查看世界布局/在场/形象的安全元数据；不做 3D 渲染、不含模型字节或密钥，未知如实标注',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                final load = connection == null
+                    ? null
+                    : (String spaceId) => WorldStatusScreen.loadFrom(
+                        WorldApi(connection),
+                        spaceId,
+                      );
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => WorldStatusScreen(load: load),
                   ),
                 );
               },
