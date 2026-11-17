@@ -143,6 +143,27 @@ void main() {
     },
   );
 
+  testWidgets(
+    'voice files section is an honest unavailable gap with no list or playback',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await pumpScreen(tester, (aiId) async => _profile());
+      final section = find.byKey(const Key('voice-assets-unavailable'));
+      expect(section, findsOneWidget);
+      expect(find.text('语音文件'), findsOneWidget);
+      expect(find.textContaining('宿主未提供语音资产/文件列表路由'), findsOneWidget);
+      expect(find.textContaining('合成音频不落盘'), findsOneWidget);
+      // No fabricated rows and no playback controls anywhere on the screen.
+      expect(find.byType(ListTile), findsNothing);
+      expect(find.byIcon(Icons.play_arrow), findsNothing);
+      expect(find.byIcon(Icons.play_circle_outline), findsNothing);
+      expect(find.textContaining('播放音频'), findsNothing);
+    },
+  );
+
   testWidgets('settings developer entry opens the read-only voice screen', (
     tester,
   ) async {
