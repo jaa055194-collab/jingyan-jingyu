@@ -131,4 +131,6 @@
 
 | REQ-061 | FR-39/NFR-04；移动端优化 | 面向骁龙888级别的纹理/显存预算规划 | 已批准 | 按长边与 RGBA8 总字节预算规划纹理；超长边等比缩放；总量超预算则统一减半至 1x1；返回是否在预算内；非正尺寸拒绝 | client_kit `planLive2DTextures`/`Live2DTextureLimits` | live2d_texture_budget_test 7项；默认8192边/256MiB预算对提供的5纹理产出移动端可接受总量；analyze clean | 规划器为保守静态估算，未查询真实 GL `MAX_TEXTURE_SIZE`、无真实显存/帧率；按用户要求后续以使用日志优化 |
 
+| REQ-062 | FR-38/39；渲染桥接 | Flutter↔WebView Live2D 渲染桥接协议与状态机 | 已批准 | idle→loading→ready 合法迁移；未加载/已销毁拒绝；错误可记录并重载；load 命令只含引用不含模型字节；参数 0..1、表达式/动作名非空且需 ready；未知事件拒绝；dispose 终态幂等 | client_kit `Live2DRendererBridge` | live2d_renderer_bridge_test 8项，先 RED（缺类/非法迁移）后 GREEN | 仅协议与状态机；WebView 实体、资源服务、真实渲染/热切换未实现 |
+
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。

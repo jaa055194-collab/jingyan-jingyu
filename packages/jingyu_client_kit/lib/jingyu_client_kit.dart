@@ -10,6 +10,7 @@ export 'src/draft_store.dart';
 export 'src/local_search_index.dart';
 export 'src/live2d_package.dart';
 export 'src/live2d_profile.dart';
+export 'src/live2d_renderer_bridge.dart';
 export 'src/live2d_store.dart';
 export 'src/live2d_texture_budget.dart';
 export 'src/local_message_cache.dart';

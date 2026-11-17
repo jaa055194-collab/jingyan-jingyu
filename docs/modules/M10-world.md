@@ -19,7 +19,8 @@ apps/host/lib/src/world/
 - 3D 页面是独立模块，不嵌进聊天页面（FR-12）：Android 用 WebView，Windows 用 WebView2，加载 feiyu-room-template 的 Three.js 房间。
 - 内置插件 `jingyu.room.generator` 由 client kit 的 `FeiyuRoomGenerator` 实现 `RoomGenerator`，按 `02-assets.md` §2 做"按提示词/对话建屋"：五个风格预设 + `RoomBrief`→`RoomLayout`，只产出布局数据，不下载或执行代码；`briefFromConversation` 把对话文本映射为 brief。
 - 本地 profile 元数据校验位于 `packages/jingyu_client_kit/lib/src/live2d_profile.dart`，只在设备本地校验配置，不检查数据库或参数名是否真实存在。
-- 本地模型包安全校验位于 `packages/jingyu_client_kit/lib/src/live2d_package.dart`（纯 Dart，不落盘、不联网）：`validateLive2DPackage(bytes)` 校验 Zip Slip/白名单/条目与体积/压缩比/JSON 深度、`FileReferences` 引用完整性、MOC3 魔数与版本、PNG 纹理魔数与像素预算，并返回 `model3Path/mocPath/textures/totalPixels/sha256`。它不渲染，也不证明模型视觉正确。
+- 设备本地档案与列表由 `Live2DModelStore` 保存（revision 校验、激活、原子 JSON 快照，不含模型字节）；模型包安全校验由 `validateLive2DPackage` 完成（Zip Slip/白名单/体积/压缩比/JSON 深度、引用完整性、MOC3 与 PNG 魔数、纹理像素预算）；纹理按 `planLive2DTextures` 的移动端预算降采样规划。
+- 渲染桥接：client kit `Live2DRendererBridge` 定义 Flutter↔WebView 的加载/参数/表达式/动作/错误/销毁协议与 idle→loading→ready 状态机；WebView 实体与资源服务由外壳实现，尚未接入真实渲染。
 - Live2D 选择/导入由每位用户在自己的设备执行；不使用 `hostOnly` 插件门控。各设备独立保存模型文件与 profile，**不做跨端同步、不广播单一 model_id/profile_rev**；同一账号的手机与电脑可各自使用不同模型（如手机 B、电脑 C）。设备缺少本地模型或有效映射时回退 VRM，不下载他端模型。
 
 ## 规则
