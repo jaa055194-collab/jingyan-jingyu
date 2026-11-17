@@ -21,6 +21,7 @@ apps/host/lib/src/world/
 - 本地 profile 元数据校验位于 `packages/jingyu_client_kit/lib/src/live2d_profile.dart`，只在设备本地校验配置，不检查数据库或参数名是否真实存在。
 - 设备本地档案与列表由 `Live2DModelStore` 保存（revision 校验、激活、原子 JSON 快照，不含模型字节）；模型包安全校验由 `validateLive2DPackage` 完成（Zip Slip/白名单/体积/压缩比/JSON 深度、引用完整性、MOC3 与 PNG 魔数、纹理像素预算）；纹理按 `planLive2DTextures` 的移动端预算降采样规划。
 - 渲染桥接：client kit `Live2DRendererBridge` 定义 Flutter↔WebView 的加载/参数/表达式/动作/错误/销毁协议与 idle→loading→ready 状态机；WebView 实体与资源服务由外壳实现，尚未接入真实渲染。
+- WebView 页面资源：`packages/jingyu_live2d_web` 提供 `live2d_viewer.html/js`（与桥接协议一致的加载/参数/表达式/动作/dispose 处理与 PurismCore 更新循环）与 `tool/fetch_purismcore.ps1`（按固定版本+sha256 拉取 MIT 运行时，不入库）。像素绘制需外壳提供 `window.Live2DRenderer` WebGL 适配器，尚未实现。
 - Live2D 选择/导入由每位用户在自己的设备执行；不使用 `hostOnly` 插件门控。各设备独立保存模型文件与 profile，**不做跨端同步、不广播单一 model_id/profile_rev**；同一账号的手机与电脑可各自使用不同模型（如手机 B、电脑 C）。设备缺少本地模型或有效映射时回退 VRM，不下载他端模型。
 
 ## 规则

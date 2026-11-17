@@ -16,6 +16,7 @@ $packages = @(
   'packages/jingyu_protocol',
   'packages/jingyu_host_kit',
   'packages/jingyu_client_kit',
+  'packages/jingyu_live2d_web',
   'apps/host'
 )
 

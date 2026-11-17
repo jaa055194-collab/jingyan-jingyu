@@ -1,0 +1,11 @@
+name: jingyu_live2d_web
+description: 自包含 WebView Live2D 查看器资源与运行时分发脚本（不包含模型/私有资产）。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

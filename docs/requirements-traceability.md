@@ -133,4 +133,6 @@
 
 | REQ-062 | FR-38/39；渲染桥接 | Flutter↔WebView Live2D 渲染桥接协议与状态机 | 已批准 | idle→loading→ready 合法迁移；未加载/已销毁拒绝；错误可记录并重载；load 命令只含引用不含模型字节；参数 0..1、表达式/动作名非空且需 ready；未知事件拒绝；dispose 终态幂等 | client_kit `Live2DRendererBridge` | live2d_renderer_bridge_test 8项，先 RED（缺类/非法迁移）后 GREEN | 仅协议与状态机；WebView 实体、资源服务、真实渲染/热切换未实现 |
 
+| REQ-063 | FR-38/39；WebView 查看器资源 | 自包含 Live2D 查看器页面与运行时分发 | 已批准 | 页面/JS 实现与桥接一致的 load/setParam/setExpression/setMotion/dispose 与 ready/error；HTML 只引用本地运行时；运行时分发脚本固定版本+sha256 且不下载模型；无远程模型 URL/模型字节 | packages/jingyu_live2d_web | asset_manifest_test 4项；package analyze clean | 无 WebGL 绘制适配器/真实渲染/热切换/外壳接入/真机验证 |
+
 未实现要求不能因已有测试通过而计完成。完整M03–M13及AI产品主体功能见implementation-status.md的明确缺口。
