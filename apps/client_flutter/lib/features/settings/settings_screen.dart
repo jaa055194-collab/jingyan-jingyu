@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
+import '../diagnostics/module_test_panel.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.model, required this.onBack});
@@ -134,6 +135,24 @@ class SettingsScreen extends StatelessWidget {
               onChanged: model.busy ? null : model.setFontScale,
             ),
             const Text('此设置同时应用于导航、消息和输入区域。'),
+            const Divider(height: 32),
+            Text('开发者', style: Theme.of(context).textTheme.titleMedium),
+            ListTile(
+              key: const Key('open-module-test'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.monitor_heart_outlined),
+              title: const Text('模块测试与性能探针'),
+              subtitle: const Text('列出已接入模块，并测量本机帧率/帧耗时与内存（显存需真机原生工具）'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('模块测试与性能探针')),
+                    body: const ModuleTestPanel(),
+                  ),
+                ),
+              ),
+            ),
             const Divider(height: 32),
             Text('我的 AI', style: Theme.of(context).textTheme.titleMedium),
             const Text('仅管理你拥有的 AI 账户。回复仍需宿主配置；创建不会自动配置模型、社交等级或授权。'),
