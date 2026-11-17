@@ -8,6 +8,7 @@ library;
 export 'src/client_session.dart';
 export 'src/draft_store.dart';
 export 'src/local_search_index.dart';
+export 'src/live2d_package.dart';
 export 'src/live2d_profile.dart';
 export 'src/local_message_cache.dart';
 export 'src/outbox.dart';

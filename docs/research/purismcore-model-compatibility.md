@@ -14,6 +14,8 @@ Core parsing/update does not prove image correctness, Flutter WebView integratio
 
 The provided model references five textures. Their IHDR sizes include an 8192 x 8192 atlas; decoded RGBA8 base textures total about 592 MiB before mipmaps, WASM/model copies and masks/offscreen buffers. Mobile WebView GPU limits and memory may make the unchanged texture unsuitable. Validate `MAX_TEXTURE_SIZE`, memory and sustained frame rate on representative Android hardware or obtain an approved downsampling policy.
 
+The repository's pure-Dart `validateLive2DPackage` was also run against the supplied archive locally: it returned `ok=true`, resolved the model3/MOC3 references and five PNG textures, and measured 155,189,248 total texture pixels under its default 200M limit. That is a metadata/byte check only, not a render or device-memory test.
+
 The supplied model notice separately asks for attribution and prohibits redistribution; some commercial product-inclusion cases ask users to contact the author. Do not bundle or redistribute this model. PurismCore's MIT runtime license does not establish model rights, Cubism SDK rights or trademark/format legal conclusions. Retain creator attribution when the user's local model is used. No Cubism SDK/Core binary was downloaded or bundled.
 
 ## Candidate integration, not implemented

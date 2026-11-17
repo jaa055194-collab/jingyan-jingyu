@@ -18,14 +18,15 @@ apps/host/lib/src/world/
 
 - 3D 页面是独立模块，不嵌进聊天页面（FR-12）：Android 用 WebView，Windows 用 WebView2，加载 feiyu-room-template 的 Three.js 房间。
 - 内置插件 `jingyu.room.generator` 实现 `RoomGenerator`，按 `02-assets.md` §2 做"按提示词生成房间"，在首次创建人物时出现。
-- 本地 profile 元数据校验位于 `packages/jingyu_client_kit/lib/src/live2d_profile.dart`，不属于宿主 registry；只校验配置，不检查模型文件是否存在或参数名是否真实可用。
+- 本地 profile 元数据校验位于 `packages/jingyu_client_kit/lib/src/live2d_profile.dart`，只在设备本地校验配置，不检查数据库或参数名是否真实存在。
+- 本地模型包安全校验位于 `packages/jingyu_client_kit/lib/src/live2d_package.dart`（纯 Dart，不落盘、不联网）：`validateLive2DPackage(bytes)` 校验 Zip Slip/白名单/条目与体积/压缩比/JSON 深度、`FileReferences` 引用完整性、MOC3 魔数与版本、PNG 纹理魔数与像素预算，并返回 `model3Path/mocPath/textures/totalPixels/sha256`。它不渲染，也不证明模型视觉正确。
 - Live2D 选择/导入由每位用户在自己的设备执行；不使用 `hostOnly` 插件门控。各设备独立保存模型文件与 profile，跨端只同步稳定引用和 revision；远端缺少该引用或本地文件时应回退 VRM，不能下载其他用户模型。
 
 ## 规则
 
 1. 每个设备独立选取用户自行取得的 Live2D 模型；默认目录/模型包不由应用提供。VRM 保持默认跨端 fallback。
 2. profile 只保存相对 model3 manifest 路径、稳定 model_id、profile_rev 与语义 param_map，不保存模型字节、绝对路径、URL、API key 或 Cubism/Core 文件；模型字节不得进入服务端附件、同步、导出或共享备份。
-3. profile schema 与 mapping 校验是导入安全流程的一部分；实际解包器仍须实施 Zip Slip 防护、白名单/拒绝扩展名、条目数/解压体积/压缩比/JSON 深度上限、纹理魔数和像素总量校验。缺口型、左右眨眼、表情或动作映射时不得启用；不可猜参数。
+3. 导入安全由两层组成：`validateLive2DPackage` 在设备本地校验压缩包（Zip Slip、拒绝脚本/可执行扩展名、条目数/单条/总量/压缩比、model3 JSON 深度、被引用文件是否存在、MOC3 魔数与版本、PNG 魔数与纹理像素预算），`Live2DProfile` 再校验显式映射。缺口型/左右眨眼/表情/动作映射禁止启用，不许猜参数。两层都只是元数据/字节校验，不证明参数名存在于模型、也不证明渲染正确。
 4. 热切换须离屏预载 → 句边界/口型≈0 的一帧原子替换 → 新模型首帧成功后销毁旧实例；不中断音频；失败回滚。当前仅定义 profile metadata，runtime 与热切换尚未实现。
 5. 拜访：好友可进小院；室内需邀请；单户访客 ≤4；被拉黑方无法拜访（口径 C-5）。
 6. 宿主离线时位置冻结，恢复后继续，不补造路上经历（FR-36）。
