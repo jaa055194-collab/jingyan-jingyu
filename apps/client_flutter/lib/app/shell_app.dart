@@ -10,6 +10,7 @@ import '../features/chat/chat_pane.dart';
 import '../features/settings/settings_screen.dart';
 import '../features/world/world_screen.dart';
 import '../features/contacts/contacts_screen.dart';
+import '../net/friends_api.dart';
 import '../features/inbox/inbox_screen.dart';
 import '../features/creative/creative_screen.dart';
 
@@ -132,6 +133,20 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
+  /// Host-backed read-only friends loader with the same semantics as
+  /// [creative]: wire [FriendsApi.list] only when the runtime exposes a live
+  /// connection; otherwise the contacts screen keeps its honest empty state.
+  /// The shell only wires loaders here — tab layout and settings are untouched.
+  Widget contacts() {
+    final model = widget.model;
+    final HostConnection? connection = model is ClientRuntime
+        ? model.connection
+        : null;
+    if (connection == null) return const ContactsScreen();
+    final api = FriendsApi(connection);
+    return ContactsScreen(loadFriends: api.list);
+  }
+
   Widget empty() {
     const titles = ['', '暂无联系人', '暂无动态', '暂无通知', '世界尚未开放'];
     const details = [
@@ -184,7 +199,7 @@ class _ShellHomeState extends State<_ShellHome> {
           : destination == 4
           ? world()
           : destination == 1
-          ? const ContactsScreen()
+          ? contacts()
           : destination == 2
           ? creative()
           : destination == 3

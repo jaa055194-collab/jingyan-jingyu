@@ -76,7 +76,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Alice'), findsOneWidget);
     expect(find.textContaining('alice'), findsOneWidget);
-    expect(find.textContaining('好友'), findsOneWidget);
+    expect(find.text('alice · 好友'), findsOneWidget);
     expect(find.text('Bob'), findsOneWidget);
     expect(find.textContaining('对方请求添加你'), findsOneWidget);
     // Original honest "no route" text is no longer shown once a list loads.
