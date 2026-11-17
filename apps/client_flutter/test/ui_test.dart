@@ -821,11 +821,14 @@ void main() {
         findsOneWidget,
       );
 
-      // Moments still renders the honest placeholder in this revision because
-      // the creative module page is not wired into this shell yet.
+      // 动态 is now the CreativeScreen module surface; with no host connection
+      // wired it reports an honest unbound state instead of inventing content.
       await tester.tap(find.text('动态'));
       await tester.pumpAndSettle();
-      expect(find.text('暂无动态'), findsOneWidget);
+      expect(
+        find.text('创作内容需要接入宿主连接后显示；宿主读取接口已就绪。'),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     },
   );
