@@ -151,7 +151,12 @@ void main() {
             urlGuard: guard,
             clock: clock,
             // Same guarded-HTTP implementation the production worker runs.
-            adapter: OpenAiCompatibleChatAdapter(GuardedHttpTransport()),
+            // Accept-Encoding: gzip is advertised so providers that always gzip
+            // (PR#93 diagnosis) return parseable bodies; the inflated body is
+            // still bounded by the transport's maxResponseBytes.
+            adapter: OpenAiCompatibleChatAdapter(
+              GuardedHttpTransport(autoUncompress: true),
+            ),
           );
           final result = await runtime.chat(
             ownerId: 'alice',

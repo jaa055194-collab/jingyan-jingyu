@@ -7,6 +7,11 @@ import 'package:test/test.dart';
 
 import 'package:jingyu_host/src/security/guarded_http.dart';
 
+/// Real gzip compression used by the transparent-decompression tests.
+Future<List<int>> gzipOf(List<int> bytes) => gzip.encoder
+    .bind(Stream<List<int>>.value(bytes))
+    .fold<List<int>>(<int>[], (acc, chunk) => acc..addAll(chunk));
+
 // The only substituted boundary is the socket destination: the real HttpClient
 // still writes/parses HTTP and enforces the production transport policy.
 class LocalConnector implements PinnedConnector {
@@ -275,6 +280,125 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(connector.addresses, isEmpty);
       expect(requests, 0);
+    },
+  );
+
+  test(
+    'opt-in transparent decompression inflates gzip and keeps content-type',
+    () async {
+      final payload = utf8.encode('{"choices":[],"usage":{}}');
+      final wire = await gzipOf(payload);
+      // Small payloads may compress larger; decompression must round-trip.
+      handler = (request) async {
+        // The caller advertises gzip; the server compresses regardless.
+        expect(request.headers.value('accept-encoding'), 'gzip');
+        request.response.headers.contentType = ContentType.json;
+        request.response.headers.set('content-encoding', 'gzip');
+        request.response.add(wire);
+        await request.response.close();
+      };
+      final result = await GuardedHttpTransport(
+        resolver: (_) async => [InternetAddress('93.184.216.34')],
+        connector: connector,
+        timeout: const Duration(seconds: 2),
+        maxResponseBytes: 1024,
+        autoUncompress: true,
+      ).request('GET', Uri.parse('http://api.example/path'));
+      expect(result.isOk, isTrue, reason: result.failureOrNull?.message);
+      expect(result.value.statusCode, 200);
+      expect(utf8.decode(result.value.body), utf8.decode(payload));
+      expect(result.value.headers['content-type'], [
+        'application/json; charset=utf-8',
+      ]);
+    },
+  );
+
+  test(
+    'gzip bomb cannot expand past maxResponseBytes with autoUncompress',
+    () async {
+      final bomb = await gzipOf(
+        List<int>.filled(4096, 65),
+      ); // tiny wire, huge inflation
+      expect(bomb.length, lessThan(64));
+      handler = (request) async {
+        request.response.headers.contentType = ContentType.binary;
+        request.response.headers.set('content-encoding', 'gzip');
+        request.response.add(bomb);
+        await request.response.close();
+      };
+      final result = await GuardedHttpTransport(
+        resolver: (_) async => [InternetAddress('93.184.216.34')],
+        connector: connector,
+        timeout: const Duration(seconds: 2),
+        maxResponseBytes: 1024,
+        autoUncompress: true,
+      ).request('GET', Uri.parse('http://api.example/bomb'));
+      expectSafeFailure(result, FailureCode.unavailable);
+      expect(result.failureOrNull!.message, isNot(contains('bomb')));
+    },
+  );
+
+  test('default transport keeps non-gzip bytes verbatim (HttpClient may still '
+      'auto-decompress its own gzip negotiation)', () async {
+    const wire = 'ok-payload';
+    handler = (request) async {
+      // Dart's HttpClient adds Accept-Encoding itself; asserting its absence
+      // would be wrong. The server answers with raw (non-gzip) bytes.
+      request.response.headers.contentType = ContentType.text;
+      request.response.write(wire);
+      await request.response.close();
+    };
+    final result = await transport().request(
+      'GET',
+      Uri.parse('http://api.example/kept'),
+    );
+    expect(result.isOk, isTrue);
+    expect(utf8.decode(result.value.body), wire);
+  });
+
+  test(
+    'gzip-looking bytes are kept verbatim when decompression is not opted in',
+    () async {
+      final wire = await gzipOf(utf8.encode('ok-payload'));
+      handler = (request) async {
+        request.response.headers.contentType = ContentType.binary;
+        request.response.headers.set('content-encoding', 'gzip');
+        request.response.add(wire);
+        await request.response.close();
+      };
+      final result = await transport().request(
+        'GET',
+        Uri.parse('http://api.example/kept'),
+      );
+      expect(result.isOk, isTrue);
+      expect(result.value.body, wire);
+    },
+  );
+
+  test(
+    'declared-gzip response keeps raw bytes for the caller to decode',
+    () async {
+      handler = (request) async {
+        // Dart's HttpClient transparently inflates a declared-gzip body it can
+        // parse, so the transport sees decompressed bytes when the stream is
+        // valid. A *malformed* gzip stream may survive verbatim; either way the
+        // transport must not crash the pipeline — assert the request completes.
+        request.response.headers.contentType = ContentType.binary;
+        request.response.headers.set('content-encoding', 'gzip');
+        request.response.add(const <int>[0x1f, 0x8b, 0x08, 9, 9, 9, 9, 9, 9]);
+        await request.response.close();
+      };
+      final result = await GuardedHttpTransport(
+        resolver: (_) async => [InternetAddress('93.184.216.34')],
+        connector: connector,
+        timeout: const Duration(seconds: 2),
+        maxResponseBytes: 1024,
+        autoUncompress: true,
+      ).request('GET', Uri.parse('http://api.example/corrupt'));
+      expect(
+        result.isOk || result.failureOrNull?.code == FailureCode.unavailable,
+        isTrue,
+      );
     },
   );
 

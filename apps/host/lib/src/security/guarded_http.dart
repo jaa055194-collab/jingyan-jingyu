@@ -8,7 +8,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:jingyu_core/jingyu_core.dart';
-
 import 'url_guard.dart';
 
 /// 可信的连接策略。实现必须连接传入的已校验地址，不得再次解析域名。
@@ -102,7 +101,7 @@ final class GuardedResponse {
 /// 每次请求均独立校验 URL/DNS，不信任保存配置时的校验结果。
 ///
 /// 默认总时限 15 秒（包含 DNS、连接、TLS、响应头及响应流），响应体上限
-/// 4 MiB，按交付的字节数限制；关闭自动解压，防止压缩后隐式膨胀。
+/// 4 MiB，按交付的字节数限制；默认关闭自动解压，防止压缩后隐式膨胀。
 /// 不自动重试、不跟随任何 3xx、不使用代理、不跨请求复用连接。
 /// resolver / connector 是可信注入点，供无公网测试使用。
 final class GuardedHttpTransport {
@@ -112,6 +111,7 @@ final class GuardedHttpTransport {
     PinnedConnector connector = const SocketPinnedConnector(),
     this.timeout = const Duration(seconds: 15),
     this.maxResponseBytes = 4 * 1024 * 1024,
+    this.autoUncompress = false,
   }) : _resolve = resolver ?? InternetAddress.lookup,
        _securityContext = securityContext,
        _connector = connector {
@@ -125,6 +125,13 @@ final class GuardedHttpTransport {
   final PinnedConnector _connector;
   final Duration timeout;
   final int maxResponseBytes;
+
+  /// Opt-in transparent decompression for providers that always gzip (PR#93
+  /// diagnosis). Default stays false so production responses are never silently
+  /// inflated; when true the caller also advertises `Accept-Encoding: gzip` and
+  /// the decompressed body is still bounded by [maxResponseBytes] (gzip-bomb
+  /// protection). The compressed wire size is bounded by [maxResponseBytes] too.
+  final bool autoUncompress;
 
   Future<Result<GuardedResponse>> request(
     String method,
@@ -213,6 +220,36 @@ final class GuardedHttpTransport {
         }
         bytes.add(chunk);
       }
+      var wire = bytes.takeBytes();
+      // Opt-in decompression. The compressed wire body was already bounded
+      // above; the inflated body is re-bounded here so a gzip bomb cannot
+      // expand past maxResponseBytes. Only a response that *declares*
+      // `content-encoding: gzip` AND carries the gzip magic is inflated; other
+      // responses keep their raw bytes, which the caller can still reject.
+      final declaredGzip =
+          incoming.headers.value('content-encoding')?.trim().toLowerCase() ==
+          'gzip';
+      if (autoUncompress && declaredGzip && wire.length >= 3 && _isGzip(wire)) {
+        try {
+          final inflated = gzip.decoder
+              .bind(Stream<List<int>>.value(wire))
+              .fold<BytesBuilder>(BytesBuilder(), (acc, chunk) {
+                if (acc.length + chunk.length > maxResponseBytes) {
+                  throw const _InflaterExceeded();
+                }
+                acc.add(chunk);
+                return acc;
+              })
+              .then((acc) => acc.takeBytes());
+          wire = await inflated;
+        } on _InflaterExceeded {
+          return err(FailureCode.unavailable, '响应体超过限额');
+        } catch (_) {
+          // Decompression failure never surfaces provider content; callers see
+          // the same safe unavailable failure as any other transport error.
+          return err(FailureCode.unavailable, '响应解压失败');
+        }
+      }
       final responseHeaders = <String, List<String>>{};
       incoming.headers.forEach((name, values) {
         responseHeaders[name] = List.of(values);
@@ -221,7 +258,7 @@ final class GuardedHttpTransport {
         GuardedResponse(
           statusCode: incoming.statusCode,
           headers: responseHeaders,
-          body: bytes.takeBytes(),
+          body: wire,
         ),
       );
     }
@@ -239,6 +276,16 @@ final class GuardedHttpTransport {
       client?.close(force: true);
     }
   }
+}
+
+bool _isGzip(List<int> bytes) =>
+    bytes.length >= 3 &&
+    bytes[0] == 0x1f &&
+    bytes[1] == 0x8b &&
+    bytes[2] == 0x08;
+
+final class _InflaterExceeded implements Exception {
+  const _InflaterExceeded();
 }
 
 final class _RequestExpired implements Exception {
