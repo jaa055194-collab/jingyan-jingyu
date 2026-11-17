@@ -10,6 +10,25 @@ enum FriendshipState {
   blocked,
 }
 
+/// One owner-scoped contact row. Read-only metadata from the same friendship
+/// tables; no consent, conversation or message content is included.
+class FriendContact {
+  const FriendContact({
+    required this.accountId,
+    required this.displayName,
+    required this.state,
+  });
+  final String accountId;
+  final String displayName;
+  final FriendshipState state;
+
+  Map<String, Object?> toJson() => {
+    'accountId': accountId,
+    'displayName': displayName,
+    'state': state.name,
+  };
+}
+
 /// Trusted internal capability. Supply the authenticated principal at construction,
 /// never an actor from request JSON. There is no operator delegation for consent.
 /// Human-to-AI requests can remain pending; AI permissions are not implemented.
@@ -229,6 +248,70 @@ AND ((sender=? AND target=?) OR (sender=? AND target=?))
         return Ok(
           rows.isEmpty ? FriendshipState.none : FriendshipState.outgoingPending,
         );
+      });
+
+  /// Owner-scoped, read-only contact list for the authenticated human.
+  ///
+  /// Reuses the same friendship/request/block tables. Returns active accounts
+  /// only; incoming blocks (someone blocked the caller) are deliberately not
+  /// disclosed. This grants no consent and changes no relationship state.
+  Future<Result<List<FriendContact>>> listContacts() =>
+      _db.transaction((tx) async {
+        if (await activeKindInTx(tx, _actor) != 'human') {
+          return err(FailureCode.notFound, 'Active human not found');
+        }
+        final rows = await tx.query(
+          '''
+SELECT other.id AS id, other.display_name AS displayName,
+  CASE
+    WHEN EXISTS(SELECT 1 FROM account_blocks b WHERE b.blocker=? AND b.target=other.id) THEN 'blocked'
+    WHEN EXISTS(SELECT 1 FROM friendships f WHERE (f.account_low=? AND f.account_high=other.id) OR (f.account_low=other.id AND f.account_high=?)) THEN 'friends'
+    WHEN EXISTS(SELECT 1 FROM friend_requests r WHERE r.sender=other.id AND r.target=? AND r.status='pending') THEN 'incomingPending'
+    ELSE 'outgoingPending'
+  END AS state
+FROM account other
+WHERE other.disabled=0 AND other.id<>?
+AND (
+  EXISTS(SELECT 1 FROM friendships f WHERE (f.account_low=? AND f.account_high=other.id) OR (f.account_low=other.id AND f.account_high=?))
+  OR EXISTS(SELECT 1 FROM friend_requests r WHERE r.status='pending' AND ((r.sender=? AND r.target=other.id) OR (r.sender=other.id AND r.target=?)))
+  OR EXISTS(SELECT 1 FROM account_blocks b WHERE b.blocker=? AND b.target=other.id)
+)
+ORDER BY state ASC, other.id ASC
+''',
+          [
+            _actor,
+            _actor,
+            _actor,
+            _actor,
+            _actor,
+            _actor,
+            _actor,
+            _actor,
+            _actor,
+            _actor,
+          ],
+        );
+        final contacts = <FriendContact>[];
+        for (final row in rows) {
+          final state = switch (row['state']) {
+            'blocked' => FriendshipState.blocked,
+            'friends' => FriendshipState.friends,
+            'incomingPending' => FriendshipState.incomingPending,
+            'outgoingPending' => FriendshipState.outgoingPending,
+            _ => FriendshipState.none,
+          };
+          if (state == FriendshipState.none) {
+            return err(FailureCode.internal, 'Unexpected contact state');
+          }
+          contacts.add(
+            FriendContact(
+              accountId: row['id'] as String,
+              displayName: row['displayName'] as String,
+              state: state,
+            ),
+          );
+        }
+        return Ok(List<FriendContact>.unmodifiable(contacts));
       });
 
   /// Internal policy query, not a client-visible arbitrary-pair lookup.
