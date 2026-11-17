@@ -276,157 +276,206 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
             Padding(
               key: const Key('ai-config-write-status'),
               padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text(
-                _status!,
-                style: TextStyle(
-                  color: _statusError
-                      ? Theme.of(context).colorScheme.error
-                      : null,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _statusError ? '失败/未知' : '成功',
+                    key: const Key('ai-config-write-state'),
+                    style: TextStyle(
+                      color: _statusError
+                          ? Theme.of(context).colorScheme.error
+                          : null,
+                    ),
+                  ),
+                  Text(
+                    _status!,
+                    style: TextStyle(
+                      color: _statusError
+                          ? Theme.of(context).colorScheme.error
+                          : null,
+                    ),
+                  ),
+                ],
               ),
             ),
           const Divider(height: 32),
-          _section('人格', [
-            _field('persona-p0', _p0, 'P0（key=value，每行一条）', lines: 3),
-            _field('persona-p1', _p1, 'P1（key=value，每行一条）', lines: 3),
-            _field('persona-p2', _p2, 'P2（key=value，每行一条）', lines: 3),
-            Row(
-              children: [
-                Expanded(
-                  child: _field(
-                    'persona-version',
-                    _personaVersion,
-                    '当前版本（修改时必填）',
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _field('persona-reason', _personaReason, '修改原因'),
-                ),
-              ],
-            ),
-            Wrap(
-              spacing: 8,
-              children: [
-                FilledButton(
-                  key: const Key('persona-initialize'),
-                  onPressed: !_ready
-                      ? null
-                      : () => _run((writer) {
-                          final p0 = _pairs(_p0.text);
-                          final p1 = _pairs(_p1.text);
-                          final p2 = _pairs(_p2.text);
-                          if (p0.isEmpty || p1.isEmpty || p2.isEmpty) {
-                            throw const FormatException('人格三层 p0/p1/p2 都必须非空');
-                          }
-                          return writer.initializePersona(
-                            _profileId!,
-                            p0: p0,
-                            p1: p1,
-                            p2: p2,
-                          );
-                        }, '人格已初始化'),
-                  child: const Text('初始化人格'),
-                ),
-                OutlinedButton(
-                  key: const Key('persona-edit'),
-                  onPressed: !_ready
-                      ? null
-                      : () => _run(
-                          (writer) => writer.editPersona(
-                            _profileId!,
-                            expectedVersion: _requireInt(
-                              _personaVersion,
-                              '当前版本',
-                            ),
-                            reason: _personaReason.text.trim(),
-                            p0: {..._pairs(_p0.text)},
-                            p1: {..._pairs(_p1.text)},
-                            p2: {..._pairs(_p2.text)},
-                          ),
-                          '人格已保存为新版本',
-                        ),
-                  child: const Text('保存人格修改'),
-                ),
-              ],
-            ),
-          ]),
-          _section('Provider', [
-            _field('provider-name', _provName, '名称'),
-            _field('provider-base-url', _provBaseUrl, 'Base URL'),
-            _field(
-              'provider-api-key',
-              _provApiKey,
-              'API Key（遮蔽输入，仅提交给宿主）',
-              obscure: true,
-            ),
-            _field('provider-capabilities', _provCaps, '能力（逗号分隔，如 chat）'),
-            _field('provider-id', _provId, '已有 Provider ID（更新时填）'),
-            Wrap(
-              spacing: 8,
-              children: [
-                FilledButton(
-                  key: const Key('provider-create'),
-                  onPressed: !_ready ? null : _createProvider,
-                  child: const Text('新建 Provider'),
-                ),
-                OutlinedButton(
-                  key: const Key('provider-update'),
-                  onPressed: !_ready ? null : _updateProvider,
-                  child: const Text('更新 Provider'),
-                ),
-              ],
-            ),
-          ]),
-          _section('聊天绑定', [
-            _field('binding-provider', _bindProvider, 'Provider ID'),
-            _field('binding-model', _bindModel, '模型 ID'),
-            FilledButton(
-              key: const Key('binding-save'),
-              onPressed: !_ready
-                  ? null
-                  : () => _run(
-                      (writer) => writer.setChatBinding(
-                        _profileId!,
-                        providerId: _bindProvider.text.trim(),
-                        model: _bindModel.text.trim(),
-                      ),
-                      '聊天绑定已保存',
+          _section(
+            '人格',
+            [
+              _field('persona-p0', _p0, 'P0（key=value，每行一条）', lines: 3),
+              _field('persona-p1', _p1, 'P1（key=value，每行一条）', lines: 3),
+              _field('persona-p2', _p2, 'P2（key=value，每行一条）', lines: 3),
+              Row(
+                children: [
+                  Expanded(
+                    child: _field(
+                      'persona-version',
+                      _personaVersion,
+                      '当前版本（修改时必填）',
                     ),
-              child: const Text('保存聊天绑定'),
-            ),
-          ]),
-          _section('预算', [
-            Row(
-              children: [
-                Expanded(
-                  child: _field('budget-daily', _budgetDaily, '每日 token 上限'),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _field('budget-offset', _budgetOffset, '时区偏移（分钟）'),
-                ),
-              ],
-            ),
-            _field(
-              'budget-layers',
-              _budgetLayers,
-              '分层上限（b0Life=0 等，五行）',
-              lines: 5,
-            ),
-            _field('budget-caps', _budgetCaps, '能力上限（chat=0 等，七行）', lines: 7),
-            FilledButton(
-              key: const Key('budget-save'),
-              onPressed: !_ready ? null : _saveBudget,
-              child: const Text('保存预算'),
-            ),
-          ]),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _field('persona-reason', _personaReason, '修改原因'),
+                  ),
+                ],
+              ),
+              Wrap(
+                spacing: 8,
+                children: [
+                  FilledButton(
+                    key: const Key('persona-initialize'),
+                    onPressed: !_ready
+                        ? null
+                        : () => _run((writer) {
+                            final p0 = _pairs(_p0.text);
+                            final p1 = _pairs(_p1.text);
+                            final p2 = _pairs(_p2.text);
+                            if (p0.isEmpty || p1.isEmpty || p2.isEmpty) {
+                              throw const FormatException(
+                                '人格三层 p0/p1/p2 都必须非空',
+                              );
+                            }
+                            return writer.initializePersona(
+                              _profileId!,
+                              p0: p0,
+                              p1: p1,
+                              p2: p2,
+                            );
+                          }, '人格已初始化'),
+                    child: const Text('初始化人格'),
+                  ),
+                  OutlinedButton(
+                    key: const Key('persona-edit'),
+                    onPressed: !_ready
+                        ? null
+                        : () => _run(
+                            (writer) => writer.editPersona(
+                              _profileId!,
+                              expectedVersion: _requireInt(
+                                _personaVersion,
+                                '当前版本',
+                              ),
+                              reason: _personaReason.text.trim(),
+                              p0: {..._pairs(_p0.text)},
+                              p1: {..._pairs(_p1.text)},
+                              p2: {..._pairs(_p2.text)},
+                            ),
+                            '人格已保存为新版本',
+                          ),
+                    child: const Text('保存人格修改'),
+                  ),
+                ],
+              ),
+            ],
+            helpKey: 'help-persona',
+            help:
+                '人格三层：P0 核心（不可自改）、P1 风格（可自主迭代）、P2 情绪；'
+                '初始化需三层全部非空，保存修改需当前版本与原因，历史可回滚。',
+          ),
+          _section(
+            'Provider',
+            [
+              _field('provider-name', _provName, '名称'),
+              _field('provider-base-url', _provBaseUrl, 'Base URL'),
+              _field(
+                'provider-api-key',
+                _provApiKey,
+                'API Key（遮蔽输入，仅提交给宿主）',
+                obscure: true,
+              ),
+              _field('provider-capabilities', _provCaps, '能力（逗号分隔，如 chat）'),
+              _field('provider-id', _provId, '已有 Provider ID（更新时填）'),
+              Wrap(
+                spacing: 8,
+                children: [
+                  FilledButton(
+                    key: const Key('provider-create'),
+                    onPressed: !_ready ? null : _createProvider,
+                    child: const Text('新建 Provider'),
+                  ),
+                  OutlinedButton(
+                    key: const Key('provider-update'),
+                    onPressed: !_ready ? null : _updateProvider,
+                    child: const Text('更新 Provider'),
+                  ),
+                ],
+              ),
+            ],
+            helpKey: 'help-provider',
+            help:
+                'api_key 只经遮蔽字段提交给宿主，绝不回显、不记录；'
+                '保存后宿主只返回掩码 key_mask（不是密钥），客户端不持有明文。',
+          ),
+          _section(
+            '聊天绑定',
+            [
+              _field('binding-provider', _bindProvider, 'Provider ID'),
+              _field('binding-model', _bindModel, '模型 ID'),
+              FilledButton(
+                key: const Key('binding-save'),
+                onPressed: !_ready
+                    ? null
+                    : () => _run(
+                        (writer) => writer.setChatBinding(
+                          _profileId!,
+                          providerId: _bindProvider.text.trim(),
+                          model: _bindModel.text.trim(),
+                        ),
+                        '聊天绑定已保存',
+                      ),
+                child: const Text('保存聊天绑定'),
+              ),
+            ],
+            helpKey: 'help-binding',
+            help:
+                '聊天绑定需要 Provider ID 与模型 ID同时提供；'
+                '绑定到 chat 能力后该 AI 才能用于对话，未绑定不代表可用。',
+          ),
+          _section(
+            '预算',
+            [
+              Row(
+                children: [
+                  Expanded(
+                    child: _field('budget-daily', _budgetDaily, '每日 token 上限'),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _field('budget-offset', _budgetOffset, '时区偏移（分钟）'),
+                  ),
+                ],
+              ),
+              _field(
+                'budget-layers',
+                _budgetLayers,
+                '分层上限（b0Life=0 等，五行）',
+                lines: 5,
+              ),
+              _field('budget-caps', _budgetCaps, '能力上限（chat=0 等，七行）', lines: 7),
+              FilledButton(
+                key: const Key('budget-save'),
+                onPressed: !_ready ? null : _saveBudget,
+                child: const Text('保存预算'),
+              ),
+            ],
+            helpKey: 'help-budget',
+            help:
+                '预算四字段：每日 token 上限、时区偏移（分钟）、分层限额（name=整数每行）、'
+                '能力限额（name=整数每行）；保存后按本地时区切日，不代表已获批或已启用。',
+          ),
         ],
       ),
     );
   }
 
-  Widget _section(String title, List<Widget> children) => Padding(
+  Widget _section(
+    String title,
+    List<Widget> children, {
+    String? helpKey,
+    String? help,
+  }) => Padding(
     padding: const EdgeInsets.only(bottom: 16),
     child: Card(
       child: Padding(
@@ -435,6 +484,12 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(title, style: Theme.of(context).textTheme.titleMedium),
+            if (help != null)
+              Padding(
+                key: helpKey == null ? null : Key(helpKey),
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(help, style: Theme.of(context).textTheme.bodySmall),
+              ),
             const SizedBox(height: 8),
             ...children,
           ],

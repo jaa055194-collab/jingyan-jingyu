@@ -1,7 +1,9 @@
 import 'package:client_flutter/features/ai_config/ai_config_editor.dart';
 import 'package:client_flutter/features/settings/settings_screen.dart';
 import 'package:client_flutter/net/ai_config_write_api.dart';
+import 'package:client_flutter/net/host_connection.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jingyu_core/jingyu_core.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'ui_test.dart' show TestShellModel;
@@ -100,6 +102,21 @@ class _FakeWriter implements AiConfigWriter {
       'capabilityLimits': capabilityLimits,
       'offsetMinutes': offsetMinutes,
     };
+  }
+}
+
+/// Writer that fails every chat binding with a fixed host failure code.
+class _ErrorWriter extends _FakeWriter {
+  _ErrorWriter(this.code);
+  final FailureCode code;
+
+  @override
+  Future<void> setChatBinding(
+    String aiProfileId, {
+    required String providerId,
+    required String model,
+  }) async {
+    throw HostRequestException(Failure(code, 'upstream detail must-not-leak'));
   }
 }
 
@@ -249,6 +266,64 @@ void main() {
           .onPressed,
       isNull,
     );
+  });
+
+  testWidgets('each section explains its own rules', (tester) async {
+    await _pump(tester, _FakeWriter());
+    await _to(tester, const Key('help-persona'));
+    expect(find.byKey(const Key('help-persona')), findsOneWidget);
+    expect(find.textContaining('P0'), findsWidgets);
+    expect(find.textContaining('历史可回滚'), findsOneWidget);
+
+    await _to(tester, const Key('help-provider'));
+    expect(find.byKey(const Key('help-provider')), findsOneWidget);
+    expect(find.textContaining('key_mask'), findsOneWidget);
+
+    await _to(tester, const Key('help-binding'));
+    expect(find.byKey(const Key('help-binding')), findsOneWidget);
+    expect(find.textContaining('Provider ID 与模型 ID'), findsOneWidget);
+
+    await _to(tester, const Key('help-budget'));
+    expect(find.byKey(const Key('help-budget')), findsOneWidget);
+    expect(find.textContaining('预算四字段'), findsOneWidget);
+    expect(find.textContaining('能力限额'), findsOneWidget);
+  });
+
+  testWidgets('success, denied and unknown states are labeled distinctly', (
+    tester,
+  ) async {
+    final writer = _FakeWriter();
+    await _pump(tester, writer);
+    await _to(tester, const Key('binding-provider'));
+    await tester.enterText(find.byKey(const Key('binding-provider')), 'prov-1');
+    await tester.enterText(find.byKey(const Key('binding-model')), 'gpt-x');
+    await tester.tap(find.byKey(const Key('binding-save')));
+    await tester.pumpAndSettle();
+    await _top(tester);
+    expect(find.text('成功'), findsOneWidget);
+    expect(find.byKey(const Key('ai-config-write-state')), findsOneWidget);
+
+    final denied = _ErrorWriter(FailureCode.forbidden);
+    await _pump(tester, denied);
+    await _to(tester, const Key('binding-provider'));
+    await tester.enterText(find.byKey(const Key('binding-provider')), 'prov-1');
+    await tester.enterText(find.byKey(const Key('binding-model')), 'gpt-x');
+    await tester.tap(find.byKey(const Key('binding-save')));
+    await tester.pumpAndSettle();
+    await _top(tester);
+    expect(find.text('失败/未知'), findsOneWidget);
+    expect(find.textContaining('未认证或无权限'), findsOneWidget);
+
+    final unknown = _ErrorWriter(FailureCode.unavailable);
+    await _pump(tester, unknown);
+    await _to(tester, const Key('binding-provider'));
+    await tester.enterText(find.byKey(const Key('binding-provider')), 'prov-1');
+    await tester.enterText(find.byKey(const Key('binding-model')), 'gpt-x');
+    await tester.tap(find.byKey(const Key('binding-save')));
+    await tester.pumpAndSettle();
+    await _top(tester);
+    expect(find.text('失败/未知'), findsOneWidget);
+    expect(find.textContaining('操作失败或结果未知'), findsOneWidget);
   });
 
   testWidgets('settings exposes the write hub entry and opens it', (
