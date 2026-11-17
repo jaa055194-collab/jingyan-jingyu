@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import 'shell_view_model.dart';
+import 'module_catalog.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/chat/chat_pane.dart';
 import '../features/settings/settings_screen.dart';
@@ -118,6 +119,8 @@ class _ShellHomeState extends State<_ShellHome> {
       '新的邀请和通知将在这里显示。',
       '宿主接入世界服务后可在这里进入。',
     ];
+    const moduleIds = {1: 'contacts', 2: 'moments', 3: 'inbox'};
+    final module = findModule(moduleIds[destination] ?? '');
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -132,6 +135,13 @@ class _ShellHomeState extends State<_ShellHome> {
             ),
             const SizedBox(height: 8),
             Text(details[destination], textAlign: TextAlign.center),
+            if (module != null) ...[
+              const SizedBox(height: 12),
+              Chip(
+                key: Key('module-status-${module.id}'),
+                label: Text('模块状态：${module.availabilityLabel}'),
+              ),
+            ],
           ],
         ),
       ),
