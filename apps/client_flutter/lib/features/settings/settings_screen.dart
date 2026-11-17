@@ -19,6 +19,17 @@ class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.model, required this.onBack});
   final ShellViewModel model;
   final VoidCallback onBack;
+
+  /// Builds the lifecycle/backup screen, wiring the real [LifecycleApi] when a
+  /// host connection exists so export/import are usable. Cleanup stays disabled
+  /// (no merged host cleanup route). Exposed for focused wiring tests.
+  static BackupQuotaScreen lifecycleScreenFor(ShellViewModel model) {
+    final connection = model is ClientRuntime ? model.connection : null;
+    return BackupQuotaScreen(
+      api: connection == null ? null : LifecycleApi(connection),
+    );
+  }
+
   Future<void> editLock(BuildContext context, bool enable) async {
     final controller = TextEditingController();
     String? validation;
@@ -173,23 +184,9 @@ class SettingsScreen extends StatelessWidget {
               subtitle: const Text('只读查看当前账号配额与生命周期对象清点；不代表可用或已授权'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
-                final runtime = model;
-                final connection = runtime is ClientRuntime
-                    ? runtime.connection
-                    : null;
-                Future<LifecycleQuotaStatus> Function()? loadQuota;
-                Future<LifecycleDepartureSurvey> Function()? loadSurvey;
-                if (connection != null) {
-                  final api = LifecycleApi(connection);
-                  loadQuota = () => api.readQuota();
-                  loadSurvey = () => api.readDepartureSurvey();
-                }
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) => BackupQuotaScreen(
-                      loadQuota: loadQuota,
-                      loadSurvey: loadSurvey,
-                    ),
+                    builder: (_) => lifecycleScreenFor(model),
                   ),
                 );
               },

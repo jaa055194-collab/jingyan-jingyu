@@ -1,5 +1,7 @@
+import 'package:client_flutter/app/runtime.dart';
 import 'package:client_flutter/features/lifecycle/backup_quota_screen.dart';
 import 'package:client_flutter/features/settings/settings_screen.dart';
+import 'package:client_flutter/net/host_connection.dart';
 import 'package:client_flutter/net/lifecycle_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -96,5 +98,16 @@ void main() {
     expect(find.text('配额与生命周期状态'), findsOneWidget);
     // Test model is not the runtime, so no connection: honest unknown.
     expect(find.byKey(const Key('lifecycle-unknown')), findsOneWidget);
+  });
+
+  test('settings wiring passes LifecycleApi when a host connection exists', () {
+    final runtime = ClientRuntime();
+    runtime.connection = HostConnection(
+      Uri.parse('http://127.0.0.1:1'),
+      'token',
+    );
+    expect(SettingsScreen.lifecycleScreenFor(runtime).api, isNotNull);
+    // Without a runtime connection the actions stay honestly disabled.
+    expect(SettingsScreen.lifecycleScreenFor(TestShellModel()).api, isNull);
   });
 }
