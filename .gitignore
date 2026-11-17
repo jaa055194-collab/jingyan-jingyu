@@ -13,3 +13,4 @@ data/
 !.env.*.example
 secrets.local/
 .privacy-local/
+apps/client_flutter/android/.kotlin/

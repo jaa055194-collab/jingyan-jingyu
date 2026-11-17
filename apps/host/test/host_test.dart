@@ -239,6 +239,147 @@ void main() {
         jsonEncode([admin.json, metadata.json]),
         isNot(contains(secretBody)),
       );
+      expect((admin.json as Map)['isHostMachine'], isFalse);
+      final anonymous = await host.pipeline.handle(
+        HostRequest(
+          method: 'GET',
+          path: Routes.hostInfo,
+          principal: Principal(
+            accountId: adminId.value,
+            deviceId: deviceId.value,
+            isAdmin: true,
+          ),
+        ),
+      );
+      expect(anonymous.status, 401);
+    });
+
+    // Reuse the real account/device fixture while varying trusted deployment
+    // configuration, without opening a second database for each identity case.
+    Future<Pipeline> systemPipeline(HostConfig config) async {
+      final registry = Registry()..register(SystemModule(config: config));
+      await registry.boot();
+      addTearDown(registry.shutdown);
+      return Pipeline(
+        router: registry.router,
+        authenticate: DbAuthenticator(host.auth).call,
+      );
+    }
+
+    test('仅配置中指定的管理员设备被标记为宿主机', () async {
+      final admin = (await host.auth.authenticate(adminToken))!;
+      final configured = await systemPipeline(
+        HostConfig.fromEnvironment({
+          'JINGYU_HOST_ACCOUNT_ID': admin.accountId,
+          'JINGYU_HOST_DEVICE_ID': admin.deviceId,
+        }),
+      );
+      final matching = await configured.handle(
+        HostRequest(
+          method: 'GET',
+          path: Routes.hostInfo,
+          headers: {'authorization': 'Bearer $adminToken'},
+        ),
+      );
+      expect(matching.status, 200);
+      expect((matching.json as Map)['isHostMachine'], isTrue);
+
+      final otherDevice = (await host.auth.login(
+        adminId,
+        password,
+        deviceName: 'other admin device',
+      )).value;
+      final other = await configured.handle(
+        HostRequest(
+          method: 'GET',
+          path: Routes.hostInfo,
+          headers: {'authorization': 'Bearer ${otherDevice.accessToken}'},
+          query: {'isHostMachine': 'true', 'deviceId': admin.deviceId},
+          principal: admin,
+        ),
+      );
+      expect(other.status, 200);
+      expect((other.json as Map)['isHostMachine'], isFalse);
+
+      final wrongAccount = await systemPipeline(
+        HostConfig(hostAccountId: userId.value, hostDeviceId: admin.deviceId),
+      );
+      final mismatched = await wrongAccount.handle(
+        HostRequest(
+          method: 'GET',
+          path: Routes.hostInfo,
+          headers: {'authorization': 'Bearer $adminToken'},
+        ),
+      );
+      expect(mismatched.status, 200);
+      expect((mismatched.json as Map)['isHostMachine'], isFalse);
+
+      final friendConfigured = await systemPipeline(
+        HostConfig(hostAccountId: userId.value, hostDeviceId: deviceId.value),
+      );
+      final friend = await friendConfigured.handle(
+        HostRequest(
+          method: 'GET',
+          path: Routes.hostInfo,
+          headers: authed(),
+          principal: admin,
+        ),
+      );
+      expect(friend.status, 403);
+
+      final session = (await host.auth.scope(adminToken)).value;
+      expect(
+        (await session.devices.revoke(
+          adminId,
+          DeviceId.parse(admin.deviceId),
+        )).isOk,
+        isTrue,
+      );
+      final revoked = await configured.handle(
+        HostRequest(
+          method: 'GET',
+          path: Routes.hostInfo,
+          headers: {'authorization': 'Bearer $adminToken'},
+          principal: admin,
+        ),
+      );
+      expect(revoked.status, 401);
+    });
+
+    test('不完整或空白的宿主身份配置不会授予能力', () async {
+      final admin = (await host.auth.authenticate(adminToken))!;
+      for (final env in <Map<String, String>>[
+        {'JINGYU_HOST_ACCOUNT_ID': admin.accountId},
+        {'JINGYU_HOST_DEVICE_ID': admin.deviceId},
+        {'JINGYU_HOST_ACCOUNT_ID': '', 'JINGYU_HOST_DEVICE_ID': ''},
+        {'JINGYU_HOST_ACCOUNT_ID': ' ', 'JINGYU_HOST_DEVICE_ID': ' '},
+      ]) {
+        final configured = await systemPipeline(
+          HostConfig.fromEnvironment(env),
+        );
+        final response = await configured.handle(
+          HostRequest(
+            method: 'GET',
+            path: Routes.hostInfo,
+            headers: {'authorization': 'Bearer $adminToken'},
+          ),
+        );
+        expect(response.status, 200);
+        expect((response.json as Map)['isHostMachine'], isFalse);
+      }
+    });
+
+    test('模型进程路径与宿主身份配置可同时读取', () {
+      final config = HostConfig.fromEnvironment({
+        'JINGYU_MODEL_WORKER_EXECUTABLE': 'trusted-dart',
+        'JINGYU_MODEL_WORKER_PATH': 'trusted-worker.dart',
+        'JINGYU_HOST_ACCOUNT_ID': adminId.value,
+        'JINGYU_HOST_DEVICE_ID': deviceId.value,
+      });
+      expect(config.modelWorkerExecutable, 'trusted-dart');
+      expect(config.modelWorkerPath, 'trusted-worker.dart');
+      expect(config.hostAccountId, adminId.value);
+      expect(config.hostDeviceId, deviceId.value);
     });
 
     test(
