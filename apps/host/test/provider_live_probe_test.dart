@@ -166,7 +166,7 @@ void main() {
               conversationKind: ChatConversationKind.private,
               scopeKey: 'private:alice:profile',
             ),
-            maxTokens: 8,
+            maxTokens: 256,
           );
           if (result case Err<ChatCompletion>(:final failure)) {
             // Only the failure code is surfaced; never upstream text or key.
