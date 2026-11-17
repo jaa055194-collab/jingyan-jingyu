@@ -11,7 +11,11 @@ import '../diagnostics/module_test_panel.dart';
 /// Per product direction each terminal uses its own locally uploaded avatar
 /// model; there is no cross-device avatar consistency requirement.
 class WorldScreen extends StatelessWidget {
-  const WorldScreen({super.key, required this.model, required this.onOpenSetup});
+  const WorldScreen({
+    super.key,
+    required this.model,
+    required this.onOpenSetup,
+  });
   final ShellViewModel model;
   final VoidCallback onOpenSetup;
 
@@ -22,8 +26,11 @@ class WorldScreen extends StatelessWidget {
       children: [
         Text('世界与形象', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        Text(
-          model.onboarded ? '形象与房间已设置。' : '形象和房间属于可选世界设置，可稍后在这里完成；聊天不受影响。',
+        Text(model.onboarded ? '形象与房间已设置。' : '形象和房间属于可选世界设置，可稍后在这里完成；聊天不受影响。'),
+        const SizedBox(height: 4),
+        const Text(
+          '数据来自宿主实时读取；状态在本页只读展示，不修改世界配置。',
+          key: Key('world-live-note'),
         ),
         const SizedBox(height: 16),
         if (!model.onboarded)

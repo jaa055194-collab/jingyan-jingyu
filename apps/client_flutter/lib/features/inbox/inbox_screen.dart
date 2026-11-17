@@ -17,7 +17,17 @@ class InboxScreen extends StatelessWidget {
           const SizedBox(height: 16),
           Text('收件箱', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          const Text('宿主尚未提供收件箱接口；邀请与通知在接入后显示。', textAlign: TextAlign.center),
+          const Text(
+            '当前缺口：宿主未提供收件箱/通知路由。',
+            key: Key('inbox-gap'),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            '接入后此处将显示邀请与通知；数据来自宿主实时读取。',
+            key: Key('inbox-after-wiring'),
+            textAlign: TextAlign.center,
+          ),
         ],
       ),
     ),
