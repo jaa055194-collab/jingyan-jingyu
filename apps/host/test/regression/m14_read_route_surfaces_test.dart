@@ -70,12 +70,12 @@ void main() {
     );
 
     test(
-      'attachments collection list route is not implemented yet',
+      'attachments collection list route (PR#107) is not merged into this baseline yet',
       () {},
       skip:
-          'GET ${Routes.attachments} collection list route is absent on this '
-          'baseline (attachments_module exposes uploads + /attachments/{id} only); '
-          'client attachments list is pending until that host route lands.',
+          'GET ${Routes.attachments} collection list route is implemented by '
+          'PR#107 (AttachmentService.listOwn + router.get(Routes.attachments)) but '
+          'is NOT merged into this baseline; enable this assertion after #107 merges.',
     );
   });
 }
