@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/runtime.dart';
 import '../../app/shell_view_model.dart';
+import '../../net/attachment_api.dart';
 import '../../net/lifecycle_api.dart';
 import '../../net/ai_config_write_api.dart';
 import '../../net/owner_ai_direct_api.dart';
@@ -10,6 +11,8 @@ import '../../net/voice_api.dart';
 import '../../net/world_api.dart';
 import '../ai_config/ai_config_editor.dart';
 import '../ai_config/ai_config_panel.dart';
+import '../attachments/attachments_list_screen.dart';
+import '../attachments/attachments_screen.dart';
 import '../diagnostics/module_test_panel.dart';
 import '../lifecycle/backup_quota_screen.dart';
 import '../voice/voice_screen.dart';
@@ -202,6 +205,72 @@ class SettingsScreen extends StatelessWidget {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => WorldStatusScreen(load: load),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('open-attachments-list'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.attach_file_outlined),
+              title: const Text('附件列表'),
+              subtitle: const Text(
+                '只读列出当前账号附件元数据（类型/大小/状态/会话）；'
+                '不显示、不存储提取正文或文件字节，不执行清理或删除',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                AttachmentLister? listAttachments;
+                if (connection != null) {
+                  final api = AttachmentApi(connection);
+                  listAttachments =
+                      ({
+                        String? conversationId,
+                        required int limit,
+                        DateTime? before,
+                      }) => api.listAttachments(
+                        conversationId: conversationId,
+                        limit: limit,
+                        before: before,
+                      );
+                }
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        AttachmentsListScreen(listAttachments: listAttachments),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('open-attachment-viewer'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('附件元数据'),
+              subtitle: const Text(
+                '按附件标识只读查看单条元数据（需显式输入 attachmentId）；'
+                '不显示、不存储提取正文或文件字节',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                Future<AttachmentMetadata> Function(String attachmentId)?
+                readAttachment;
+                if (connection != null) {
+                  final api = AttachmentApi(connection);
+                  readAttachment = api.readAttachment;
+                }
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        AttachmentsScreen(readAttachment: readAttachment),
                   ),
                 );
               },
