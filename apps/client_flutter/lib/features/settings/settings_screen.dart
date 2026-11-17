@@ -3,10 +3,12 @@ import 'package:material_ui/material_ui.dart';
 import '../../app/runtime.dart';
 import '../../app/shell_view_model.dart';
 import '../../net/lifecycle_api.dart';
+import '../../net/ai_config_write_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
 import '../../net/voice_api.dart';
 import '../../net/world_api.dart';
+import '../ai_config/ai_config_editor.dart';
 import '../ai_config/ai_config_panel.dart';
 import '../diagnostics/module_test_panel.dart';
 import '../lifecycle/backup_quota_screen.dart';
@@ -225,6 +227,47 @@ class SettingsScreen extends StatelessWidget {
                     builder: (_) => AiConfigPanel(
                       loadForAccount: loadForAccount,
                       ownedAiAccountIds: canLoad ? owned : const <String>[],
+                    ),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('open-ai-config-write'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.edit_note_outlined),
+              title: const Text('AI 运行配置'),
+              subtitle: const Text(
+                '编辑人格/Provider/聊天绑定/预算；api_key 遮蔽输入、只显示掩码，绝不回显或记录密钥',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                final owner = model.connectedAccountId;
+                final owned = <String>[
+                  for (final ai in model.ownAiAccounts)
+                    if (!ai.disabled) ai.accountId,
+                ];
+                final writer = connection == null
+                    ? null
+                    : AiConfigWriteApi(connection);
+                final resolve = (connection != null && owner != null)
+                    ? (String accountId) => OwnerAiDirectApi(connection)
+                          .registerOrResolve(
+                            accountId,
+                            expectedOwnerAccountId: owner,
+                          )
+                          .then((identity) => identity.profileId)
+                    : null;
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => AiConfigEditor(
+                      writer: writer,
+                      resolveProfileId: resolve,
+                      ownedAiAccountIds: owned,
                     ),
                   ),
                 );
