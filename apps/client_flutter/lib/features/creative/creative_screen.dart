@@ -136,6 +136,11 @@ class _CreativeScreenState extends State<CreativeScreen> {
       child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 12),
         children: [
+          const Padding(
+            key: Key('creative-live-note'),
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: Text('数据来自宿主实时读取；以下为只读展示，本页不触发生成或播放。'),
+          ),
           _sectionTitle('关系周报 / 年报', text),
           if (reports.isEmpty)
             _emptyRow('暂无周报或年报。')

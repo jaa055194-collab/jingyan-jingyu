@@ -114,6 +114,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
               const SizedBox(height: 16),
               Text('联系人', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
+              const Text(
+                '数据来自宿主实时读取；以下为只读展示，不在本页修改好友关系。',
+                key: Key('contacts-live-note'),
+              ),
               if (widget.loadFriends == null)
                 const Text(
                   '宿主未提供好友列表路由；接入好友列表后可在此显示。',
