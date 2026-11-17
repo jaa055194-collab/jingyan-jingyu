@@ -1,5 +1,8 @@
 library;
 
+import 'dart:async';
+import 'dart:io';
+
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
@@ -27,15 +30,84 @@ enum FriendState {
   }
 }
 
+/// One read-only contact row from `GET /friends`. It carries no consent
+/// capability; the host remains the friendship authority.
+class FriendContact {
+  const FriendContact({
+    required this.accountId,
+    required this.displayName,
+    required this.state,
+  });
+
+  final String accountId;
+  final String displayName;
+  final FriendState state;
+
+  static final RegExp _control = RegExp(r'[\x00-\x1f\x7f]');
+
+  factory FriendContact.fromJson(Object? value) {
+    if (value is! Map) throw const FormatException();
+    const fields = {'accountId', 'displayName', 'state'};
+    final accountId = value['accountId'];
+    final displayName = value['displayName'];
+    final rawState = value['state'];
+    if (value.length != fields.length ||
+        value.keys.any((key) => !fields.contains(key)) ||
+        accountId is! String ||
+        displayName is! String ||
+        displayName.trim().isEmpty ||
+        displayName.length > 100 ||
+        _control.hasMatch(displayName) ||
+        rawState is! String) {
+      throw const FormatException();
+    }
+    AccountId.parse(accountId);
+    final state = FriendState.tryParse(rawState);
+    // A friend list only contains existing relationships; `none` is not a row.
+    if (state == null || state == FriendState.none) {
+      throw const FormatException();
+    }
+    return FriendContact(
+      accountId: accountId,
+      displayName: displayName,
+      state: state,
+    );
+  }
+}
+
 /// Typed, read-only access to the host friendship state route.
 ///
-/// Only `GET /friends/{accountId}` is exposed. Request/accept/deny/block writes
-/// are intentionally not implemented here. Authentication renewal (bounded
-/// one-shot 401 replay) is inherited from [HostConnection].
+/// Exposes `GET /friends` (list) and `GET /friends/{accountId}` (single state).
+/// Request/accept/deny/block writes are intentionally not implemented here.
+/// Authentication renewal (bounded one-shot 401 replay) is inherited from
+/// [HostConnection]; this class adds no retry of its own.
 class FriendsApi {
   FriendsApi(this.connection);
 
   final HostConnection connection;
+
+  /// Read the caller's contacts. Strict DTO: exactly three fields, valid account
+  /// id, non-empty display name and a known non-`none` relationship state.
+  Future<List<FriendContact>> list() async {
+    try {
+      final rows = await connection.requestList('GET', Routes.friends);
+      return List<FriendContact>.unmodifiable(rows.map(FriendContact.fromJson));
+    } on FormatException {
+      throw const FormatException('好友列表响应无效');
+    } on SocketException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on HttpException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on TimeoutException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    }
+  }
 
   /// Read the canonical relationship state between the caller and [accountId].
   Future<FriendState> state(String accountId) async {

@@ -1,16 +1,21 @@
+import 'package:jingyu_core/jingyu_core.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/friends_api.dart';
+import '../../net/host_connection.dart';
 
-/// Contacts surface. The host currently exposes only a per-account friendship
-/// state lookup (`GET /friends/{accountId}`), not a friend list. When no lookup
-/// callback is wired, this screen shows an honest empty state instead of
-/// fabricating contacts. A read-only lookup by account id is provided when a
-/// callback is supplied, so the surface is testable without inventing data.
+/// Contacts surface.
+///
+/// When a [loadFriends] loader is injected it GETs the host friend list and
+/// renders it, reporting loading/empty/denied/unknown honestly. Without a
+/// loader the screen keeps the original honest empty state instead of
+/// fabricating contacts. A read-only per-account lookup ([lookupState]) remains
+/// available and no relationship mutation is ever performed here.
 class ContactsScreen extends StatefulWidget {
-  const ContactsScreen({super.key, this.lookupState});
+  const ContactsScreen({super.key, this.lookupState, this.loadFriends});
 
   final Future<FriendState> Function(String accountId)? lookupState;
+  final Future<List<FriendContact>> Function()? loadFriends;
 
   @override
   State<ContactsScreen> createState() => _ContactsScreenState();
@@ -20,11 +25,51 @@ class _ContactsScreenState extends State<ContactsScreen> {
   final _account = TextEditingController();
   String? _result;
   bool _busy = false;
+  List<FriendContact>? _friends;
+  bool _loadingFriends = false;
+  String? _friendsMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFriends();
+  }
 
   @override
   void dispose() {
     _account.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadFriends() async {
+    final load = widget.loadFriends;
+    if (load == null) return;
+    setState(() {
+      _loadingFriends = true;
+      _friendsMessage = null;
+    });
+    try {
+      final contacts = await load();
+      if (!mounted) return;
+      setState(() {
+        _friends = contacts;
+        _friendsMessage = null;
+        _loadingFriends = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      final denied =
+          error is HostRequestException &&
+          (error.failure.code == FailureCode.forbidden ||
+              error.failure.code == FailureCode.unauthenticated);
+      setState(() {
+        _friends = null;
+        _friendsMessage = denied
+            ? '未认证或无权限读取好友列表；不会自动重试'
+            : '好友列表读取失败或结果未知；不会自动重试';
+        _loadingFriends = false;
+      });
+    }
   }
 
   static String _label(FriendState state) => switch (state) {
@@ -69,10 +114,33 @@ class _ContactsScreenState extends State<ContactsScreen> {
               const SizedBox(height: 16),
               Text('联系人', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
-              const Text(
-                '宿主未提供好友列表路由；接入好友列表后可在此显示。',
-                textAlign: TextAlign.center,
-              ),
+              if (widget.loadFriends == null)
+                const Text(
+                  '宿主未提供好友列表路由；接入好友列表后可在此显示。',
+                  textAlign: TextAlign.center,
+                )
+              else if (_loadingFriends)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: CircularProgressIndicator(),
+                )
+              else if (_friendsMessage != null)
+                Text(_friendsMessage!, textAlign: TextAlign.center)
+              else if (_friends != null) ...[
+                if (_friends!.isEmpty)
+                  const Text('暂无好友；这不代表没有待处理请求。', textAlign: TextAlign.center)
+                else
+                  for (final friend in _friends!)
+                    ListTile(
+                      key: Key('contacts-friend-${friend.accountId}'),
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.person_outline),
+                      title: Text(friend.displayName),
+                      subtitle: Text(
+                        '${friend.accountId} · ${_label(friend.state)}',
+                      ),
+                    ),
+              ],
               if (widget.lookupState != null) ...[
                 const SizedBox(height: 20),
                 TextField(
