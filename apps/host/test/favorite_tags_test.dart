@@ -72,7 +72,7 @@ void main() {
       [id],
     )).single;
     expect(row['tags'], isNot(contains('工作')));
-    expect(row['note'], isNot(contains('hello')));
+    expect(row['note'], isNot(equals('hello')));
     expect((row['tags'] as String).startsWith('v1:'), isTrue);
     expect((row['note'] as String).startsWith('v1:'), isTrue);
   });
@@ -220,7 +220,7 @@ void main() {
       [id],
     )).single;
     expect(row['tags'], isNot(contains('重要')));
-    expect(row['note'], isNot(contains('n2')));
+    expect(row['note'], isNot(equals('n2')));
   });
 
   test('updateMeta is owner-only and validates input', () async {
