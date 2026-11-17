@@ -500,11 +500,20 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  /// Lifecycle states that must lock an enabled app lock. `inactive` is included
+  /// because a mobile backend can stay half-covered (app switcher, split screen)
+  /// in `inactive` without emitting `hidden`/`paused`, which would leave
+  /// sensitive content visible. Locking is idempotent and only applies when the
+  /// lock is enabled. `resumed`/`detached` do not lock.
+  static bool shouldLockForLifecycle(AppLifecycleState state) =>
+      state == AppLifecycleState.inactive ||
+      state == AppLifecycleState.hidden ||
+      state == AppLifecycleState.paused;
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (!_controllersReady) return;
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden) {
+    if (shouldLockForLifecycle(state)) {
       appLock.lock();
       unawaited(native.invoke<void>('lock'));
       notifyListeners();
