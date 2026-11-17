@@ -2,7 +2,7 @@ import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 import 'package:test/test.dart';
 
 /// 最小 [PluginContext] 假件：房间生成器不依赖任何宿主能力。
-class _FakeContext implements PluginContext {
+class _FakeContext extends PluginContext {
   @override
   String get pluginId => 'jingyu.room.generator';
 
