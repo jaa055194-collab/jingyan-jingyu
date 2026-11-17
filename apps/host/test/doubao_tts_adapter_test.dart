@@ -59,6 +59,8 @@ class _FakeDoubaoServer {
   final List<Map<String, String>> handshakes = <Map<String, String>>[];
   int connections = 0;
   int? failSessionEvent; // e.g. DoubaoEvent.sessionFailed
+  final Map<int, Completer<void>> _eventWaiters = <int, Completer<void>>{};
+  final Set<int> _seenEvents = <int>{};
 
   Future<void> start() async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -76,6 +78,8 @@ class _FakeDoubaoServer {
           Uint8List.fromList(data),
         );
         received.add(_Recv(headers, frame));
+        _seenEvents.add(frame.eventType);
+        _eventWaiters.remove(frame.eventType)?.complete();
         switch (frame.eventType) {
           case DoubaoEvent.startConnection:
             socket.add(
@@ -134,6 +138,26 @@ class _FakeDoubaoServer {
   }
 
   String get endpoint => 'ws://127.0.0.1:${server.port}/api/v3/tts/bidirection';
+
+  /// Deterministic completion signal: resolves once the server has actually
+  /// recorded the given event, instead of assuming fixed delivery timing.
+  Future<void> waitForEvent(
+    int eventType, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (_seenEvents.contains(eventType)) return;
+    final waiter = _eventWaiters.putIfAbsent(eventType, Completer<void>.new);
+    if (_seenEvents.contains(eventType)) {
+      _eventWaiters.remove(eventType)?.complete();
+      return;
+    }
+    try {
+      await waiter.future.timeout(timeout);
+    } finally {
+      if (waiter.isCompleted) _eventWaiters.remove(eventType);
+    }
+  }
+
   Future<void> close() => server.close(force: true);
 }
 
@@ -200,6 +224,11 @@ void main() {
     expect(handshake['x-api-resource-id'], 'seed-tts-2.0');
     expect(handshake['x-api-app-id'], 'app-1');
     expect(handshake['x-api-connect-id'], isNotEmpty);
+
+    // The adapter closes the socket right after queuing FinishConnection; wait
+    // for the server to actually record that completion event instead of
+    // assuming it already arrived (the previous fixed-timing flake).
+    await server.waitForEvent(DoubaoEvent.finishConnection);
 
     final events = server.received.map((r) => r.frame.eventType).toList();
     expect(
