@@ -84,9 +84,13 @@ class _VoiceScreenState extends State<VoiceScreen> {
     _VoiceState.idle => '输入 AI 档案 id 后读取；只读，不会签发票据或修改配置。',
     _VoiceState.loading => '正在读取…',
     _VoiceState.present => '已读取音色档案（只读）。',
-    _VoiceState.missing => '未配置音色档案（宿主返回不存在）。',
+    _VoiceState.missing =>
+      '未配置音色档案（宿主返回不存在）：该 AI 尚未在宿主音色工作台配置，'
+          '不是权限问题。',
     _VoiceState.denied => '无权读取该音色档案（已登录但被拒绝）。',
-    _VoiceState.unknown => '状态未知：未连接宿主或响应无法验证。不会自动重试。',
+    _VoiceState.unknown =>
+      '状态未知：未连接宿主或响应无法验证。不会自动重试；'
+          '未知不代表已配置，也不代表未配置。',
   };
 
   @override
@@ -98,12 +102,25 @@ class _VoiceScreenState extends State<VoiceScreen> {
         const Text(
           '只读：查看某 AI 的音色档案。AI 档案 id 与 AI 账户 id 不是同一个概念，需显式输入；不自动推断、不签发票据、不修改配置。',
         ),
+        const SizedBox(height: 4),
+        Text(
+          '提示：档案 id 形如 ai_…，在“我的 AI”创建后由宿主生成；本页读取的 provider/model/voiceId '
+          '仅为配置元数据，不代表音色可用、已授权或可发起语音通话。',
+          key: const Key('voice-help'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 12),
         TextField(
           key: const Key('voice-ai-id'),
           controller: _input,
           enabled: widget.loadProfile != null && _state != _VoiceState.loading,
-          decoration: const InputDecoration(labelText: 'AI 档案 id'),
+          decoration: InputDecoration(
+            labelText: 'AI 档案 id',
+            helperText: widget.loadProfile == null
+                ? '当前入口未接线宿主连接，读取不可用'
+                : '例如 ai_xxx；留空无法读取',
+            border: const OutlineInputBorder(),
+          ),
           onSubmitted: (_) => _read(),
         ),
         const SizedBox(height: 8),
