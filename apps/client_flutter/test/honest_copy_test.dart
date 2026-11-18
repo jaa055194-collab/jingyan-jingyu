@@ -13,10 +13,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('inbox-gap')), findsOneWidget);
-    expect(find.textContaining('当前缺口：宿主未提供收件箱/通知路由'), findsOneWidget);
+    expect(find.textContaining('当前未连接宿主'), findsOneWidget);
     expect(find.byKey(const Key('inbox-after-wiring')), findsOneWidget);
-    expect(find.textContaining('接入后此处将显示邀请与通知'), findsOneWidget);
-    expect(find.textContaining('数据来自宿主实时读取'), findsOneWidget);
+    expect(find.textContaining('连接后可查看待处理的好友邀请'), findsOneWidget);
     // Still honest: no fabricated notification/invite rows.
     expect(find.byType(ListTile), findsNothing);
   });

@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../net/creative_api.dart';
 import '../net/host_connection.dart';
+import '../net/notification_api.dart';
 import 'runtime.dart';
 import 'shell_view_model.dart';
 import 'module_catalog.dart';
@@ -147,6 +148,20 @@ class _ShellHomeState extends State<_ShellHome> {
     return ContactsScreen(loadFriends: api.list);
   }
 
+  /// Host-backed read-only notifications loader with the same semantics as
+  /// [creative]: wire [NotificationApi.readNotifications] only when the runtime
+  /// exposes a live connection; otherwise the inbox keeps its honest gap state.
+  /// The shell only wires loaders here — tab layout and settings are untouched.
+  Widget inbox() {
+    final model = widget.model;
+    final HostConnection? connection = model is ClientRuntime
+        ? model.connection
+        : null;
+    if (connection == null) return const InboxScreen();
+    final api = NotificationApi(connection);
+    return InboxScreen(loadNotifications: () => api.readNotifications());
+  }
+
   Widget empty() {
     const titles = ['', '暂无联系人', '暂无动态', '暂无通知', '世界尚未开放'];
     const details = [
@@ -203,7 +218,7 @@ class _ShellHomeState extends State<_ShellHome> {
           : destination == 2
           ? creative()
           : destination == 3
-          ? const InboxScreen()
+          ? inbox()
           : destination != 0
           ? empty()
           : wide
