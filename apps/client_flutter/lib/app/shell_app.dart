@@ -161,7 +161,10 @@ class _ShellHomeState extends State<_ShellHome> {
         : null;
     if (connection == null) return const InboxScreen();
     final api = NotificationApi(connection);
-    return InboxScreen(loadNotifications: () => api.readNotifications());
+    return InboxScreen(
+      key: ObjectKey(connection),
+      loadNotifications: () => api.readNotifications(),
+    );
   }
 
   Widget empty() {
