@@ -363,6 +363,46 @@ void main() {
     },
   );
 
+  test('shortcut cannot append stale visibility after an ordinary refresh completes', () async {
+    final f = await _ConsentFixture.create();
+    final runtime = await f.runtime();
+    var directReads = 0;
+    try {
+      f.enabled = true;
+      f.revision = 1;
+      await runtime.loadOwnAiDirectConsent('ai-account');
+      f.readStarted = Completer<void>();
+      f.readRelease = Completer<void>();
+      f.native.serve = (request) async {
+        if (request.uri.path == Routes.directConversations) {
+          await request.drain<void>();
+          return f.native.reply(request, {
+            'conversations': [
+              if (++directReads == 1)
+                {
+                  'id': 'direct-conversation',
+                  'kind': 'direct',
+                  'accountLow': 'alice',
+                  'accountHigh': 'ai-account',
+                },
+            ],
+          });
+        }
+        return f.serve(request);
+      };
+      final shortcut = runtime.checkOwnAiChatEntry('ai-account');
+      await f.readStarted!.future.timeout(const Duration(seconds: 5));
+      await runtime.refreshConversations();
+      expect(directReads, 2);
+      expect(runtime.conversations, isEmpty);
+      f.readRelease!.complete();
+      expect(await shortcut, OwnAiChatEntry.busy);
+      expect(runtime.conversations, isEmpty);
+    } finally {
+      await f.dispose(runtime);
+    }
+  });
+
   test('shortcut checks only visibility and consent, leaving the queue unsent', () async {
     final f = await _ConsentFixture.create();
     final runtime = await f.runtime();

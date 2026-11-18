@@ -26,10 +26,12 @@ class SettingsScreen extends StatelessWidget {
     required this.model,
     required this.onBack,
     this.onOpenOwnAiChat,
+    this.checkingOwnAiAccount,
   });
   final ShellViewModel model;
   final VoidCallback onBack;
   final Future<void> Function(BuildContext, String)? onOpenOwnAiChat;
+  final String? checkingOwnAiAccount;
 
   /// Builds the lifecycle/backup screen, wiring the real [LifecycleApi] when a
   /// host connection exists so export/import are usable. Cleanup stays disabled
@@ -502,6 +504,7 @@ class SettingsScreen extends StatelessWidget {
                         model: model,
                         ai: ai,
                         onOpenChat: onOpenOwnAiChat,
+                        checkingAccount: checkingOwnAiAccount,
                       ),
                     ],
                   ),
@@ -519,10 +522,12 @@ class _OwnAiDirectControls extends StatelessWidget {
     required this.model,
     required this.ai,
     required this.onOpenChat,
+    required this.checkingAccount,
   });
   final ShellViewModel model;
   final ShellOwnedAi ai;
   final Future<void> Function(BuildContext, String)? onOpenChat;
+  final String? checkingAccount;
 
   @override
   Widget build(BuildContext context) {
@@ -585,10 +590,12 @@ class _OwnAiDirectControls extends StatelessWidget {
                 onOpenChat != null)
               TextButton(
                 key: Key('own-ai-direct-chat-${ai.accountId}'),
-                onPressed: available
+                onPressed: available && checkingAccount == null
                     ? () => onOpenChat!(context, ai.accountId)
                     : null,
-                child: const Text('打开私聊'),
+                child: Text(
+                  checkingAccount == ai.accountId ? '正在核对私聊…' : '打开私聊',
+                ),
               ),
           ],
         ),

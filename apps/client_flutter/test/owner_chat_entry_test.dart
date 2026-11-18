@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:client_flutter/app/shell_app.dart';
 import 'package:client_flutter/app/shell_view_model.dart';
+import 'package:client_flutter/features/settings/settings_screen.dart';
+import 'package:client_flutter/features/world/world_status_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -24,6 +26,7 @@ class OwnerChatFixture extends TestShellModel {
   bool enabled = true;
   bool visible = true;
   OwnAiChatEntry? entryResult;
+  bool multipleAccounts = false;
   Completer<void>? refreshGate;
   int refreshes = 0, writes = 0, sends = 0;
   final selections = <String>[];
@@ -31,12 +34,18 @@ class OwnerChatFixture extends TestShellModel {
   @override
   bool get ownAiLoaded => true;
   @override
-  List<ShellOwnedAi> get ownAiAccounts => const [
-    ShellOwnedAi(
+  List<ShellOwnedAi> get ownAiAccounts => [
+    const ShellOwnedAi(
       accountId: 'ai-owner',
       displayName: 'Fixture Nora',
       disabled: false,
     ),
+    if (multipleAccounts)
+      const ShellOwnedAi(
+        accountId: 'ai-other',
+        displayName: 'Fixture Mira',
+        disabled: false,
+      ),
   ];
   @override
   Object? get ownAiDirectContext => authenticated && !locked ? epoch : null;
@@ -44,10 +53,10 @@ class OwnerChatFixture extends TestShellModel {
   ShellOwnAiDirectState ownAiDirectState(String account) =>
       ShellOwnAiDirectState(
         phase: ShellOwnAiDirectPhase.ready,
-        profileId: 'profile-owner',
+        profileId: account == 'ai-owner' ? 'profile-owner' : 'profile-other',
         revision: 1,
         enabled: enabled,
-        conversationId: directId,
+        conversationId: account == 'ai-owner' ? directId : 'other',
       );
 
   @override
@@ -168,6 +177,94 @@ void main() {
       expect(find.byKey(const Key('composer')), findsNothing);
     });
   }
+
+  for (final interruption in [
+    'revoke dialog',
+    'revoke dialog then return',
+    'settings page',
+    'settings page then return',
+  ]) {
+    testWidgets('$interruption invalidates pending owner-chat navigation', (
+      tester,
+    ) async {
+      final model = OwnerChatFixture()..refreshGate = Completer<void>();
+      await openOwnerSettings(tester, model);
+      await tester.ensureVisible(find.byKey(entry));
+      await tester.tap(find.byKey(entry));
+      await tester.pump();
+      expect(model.refreshes, 1);
+
+      if (interruption.startsWith('revoke dialog')) {
+        final toggle = find.byKey(const Key('own-ai-direct-toggle-ai-owner'));
+        await tester.ensureVisible(toggle);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        expect(find.text('确认撤销私聊授权'), findsOneWidget);
+        if (interruption.endsWith('return')) {
+          await tester.tap(find.text('取消'));
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsNothing);
+          expect(find.byType(SettingsScreen), findsOneWidget);
+        }
+      } else {
+        final page = find.byKey(const Key('open-world-status'));
+        final settings = find.byType(SettingsScreen);
+        final status = find.byType(WorldStatusScreen);
+        await tester.scrollUntilVisible(
+          page,
+          -260,
+          scrollable: find
+              .descendant(of: settings, matching: find.byType(Scrollable))
+              .first,
+        );
+        await tester.tap(page);
+        await tester.pumpAndSettle();
+        expect(status, findsOneWidget);
+        expect(settings, findsNothing);
+        if (interruption.endsWith('return')) {
+          await tester.pageBack();
+          await tester.pumpAndSettle();
+          expect(status, findsNothing);
+          expect(settings, findsOneWidget);
+        }
+      }
+
+      model.refreshGate!.complete();
+      await tester.pumpAndSettle();
+      expect(model.selections, isEmpty);
+      expect(model.writes, 0);
+      expect(model.sends, 0);
+      expect(
+        find.byKey(const Key('composer'), skipOffstage: false),
+        findsNothing,
+      );
+      if (interruption == 'revoke dialog') {
+        expect(find.text('确认撤销私聊授权'), findsOneWidget);
+      } else if (!interruption.endsWith('return')) {
+        expect(find.text('世界状态'), findsOneWidget);
+      }
+    });
+  }
+
+  testWidgets('owner chat controls visibly wait during another AI check', (
+    tester,
+  ) async {
+    final model = OwnerChatFixture()
+      ..multipleAccounts = true
+      ..refreshGate = Completer<void>();
+    await openOwnerSettings(tester, model);
+    await tester.ensureVisible(find.byKey(entry));
+    await tester.tap(find.byKey(entry));
+    await tester.pump();
+    final other = find.byKey(const Key('own-ai-direct-chat-ai-other'));
+    await tester.ensureVisible(other);
+    expect(find.text('正在核对私聊…'), findsOneWidget);
+    expect(tester.widget<TextButton>(other).onPressed, isNull);
+    expect(model.refreshes, 1);
+    model.refreshGate!.complete();
+    await tester.pumpAndSettle();
+    expect(model.selections, [directId]);
+  });
 
   for (final interruption in ['lock', 'logout', 'consent change']) {
     testWidgets('$interruption during refresh prevents delayed navigation', (

@@ -24,6 +24,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   late Directory _dataRoot;
   late FilePersistence _settingsStorage;
   Future<void>? _refreshWork;
+  // A completed refresh also supersedes visibility seen by an earlier shortcut.
+  int _refreshGeneration = 0;
   Future<bool>? _renewWork;
   Future<void> _secureTail = Future<void>.value();
   ClientCredentials? _credentials;
@@ -545,6 +547,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     }
     final active = _refreshWork;
     if (active != null) return active;
+    _refreshGeneration++;
     final work = _performRefresh(connection!, shell, _generation);
     _refreshWork = work;
     return work.whenComplete(() {
@@ -774,6 +777,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   Future<OwnAiChatEntry> checkOwnAiChatEntry(String aiAccountId) async {
+    final refreshGeneration = _refreshGeneration;
     final session = connection;
     final owner = connectedAccountId;
     final epoch = ownAiDirectContext;
@@ -811,7 +815,11 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           state.conversationId != id) {
         return OwnAiChatEntry.cancelled;
       }
-      if (_busy || _refreshWork != null) return OwnAiChatEntry.busy;
+      if (_busy ||
+          _refreshWork != null ||
+          _refreshGeneration != refreshGeneration) {
+        return OwnAiChatEntry.busy;
+      }
       if (!online) return OwnAiChatEntry.unavailable;
       return null;
     }
