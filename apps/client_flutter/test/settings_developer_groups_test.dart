@@ -1,4 +1,6 @@
+import 'package:client_flutter/features/lifecycle/backup_quota_screen.dart';
 import 'package:client_flutter/features/settings/settings_screen.dart';
+import 'package:client_flutter/features/world/world_status_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -42,32 +44,32 @@ void main() {
     expect(find.byKey(const Key('open-ai-config-write')), findsOneWidget);
   });
 
-  testWidgets('read-only entries still open their original screens', (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SettingsScreen(model: TestShellModel(), onBack: () {}),
+  for (final (key, screenType) in [
+    ('open-lifecycle-status', BackupQuotaScreen),
+    ('open-world-status', WorldStatusScreen),
+  ]) {
+    testWidgets('$key opens $screenType', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SettingsScreen(model: TestShellModel(), onBack: () {}),
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    Future<void> open(String key) async {
-      final finder = find.byKey(Key(key));
-      await tester.scrollUntilVisible(finder, 200);
+      );
       await tester.pumpAndSettle();
-      await tester.tap(finder);
+
+      // Each case starts at the top; going back from a pushed route restores
+      // the previous scroll offset, which can be below an earlier entry.
+      final entry = find.byKey(Key(key));
+      await tester.scrollUntilVisible(entry, 200);
+      await tester.tap(entry);
       await tester.pumpAndSettle();
-    }
+      expect(find.byType(screenType), findsOneWidget);
 
-    await open('open-lifecycle-status');
-    expect(find.text('配额与生命周期状态'), findsOneWidget);
-    await tester.pageBack();
-    await tester.pumpAndSettle();
-
-    await open('open-world-status');
-    expect(find.text('世界状态'), findsOneWidget);
-    await tester.pageBack();
-    await tester.pumpAndSettle();
-  });
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(SettingsScreen), findsOneWidget);
+      expect(find.byType(screenType), findsNothing);
+    });
+  }
 }
