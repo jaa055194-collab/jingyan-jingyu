@@ -126,6 +126,35 @@ void main() {
     },
   );
 
+  test(
+    'host-valid names with newlines and tabs do not discard mixed rows',
+    () async {
+      server.listen((request) async {
+        await request.drain<void>();
+        request.response.write(
+          jsonEncode([
+            {
+              'accountId': 'alice',
+              'displayName': 'Alice\nLee',
+              'state': 'friends',
+            },
+            {
+              'accountId': 'bob',
+              'displayName': 'Bob\tLi',
+              'state': 'incomingPending',
+            },
+          ]),
+        );
+        await request.response.close();
+      });
+      final contacts = await api.list();
+      expect(contacts.map((c) => (c.accountId, c.displayName, c.state)), [
+        ('alice', 'Alice\nLee', FriendState.friends),
+        ('bob', 'Bob\tLi', FriendState.incomingPending),
+      ]);
+    },
+  );
+
   test('list accepts an empty array', () async {
     server.listen((r) async {
       await r.drain<void>();
