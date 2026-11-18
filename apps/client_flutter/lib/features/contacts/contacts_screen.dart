@@ -148,6 +148,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
   // rendered label changes; the DTO and account ID are kept intact.
   static final _displayControls = RegExp(r'[\x00-\x1f\x7f-\x9f]');
 
+  static String _contactTitle(FriendContact friend) {
+    final display = friend.displayName.replaceAll(_displayControls, ' ');
+    return display.trim().isEmpty ? friend.accountId : display;
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     body: SafeArea(
@@ -183,9 +188,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                       key: Key('contacts-friend-${friend.accountId}'),
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.person_outline),
-                      title: Text(
-                        friend.displayName.replaceAll(_displayControls, ' '),
-                      ),
+                      title: Text(_contactTitle(friend)),
                       subtitle: Text(
                         '${friend.accountId} · ${_label(friend.state)}',
                       ),

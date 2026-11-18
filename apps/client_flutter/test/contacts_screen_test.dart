@@ -82,6 +82,25 @@ void main() {
     expect(find.textContaining('无法读取联系人'), findsNothing);
   });
 
+  testWidgets('control-only display name falls back to the account ID', (
+    tester,
+  ) async {
+    final contact = FriendContact.fromJson({
+      'accountId': 'fixture-inviter',
+      'displayName': '\u0001\u0080',
+      'state': 'incomingPending',
+    });
+    await tester.pumpWidget(
+      MaterialApp(home: ContactsScreen(loadFriends: () async => [contact])),
+    );
+    await tester.pumpAndSettle();
+
+    final row = tester.widget<ListTile>(
+      find.byKey(const Key('contacts-friend-fixture-inviter')),
+    );
+    expect((row.title! as Text).data, 'fixture-inviter');
+  });
+
   testWidgets('empty list keeps an honest empty state', (tester) async {
     await tester.pumpWidget(
       MaterialApp(home: ContactsScreen(loadFriends: () async => const [])),
