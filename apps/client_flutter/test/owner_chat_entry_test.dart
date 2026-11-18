@@ -95,10 +95,11 @@ class OwnerChatFixture extends TestShellModel {
 
 Future<void> openOwnerSettings(
   WidgetTester tester,
-  OwnerChatFixture model,
-) async {
+  OwnerChatFixture model, {
+  double width = 390,
+}) async {
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(390, 844);
+  tester.view.physicalSize = Size(width, 844);
   addTearDown(tester.view.resetDevicePixelRatio);
   addTearDown(tester.view.resetPhysicalSize);
   await tester.pumpWidget(WhaleChatApp(model: model));
@@ -245,6 +246,32 @@ void main() {
       }
     });
   }
+
+  testWidgets('wide Settings tab navigation supersedes a pending chat check', (
+    tester,
+  ) async {
+    final model = OwnerChatFixture()..refreshGate = Completer<void>();
+    await openOwnerSettings(tester, model, width: 1000);
+    await tester.ensureVisible(find.byKey(entry));
+    await tester.tap(find.byKey(entry));
+    await tester.pump();
+    expect(model.refreshes, 1);
+
+    final rail = find.byType(NavigationRail);
+    await tester.tap(find.descendant(of: rail, matching: find.text('联系人')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationRail>(rail).selectedIndex, 1);
+    expect(find.byType(SettingsScreen), findsNothing);
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsOneWidget);
+
+    model.refreshGate!.complete();
+    await tester.pumpAndSettle();
+    expect(model.selections, isEmpty);
+    expect(find.byType(SettingsScreen), findsOneWidget);
+    expect(tester.widget<NavigationRail>(rail).selectedIndex, 1);
+  });
 
   testWidgets('owner chat controls visibly wait during another AI check', (
     tester,
