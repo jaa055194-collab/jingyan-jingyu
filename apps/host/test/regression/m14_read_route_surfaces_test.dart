@@ -4,10 +4,7 @@
 /// Covers:
 ///  - `GET /api/v1/friends`                (owner-scoped friends list)
 ///  - `GET /api/v1/lifecycle/cleanup/preview` (owner-scoped retention preview)
-///
-/// The attachments *collection* list route (`GET /api/v1/attachments`) is not
-/// implemented on this baseline; it is documented as pending in docs/acceptance.md
-/// and asserted here only as a skipped expectation so it cannot silently pass.
+///  - `GET /api/v1/attachments` (owner-scoped attachment metadata list)
 library;
 
 import 'dart:io';
@@ -70,12 +67,19 @@ void main() {
     );
 
     test(
-      'attachments collection list route (PR#107) is not merged into this baseline yet',
-      () {},
-      skip:
-          'GET ${Routes.attachments} collection list route is implemented by '
-          'PR#107 (AttachmentService.listOwn + router.get(Routes.attachments)) but '
-          'is NOT merged into this baseline; enable this assertion after #107 merges.',
+      'attachments collection list is mounted as an authenticated GET',
+      () async {
+        final host = await boot();
+        try {
+          final routes = host.registry.router.describe().where(
+            (line) => line.startsWith('GET /api/v1/attachments '),
+          );
+          expect(routes, hasLength(1));
+          expect(routes.single, contains('[authenticated]'));
+        } finally {
+          await host.shutdown();
+        }
+      },
     );
   });
 }

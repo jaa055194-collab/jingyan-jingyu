@@ -182,7 +182,9 @@ Live2D 解包/渲染与热切换、托盘/自启/通知/Android 保活等端侧�
 - 本矩阵**不构成产品验收通过**；真实厂商连通、真机渲染/端侧行为均为**待实机验证**，不是通过。
 - **M14 增量（见 §F）**：`GET /api/v1/friends`、`GET /api/v1/lifecycle/cleanup/preview` 已验证
   （host 单测/真 SQLite + 默认装配断言）；客户端联系人/创作/语音/附件查看/Settings 分组/清理预览
-  为 widget/loopback 已验证、**待真机**；`GET /attachments`（列表）**待实现**。
+  为 widget/loopback 已验证、**待真机**；附件列表的合并后复核见 §F.3。
+- **M15 增量（见 §G）**：通话读取、宿主通知、离线受信链回归、live 测试辅助与诊断面板已合并；
+  客户端收件箱接线待解决 PR #116 冲突，好友接受/拒绝尚未交付。
 
 ---
 
@@ -222,7 +224,7 @@ pwsh -File tool/init_host.ps1 -DataDir <全新空目录> -AdminName Root `
 |---|---|---|---|
 | `GET /api/v1/friends`（owner-scoped 好友列表） | `Routes.friends`；`FriendshipService.listContacts()`；`friendship_routes.dart`；默认宿主经 `SocialModule` 装配 | `apps/host/test/friends_list_route_test.dart`（真实 SQLite：空列表/owner 隔离/状态映射/schema 安全）；`m14_read_route_surfaces_test.dart` 断言默认装配已挂载且为 `[authenticated]` | **已验证（host 单测/真 SQLite）** |
 | `GET /api/v1/lifecycle/cleanup/preview`（只读保留期清理预览） | `Routes.lifecycleCleanupPreview`；`lifecycle_module.dart::_cleanupPreview`（owner-scoped、拒绝 query/body、异常 safe 500、绝不执行清理） | `apps/host/test/lifecycle_cleanup_preview_route_test.dart`；`m14_read_route_surfaces_test.dart` 断言默认装配挂载且为 `[authenticated]` | **已验证（host 单测）**；真实清理未执行（只读预览） |
-| `GET /api/v1/attachments`（附件**列表**） | 已由 m12 实现为 **PR#107**（commit `39723f0`：`AttachmentService.listOwn` + `router.get(Routes.attachments, _list)`，owner-scoped、不含 extractedText）；**尚未被外部自动合并进 main**（本基线 8dafa17 早于它） | `m14_read_route_surfaces_test.dart` 以 skip 记录（待 #107 合并后启用） | **已实现（PR#107 ready，待自动合并/合并后联调）** |
+| `GET /api/v1/attachments`（附件**列表**） | 已由 m12 实现为 **PR#107**（commit `39723f0`：`AttachmentService.listOwn` + `router.get(Routes.attachments, _list)`，owner-scoped、不含 extractedText）；M14 基线 `8dafa17` 尚未包含该路由 | `m14_read_route_surfaces_test.dart` 的历史跳过不计通过；合并后证据见 §F.3 | **已实现；合并状态与复跑见 §F.3** |
 
 ### F.2 客户端页面
 
@@ -231,14 +233,50 @@ pwsh -File tool/init_host.ps1 -DataDir <全新空目录> -AdminName Root `
 | 联系人（真实好友） | `features/contacts/contacts_screen.dart` + `net/friends_api.dart` | `contacts_screen_test.dart`、`friends_api_test.dart` | **已验证（widget/loopback）**；真机待 |
 | 创作运行时 | `features/creative/creative_screen.dart` + `net/creative_api.dart` | `creative_screen_test.dart`、`creative_api_test.dart` | **已验证（widget/loopback）**；真实宿主数据/真机待 |
 | 语音 polish/gap | `features/voice/voice_screen.dart` + `net/voice_api.dart` | `voice_screen_test.dart`、`voice_api_test.dart` | **已验证（widget/loopback）**；真实厂商音频/真机待 |
-| 附件诚实查看 | `features/attachments/attachments_screen.dart` | `attachments_screen_test.dart` | **部分已验证（查看器 widget）**；真实**列表**依赖 `GET /attachments`（PR#107 已实现、待合并） → **待确认** |
+| 附件诚实查看 | `features/attachments/attachments_screen.dart` | `attachments_screen_test.dart` | **部分已验证（查看器 widget）**；列表及入口的合并后状态与待验范围见 §F.3 |
 | Settings 分组 | `features/settings/settings_screen.dart`（开发者区分组） | `settings_developer_groups_test.dart` | **已验证（widget）** |
 | 清理预览（客户端） | `net/lifecycle_api.dart::readCleanupPreview` + `features/lifecycle/backup_quota_screen.dart` | `lifecycle_cleanup_preview_api_test.dart`、`backup_quota_actions_test.dart` | **已验证（API/loopback + widget）**；真实清理执行未做 |
 
 ### F.3 汇总与限制
 
 - Host 路由：`friends`、`lifecycle/cleanup/preview` **已验证**（单测/真 SQLite + 默认装配断言）；
-  `GET /attachments` 列表**待实现**。
+  附件列表在 M14 原基线尚未合并；以 M15 基线复核，PR #107 已合并，宿主 `attachments_list_test` 4/4 通过，默认宿主已验证挂载需认证的集合 GET。客户端列表及入口已随 #110、#113 合并，本次未复跑其客户端测试，真机联调待确认。
 - 客户端：以上页面均以 **widget/loopback** 证据判为已实现/已验证；**全部未在真机运行**，
   真实厂商、真实后端数据、通知/托盘/自启动等端侧行为仍属**待真机验证**。
-- 附件“列表”页在 host `GET /attachments` 列表路由（PR#107）合并前不计完成（查看器单页可查看 URL 直取的单附件）。
+
+---
+
+## G. M15 增量验收：通话、通知、好友动作与受信链回归（2026-11-18）
+
+> 产品代码基线：`origin/main 0c23edd`；本次只更新文档和默认装配回归测试。下表区分已合并、自动化实测和待联调，
+> 通过定向测试不代表整套产品验收通过。
+
+| 项 | 实现/PR | 本次验证 | 状态与缺口 |
+|---|---|---|---|
+| 宿主通话列表 | #118（`a59fdef`）：`GET /api/v1/voice/calls`，仅当前账号可见的通话元数据 | `voice_routes_test` 13/13（含列表 3 项：隔离、排序分页、拒绝无效请求） | **已合并，路由测试通过**；客户端接真实宿主及真机待验，不计音频通话验收 |
+| 客户端通话状态及列表 | #115（`600f2a1`）按 ID 读取；#121 / task-97（`981fbea`）列表 API、列表页及 Settings 入口 | 状态 8/8、列表与入口 13/13（API loopback、widget） | **已合并，自动化通过**；未做真实宿主联调或真机验证 |
+| 宿主好友邀请通知 | #114（`ddab908`）：`GET /api/v1/notifications`，仅本人待处理好友邀请元数据 | `notifications_routes_test` 3/3（隔离、处理后消失、输入限制和鉴权） | **已合并，路由测试通过**；不计系统推送或客户端收件箱联调 |
+| 客户端收件箱接线 | #116（`d73ddc6`）拟消费宿主通知，当前 OPEN、有合并冲突 | 未在此基线验证接线 | **待解决冲突并合并**；合并后重跑 API/widget 并联调 |
+| 客户端好友接受/拒绝 | task-95，仅本地草稿，未进入 main | 未验，无已交付客户端证据 | **未交付**；待 PR、验证及联调 |
+| 受信模型路径结构回归 | #120（`a428757`）：gzip 默认关闭及 opt-in、适配器、`auto` 绑定、canonical `s2` 回存与用量结算 | `trusted_real_model_path_test` 3/3（loopback 与假传输，含预算差） | **已合并，离线回归通过**；未验证实时模型路由或生产端到端 |
+| live 测试辅助统一 | #117（`f95547d`）：共享环境门控、迁移及 owner 配置；补人格装配覆盖 | `provider_trusted_chain_test` 5/5（假传输）；两个 live 测试按环境门控跳过 | **已合并，离线用例通过**；跳过不计 live 验收 |
+| 诊断面板状态说明 | #122 / task-98（`0c23edd`）：解释探针状态与诊断边界 | `module_test_panel_test` 7/7（单测及 widget） | **已合并，自动化通过**；不代表模型可用、真机性能或真实宿主联调 |
+
+### G.1 复跑方式与结果
+
+Windows 本地，分别在宿主与 Flutter 客户端包目录执行（产品代码为 `0c23edd`）：
+
+```powershell
+# apps/host（未提供 live 配置）
+dart test test/voice_routes_test.dart test/notifications_routes_test.dart test/attachments_list_test.dart test/regression/trusted_real_model_path_test.dart test/provider_trusted_chain_test.dart test/provider_live_probe_test.dart test/worker_e2e_live_assembly_test.dart -r expanded --concurrency=1
+# apps/client_flutter
+flutter test test/voice_call_api_test.dart test/voice_call_screen_test.dart test/module_test_panel_test.dart -r expanded --concurrency=1
+flutter test test/voice_call_list_api_test.dart test/voice_call_list_screen_test.dart test/settings_voice_call_list_test.dart -r expanded --concurrency=1
+```
+
+宿主上述基线复跑 **28 通过、2 跳过、0 失败**（含 §F.3 附件列表 4 项）；客户端 **28 通过、0 失败**。
+启用旧附件 skip 后另跑 `dart test test/regression/m14_read_route_surfaces_test.dart test/attachments_list_test.dart test/notifications_routes_test.dart -r expanded --concurrency=1`：**9 通过、0 跳过**（部分用例与上述基线复跑重复，不相加）。新增断言的格式检查与定向 `dart analyze --fatal-infos` 均通过。
+本次未运行全仓套件、实时模型调用、客户端与真实宿主联调或真机验收。
+
+**历史实测（不计入本次复跑）**：在 #102 的 `63f4c2e` 修订上，本地显式启用进程内 `GuardedHttpTransport(autoUncompress: true)`，运行 `worker_e2e_live_assembly_test`；真实 `auto` 回复非空，canonical `s2` 回复持久化到 SQLite，重开可读，预算差与结算用量一致。
+该集成测试不走默认启动链路。生产模型出站装配走 `ModelRuntime.withProcess` → `ProcessHttpTransport` → `bin/http_worker.dart`，worker 未显式开启 gzip。**生产子进程出站与宿主默认启动端到端均未由上述测试验证**。
