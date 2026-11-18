@@ -814,12 +814,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('宿主未提供好友列表路由；接入好友列表后可在此显示。'), findsOneWidget);
 
-      // Inbox is likewise a real module surface with an honest unavailable state
-      // (post PR#101 copy): it lists the current gap and what appears once wired.
+      // Without a live connection, the inbox reports an unbound state.
       await tester.tap(find.text('收件箱'));
       await tester.pumpAndSettle();
-      expect(find.text('当前缺口：宿主未提供收件箱/通知路由。'), findsOneWidget);
-      expect(find.text('接入后此处将显示邀请与通知；数据来自宿主实时读取。'), findsOneWidget);
+      expect(find.text('当前未连接宿主，无法读取收件箱。'), findsOneWidget);
+      expect(find.text('连接后可查看待处理的好友邀请。'), findsOneWidget);
 
       // 动态 is now the CreativeScreen module surface; with no host connection
       // wired it reports an honest unbound state instead of inventing content.

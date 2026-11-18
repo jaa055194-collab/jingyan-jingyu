@@ -22,10 +22,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Preserve both unbound copy assertions from the main regression test.
     expect(find.byKey(const Key('inbox-gap')), findsOneWidget);
-    expect(find.text('当前缺口：宿主未提供收件箱/通知路由。'), findsOneWidget);
-    expect(find.text('接入后此处将显示邀请与通知；数据来自宿主实时读取。'), findsOneWidget);
+    expect(find.text('当前未连接宿主，无法读取收件箱。'), findsOneWidget);
+    expect(find.text('连接后可查看待处理的好友邀请。'), findsOneWidget);
     expect(find.byType(ListTile), findsNothing);
   });
 
@@ -45,7 +44,8 @@ void main() {
     expect(find.text('好友邀请'), findsOneWidget);
     expect(find.textContaining('来自 acct-a'), findsOneWidget);
     expect(find.text('pending'), findsOneWidget);
-    expect(find.textContaining('不修改关系'), findsOneWidget);
+    expect(find.text('本页只读，不修改好友关系。'), findsOneWidget);
+    expect(find.textContaining('请在“联系人”页处理'), findsNothing);
   });
 
   testWidgets('empty list is an honest empty state', (tester) async {

@@ -78,13 +78,13 @@ class _InboxScreenState extends State<InboxScreen> {
               Text('收件箱', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               const Text(
-                '当前缺口：宿主未提供收件箱/通知路由。',
+                '当前未连接宿主，无法读取收件箱。',
                 key: Key('inbox-gap'),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 4),
               const Text(
-                '接入后此处将显示邀请与通知；数据来自宿主实时读取。',
+                '连接后可查看待处理的好友邀请。',
                 key: Key('inbox-after-wiring'),
                 textAlign: TextAlign.center,
               ),
@@ -127,7 +127,7 @@ class _InboxScreenState extends State<InboxScreen> {
               trailing: Text(item.status),
             ),
         const SizedBox(height: 12),
-        const Text('邀请请在“联系人”页处理；本页只读，不修改关系。'),
+        const Text('本页只读，不修改好友关系。'),
       ],
     );
   }
