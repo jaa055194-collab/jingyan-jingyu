@@ -144,6 +144,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
   }
 
+  // Account names may contain controls per the host contract. Only the
+  // rendered label changes; the DTO and account ID are kept intact.
+  static final _displayControls = RegExp(r'[\x00-\x1f\x7f-\x9f]');
+
   @override
   Widget build(BuildContext context) => Scaffold(
     body: SafeArea(
@@ -162,10 +166,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 key: Key('contacts-live-note'),
               ),
               if (widget.loadFriends == null)
-                const Text(
-                  '宿主未提供好友列表路由；接入好友列表后可在此显示。',
-                  textAlign: TextAlign.center,
-                )
+                const Text('当前未连接宿主，无法读取联系人。', textAlign: TextAlign.center)
               else if (_loadingFriends)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
@@ -175,14 +176,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 Text(_friendsMessage!, textAlign: TextAlign.center)
               else if (_friends != null) ...[
                 if (_friends!.isEmpty)
-                  const Text('暂无好友；这不代表没有待处理请求。', textAlign: TextAlign.center)
+                  const Text('暂无联系人或待处理的好友邀请。', textAlign: TextAlign.center)
                 else
                   for (final friend in _friends!)
                     ListTile(
                       key: Key('contacts-friend-${friend.accountId}'),
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.person_outline),
-                      title: Text(friend.displayName),
+                      title: Text(
+                        friend.displayName.replaceAll(_displayControls, ' '),
+                      ),
                       subtitle: Text(
                         '${friend.accountId} · ${_label(friend.state)}',
                       ),

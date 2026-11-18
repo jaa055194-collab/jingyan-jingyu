@@ -808,11 +808,10 @@ void main() {
       await tester.tap(find.byTooltip('返回会话列表'));
       await tester.pumpAndSettle();
 
-      // Contacts is now a real module surface with an honest empty state: the
-      // host exposes no friend-list route yet, so no contacts are fabricated.
+      // Contacts shows an unbound state without a runtime connection.
       await tester.tap(find.text('联系人'));
       await tester.pumpAndSettle();
-      expect(find.text('宿主未提供好友列表路由；接入好友列表后可在此显示。'), findsOneWidget);
+      expect(find.text('当前未连接宿主，无法读取联系人。'), findsOneWidget);
 
       // Without a live connection, the inbox reports an unbound state.
       await tester.tap(find.text('收件箱'));

@@ -12,7 +12,7 @@ void main() {
     'without a host lookup the contacts surface is an honest empty state',
     (tester) async {
       await tester.pumpWidget(const MaterialApp(home: ContactsScreen()));
-      expect(find.text('宿主未提供好友列表路由；接入好友列表后可在此显示。'), findsOneWidget);
+      expect(find.text('当前未连接宿主，无法读取联系人。'), findsOneWidget);
       expect(find.byKey(const Key('contacts-query')), findsNothing);
     },
   );
@@ -66,7 +66,7 @@ void main() {
             ),
             FriendContact(
               accountId: 'bob',
-              displayName: 'Bob',
+              displayName: 'Bob\n\tLi',
               state: FriendState.incomingPending,
             ),
           ],
@@ -77,10 +77,9 @@ void main() {
     expect(find.text('Alice'), findsOneWidget);
     expect(find.textContaining('alice'), findsOneWidget);
     expect(find.text('alice · 好友'), findsOneWidget);
-    expect(find.text('Bob'), findsOneWidget);
+    expect(find.text('Bob  Li'), findsOneWidget);
     expect(find.textContaining('对方请求添加你'), findsOneWidget);
-    // Original honest "no route" text is no longer shown once a list loads.
-    expect(find.textContaining('宿主未提供好友列表路由'), findsNothing);
+    expect(find.textContaining('无法读取联系人'), findsNothing);
   });
 
   testWidgets('empty list keeps an honest empty state', (tester) async {
@@ -88,8 +87,7 @@ void main() {
       MaterialApp(home: ContactsScreen(loadFriends: () async => const [])),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('暂无好友'), findsOneWidget);
-    expect(find.textContaining('不代表没有待处理请求'), findsOneWidget);
+    expect(find.text('暂无联系人或待处理的好友邀请。'), findsOneWidget);
   });
 
   testWidgets('denied list read is reported honestly', (tester) async {

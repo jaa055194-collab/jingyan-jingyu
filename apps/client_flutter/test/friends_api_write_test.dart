@@ -15,16 +15,24 @@ void main() {
   late List<(String, String, String?)> requests;
   late int status;
   late String errorBody;
+  late int renewals;
 
   setUp(() async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     connection = HostConnection(
       Uri.parse('http://127.0.0.1:${server.port}'),
       'token',
+      onUnauthorized: () async {
+        renewals++;
+        connection.updateAccessToken('renewed-fixture');
+        status = 200;
+        return true;
+      },
     );
     api = FriendsApi(connection);
     requests = [];
     status = 200;
+    renewals = 0;
     errorBody = '{"error":"conflict"}';
     sub = server.listen((request) async {
       requests.add((
@@ -50,7 +58,7 @@ void main() {
   });
 
   test(
-    'acceptFriend POSTs the exact accept route with bounded 401 renewal',
+    'acceptFriend POSTs the exact accept route with an empty body',
     () async {
       await api.acceptFriend('acct-b');
       expect(requests.single, (
@@ -69,6 +77,40 @@ void main() {
       'Bearer token',
     ));
   });
+
+  for (final action in ['accept', 'deny']) {
+    test(
+      '$action on 401 never renews or replays and needs another call',
+      () async {
+        status = 401;
+        final respond = action == 'accept' ? api.acceptFriend : api.denyFriend;
+        final path = '/api/v1/friends/acct-b/$action';
+        await expectLater(
+          respond('acct-b'),
+          throwsA(
+            isA<HostRequestException>().having(
+              (error) => error.failure.code,
+              'code',
+              FailureCode.unauthenticated,
+            ),
+          ),
+        );
+        expect(renewals, 0);
+        expect(requests, [('POST', path, 'Bearer token')]);
+
+        // A later authenticated context still has to explicitly submit again.
+        connection.updateAccessToken('new-fixture-session');
+        status = 200;
+        expect(requests, hasLength(1));
+        await respond('acct-b');
+        expect(requests, [
+          ('POST', path, 'Bearer token'),
+          ('POST', path, 'Bearer new-fixture-session'),
+        ]);
+        expect(renewals, 0);
+      },
+    );
+  }
 
   test('conflict response is surfaced as a typed failure', () async {
     status = 409;

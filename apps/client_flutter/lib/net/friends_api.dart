@@ -43,8 +43,6 @@ class FriendContact {
   final String displayName;
   final FriendState state;
 
-  static final RegExp _control = RegExp(r'[\x00-\x1f\x7f]');
-
   factory FriendContact.fromJson(Object? value) {
     if (value is! Map) throw const FormatException();
     const fields = {'accountId', 'displayName', 'state'};
@@ -57,7 +55,6 @@ class FriendContact {
         displayName is! String ||
         displayName.trim().isEmpty ||
         displayName.length > 100 ||
-        _control.hasMatch(displayName) ||
         rawState is! String) {
       throw const FormatException();
     }
@@ -80,8 +77,9 @@ class FriendContact {
 /// Exposes `GET /friends` (list), `GET /friends/{accountId}` (single state) and
 /// explicit writes for pending incoming invitations (`POST .../accept` and
 /// `POST .../deny`). Block/unblock/request writes remain unimplemented here.
-/// Authentication renewal (bounded one-shot 401 replay) is inherited from
-/// [HostConnection]; this class adds no retry of its own.
+/// Reads retain the [HostConnection] authentication renewal behavior. Invite
+/// writes never renew or replay after a 401; submitting again requires a new
+/// explicit action.
 class FriendsApi {
   FriendsApi(this.connection);
 
@@ -110,8 +108,7 @@ class FriendsApi {
     }
   }
 
-  /// Explicitly accept a pending incoming friend request. Only called from a
-  /// user action; bounded 401 renewal only, never retried automatically.
+  /// Explicitly accept a pending incoming friend request without auto-replay.
   Future<void> acceptFriend(String accountId) =>
       _respondFriend(Routes.friendAccept, accountId);
 
@@ -130,7 +127,7 @@ class FriendsApi {
       await connection.request(
         'POST',
         route.replaceFirst('{accountId}', Uri.encodeComponent(id.value)),
-        retryAuthentication: true,
+        retryAuthentication: false,
         allowEmptySuccess: true,
       );
     } on FormatException {
