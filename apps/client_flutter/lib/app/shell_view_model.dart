@@ -66,8 +66,9 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> createGroup(String name);
   Future<void> refreshConversations();
 
-  /// Refresh visibility for the owner-AI chat shortcut without flushing sends.
-  Future<bool> refreshForOwnAiChat() async => false;
+  /// Checks current visibility and consent for this shortcut without sending.
+  Future<OwnAiChatEntry> checkOwnAiChatEntry(String aiAccountId) async =>
+      OwnAiChatEntry.unavailable;
   Future<void> addGroupMember(String groupId, String accountId);
   bool get canAddMembersToSelectedGroup;
   void updateDraft(String value);
@@ -87,6 +88,15 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> setThemeMode(ThemeMode value);
   Future<void> setFontScale(double value);
   void clearError();
+}
+
+enum OwnAiChatEntry {
+  ready,
+  busy,
+  unavailable,
+  notVisible,
+  consentChanged,
+  cancelled,
 }
 
 enum ShellOwnAiDirectPhase { unknown, loading, ready, uncertain }

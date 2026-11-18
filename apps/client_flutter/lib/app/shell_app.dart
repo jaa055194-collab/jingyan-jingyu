@@ -113,7 +113,6 @@ class _ShellHomeState extends State<_ShellHome> {
           !identical(widget.model, model) ||
           !model.authenticated ||
           model.locked ||
-          model.busy ||
           model.connectedAccountId != owner ||
           model.ownAiSessionContext != session ||
           !identical(model.ownAiDirectContext, epoch) ||
@@ -133,17 +132,30 @@ class _ShellHomeState extends State<_ShellHome> {
     if (!current() || !model.online) return;
     _openingOwnAiChat = true;
     try {
-      final refreshed = await model.refreshForOwnAiChat();
-      if (!mounted || !current()) return;
-      if (!refreshed ||
+      final result = await model.checkOwnAiChatEntry(accountId);
+      if (!mounted || !current() || result == OwnAiChatEntry.cancelled) return;
+      final notice = switch (result) {
+        OwnAiChatEntry.busy => '正在更新会话，请稍后再试。',
+        OwnAiChatEntry.unavailable => '暂时无法核对私聊，请检查连接或登录状态后再试。',
+        OwnAiChatEntry.notVisible => '此私聊在当前会话列表中不可见。',
+        OwnAiChatEntry.consentChanged => '宿主的私聊授权已变化，未打开会话。',
+        OwnAiChatEntry.ready || OwnAiChatEntry.cancelled => null,
+      };
+      if (notice != null) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(notice)));
+        return;
+      }
+      if (model.busy ||
           !model.online ||
           !model.conversations.any((c) => c.id == id && c.kind == 'direct')) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('未能找到该私聊，请刷新授权状态后再试。')));
         return;
       }
       await model.selectConversation(id);
-      if (current() && model.online && model.selectedConversationId == id) {
+      if (current() &&
+          !model.busy &&
+          model.online &&
+          model.selectedConversationId == id) {
         setState(() {
           destination = 0;
           settings = false;

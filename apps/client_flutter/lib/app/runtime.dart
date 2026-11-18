@@ -24,7 +24,6 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   late Directory _dataRoot;
   late FilePersistence _settingsStorage;
   Future<void>? _refreshWork;
-  bool _refreshFlushesOutbox = true;
   Future<bool>? _renewWork;
   Future<void> _secureTail = Future<void>.value();
   ClientCredentials? _credentials;
@@ -540,41 +539,24 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Future<void> _savePreferences() =>
       writeClientSection(_settingsStorage, 'preferences', {...preferences});
 
-  Future<void> _refresh({bool flushOutbox = true}) {
+  Future<void> _refresh() {
     if (_disposed || connection == null || _switching || locked) {
       return Future<void>.value();
     }
     final active = _refreshWork;
-    final generation = _generation;
-    if (active != null) {
-      if (!flushOutbox || _refreshFlushesOutbox) return active;
-      // A normal refresh requested during a read-only refresh must still
-      // flush, but must not inherit work from an account that has since left.
-      return active.then<void>((_) async {
-        if (_current(generation)) await _refresh();
-      });
-    }
-    _refreshFlushesOutbox = flushOutbox;
-    late final Future<void> work;
-    work =
-        _performRefresh(
-          connection!,
-          shell,
-          generation,
-          flushOutbox: flushOutbox,
-        ).whenComplete(() {
-          if (identical(_refreshWork, work)) _refreshWork = null;
-        });
+    if (active != null) return active;
+    final work = _performRefresh(connection!, shell, _generation);
     _refreshWork = work;
-    return work;
+    return work.whenComplete(() {
+      if (identical(_refreshWork, work)) _refreshWork = null;
+    });
   }
 
   Future<void> _performRefresh(
     HostConnection sessionConnection,
     ClientShellController sessionShell,
-    int generation, {
-    required bool flushOutbox,
-  }) async {
+    int generation,
+  ) async {
     try {
       // `/host` is administrator-only on the current host. A friend client
       // legitimately receives 403; that must mean isHostMachine=false rather
@@ -613,7 +595,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       );
       _conversations = conversations;
       _online = true;
-      if (flushOutbox) await sessionShell.flush();
+      await sessionShell.flush();
       for (final conversation in conversations) {
         if (!_current(generation) || locked) return;
         await sessionConnection.sync(
@@ -791,21 +773,100 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   }
 
   @override
-  Future<bool> refreshForOwnAiChat() async {
-    if (_busy ||
-        !authenticated ||
-        !online ||
-        _sessionRejected ||
-        locked ||
-        _switching ||
-        _disposed ||
-        connection == null ||
-        _refreshWork != null) {
-      return false;
-    }
+  Future<OwnAiChatEntry> checkOwnAiChatEntry(String aiAccountId) async {
+    final session = connection;
+    final owner = connectedAccountId;
+    final epoch = ownAiDirectContext;
     final generation = _generation;
-    await _refresh(flushOutbox: false);
-    return _current(generation) && authenticated && online && !locked;
+    final initial = ownAiDirectState(aiAccountId);
+    final profile = initial.profileId;
+    final revision = initial.revision;
+    final id = initial.conversationId;
+    if (session == null ||
+        owner == null ||
+        epoch == null ||
+        _sessionRejected ||
+        !_activeOwnAi(aiAccountId) ||
+        initial.phase != ShellOwnAiDirectPhase.ready ||
+        initial.enabled != true ||
+        profile == null ||
+        profile.isEmpty ||
+        revision == null ||
+        id == null ||
+        id.isEmpty) {
+      return OwnAiChatEntry.cancelled;
+    }
+
+    OwnAiChatEntry? blocked() {
+      if (!_directContext(generation, session, epoch, aiAccountId) ||
+          connectedAccountId != owner ||
+          _sessionRejected) {
+        return OwnAiChatEntry.cancelled;
+      }
+      final state = ownAiDirectState(aiAccountId);
+      if (state.phase != ShellOwnAiDirectPhase.ready ||
+          state.enabled != true ||
+          state.profileId != profile ||
+          state.revision != revision ||
+          state.conversationId != id) {
+        return OwnAiChatEntry.cancelled;
+      }
+      if (_busy || _refreshWork != null) return OwnAiChatEntry.busy;
+      if (!online) return OwnAiChatEntry.unavailable;
+      return null;
+    }
+
+    final before = blocked();
+    if (before != null) return before;
+    try {
+      final direct = await session.request(
+        'GET',
+        Routes.directConversations,
+        retryAuthentication: false,
+      );
+      final afterList = blocked();
+      if (afterList != null) return afterList;
+      final rows = direct['conversations'];
+      if (rows is! List) return OwnAiChatEntry.unavailable;
+      final matches = rows.whereType<Map>().where((row) => row['id'] == id);
+      if (matches.length != 1) return OwnAiChatEntry.notVisible;
+      final row = matches.single;
+      final a = row['accountLow'];
+      final b = row['accountHigh'];
+      if (row['kind'] != 'direct' ||
+          !((a == owner && b == aiAccountId) ||
+              (b == owner && a == aiAccountId))) {
+        return OwnAiChatEntry.notVisible;
+      }
+      final mapped = mapConversations(groups: null, directs: [row]).single;
+
+      // Read consent last: an owner can still read retained history after revoke.
+      final live = await OwnerAiDirectApi(session)
+          .read(profile, retryAuthentication: false);
+      final afterConsent = blocked();
+      if (afterConsent != null) return afterConsent;
+      if (!live.enabled ||
+          live.aiProfileId != profile ||
+          live.aiAccountId != aiAccountId ||
+          live.revision != revision ||
+          live.conversationId != id) {
+        return OwnAiChatEntry.consentChanged;
+      }
+
+      // Append only a missing canonical row to the current list. Neither this
+      // shortcut nor its failed checks publish an older conversation snapshot.
+      final existing = _conversations.where((c) => c.id == id);
+      if (existing.isNotEmpty) {
+        return existing.length == 1 && existing.single.kind == 'direct'
+            ? OwnAiChatEntry.ready
+            : OwnAiChatEntry.notVisible;
+      }
+      _conversations = [..._conversations, mapped];
+      notifyListeners();
+      return OwnAiChatEntry.ready;
+    } catch (_) {
+      return blocked() ?? OwnAiChatEntry.unavailable;
+    }
   }
 
   bool _ownAiCurrentSession(int generation, HostConnection session) =>

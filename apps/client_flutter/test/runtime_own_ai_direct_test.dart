@@ -218,30 +218,174 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   HttpOverrides.global = null;
 
-  test('owner chat shortcut sync leaves a queued message unsent', () async {
+  test(
+    'shortcut rejects host-revoked consent even if history is visible',
+    () async {
+      final f = await _ConsentFixture.create();
+      final runtime = await f.runtime();
+      try {
+        f.enabled = true;
+        f.revision = 1;
+        await runtime.loadOwnAiDirectConsent('ai-account');
+        f.enabled = false;
+        f.revision = 2;
+        f.native.serve = (request) async {
+          if (request.uri.path == Routes.directConversations) {
+            await request.drain<void>();
+            return f.native.reply(request, {
+              'conversations': [
+                {
+                  'id': 'direct-conversation',
+                  'kind': 'direct',
+                  'accountLow': 'ai-account',
+                  'accountHigh': 'alice',
+                },
+              ],
+            });
+          }
+          if (request.uri.path.endsWith('/sync')) {
+            await request.drain<void>();
+            return f.native.reply(request, {'messages': [], 'hasMore': false});
+          }
+          return f.serve(request);
+        };
+        expect(
+          await runtime.checkOwnAiChatEntry('ai-account'),
+          OwnAiChatEntry.consentChanged,
+        );
+        expect(runtime.selectedConversationId, isNull);
+        expect(runtime.conversations, isEmpty);
+      } finally {
+        await f.dispose(runtime);
+      }
+    },
+  );
+
+  for (final failConsent in [false, true]) {
+    test('shortcut ${failConsent ? 'consent' : 'direct-list'} 401 does not renew', () async {
+      final f = await _ConsentFixture.create();
+      final runtime = await f.runtime();
+      try {
+        f.enabled = true;
+        f.revision = 1;
+        await runtime.loadOwnAiDirectConsent('ai-account');
+        f.readFailure = failConsent ? 401 : null;
+        f.native.serve = (request) async {
+          if (request.uri.path == Routes.directConversations) {
+            await request.drain<void>();
+            f.calls.add('${request.method} ${request.uri.path}');
+            if (!failConsent) {
+              return f.native.reply(request, {
+                'error': 'unauthenticated',
+              }, status: 401);
+            }
+            return f.native.reply(request, {
+              'conversations': [
+                {
+                  'id': 'direct-conversation',
+                  'kind': 'direct',
+                  'accountLow': 'ai-account',
+                  'accountHigh': 'alice',
+                },
+              ],
+            });
+          }
+          return f.serve(request);
+        };
+        f.calls.clear();
+        expect(
+          await runtime.checkOwnAiChatEntry('ai-account'),
+          OwnAiChatEntry.unavailable,
+        );
+        expect(f.calls, [
+          'GET ${Routes.directConversations}',
+          if (failConsent)
+            'GET ${Routes.ownerAiDirectConsent.replaceFirst('{aiId}', 'profile-distinct')}',
+        ]);
+        expect(runtime.conversations, isEmpty);
+      } finally {
+        await f.dispose(runtime);
+      }
+    });
+  }
+
+  test(
+    'shortcut yields if an ordinary refresh begins during live consent',
+    () async {
+      final f = await _ConsentFixture.create();
+      final runtime = await f.runtime();
+      final refreshStarted = Completer<void>();
+      final releaseRefresh = Completer<void>();
+      Future<void>? ordinary;
+      try {
+        f.enabled = true;
+        f.revision = 1;
+        await runtime.loadOwnAiDirectConsent('ai-account');
+        f.readStarted = Completer<void>();
+        f.readRelease = Completer<void>();
+        f.native.serve = (request) async {
+          if (request.uri.path == Routes.hostInfo &&
+              !refreshStarted.isCompleted) {
+            refreshStarted.complete();
+            await releaseRefresh.future;
+          }
+          if (request.uri.path == Routes.directConversations) {
+            await request.drain<void>();
+            return f.native.reply(request, {
+              'conversations': [
+                {
+                  'id': 'direct-conversation',
+                  'kind': 'direct',
+                  'accountLow': 'alice',
+                  'accountHigh': 'ai-account',
+                },
+              ],
+            });
+          }
+          if (request.uri.path.endsWith('/sync')) {
+            await request.drain<void>();
+            return f.native.reply(request, {'messages': [], 'hasMore': false});
+          }
+          return f.serve(request);
+        };
+        final shortcut = runtime.checkOwnAiChatEntry('ai-account');
+        await f.readStarted!.future.timeout(const Duration(seconds: 5));
+        ordinary = runtime.refreshConversations();
+        await refreshStarted.future.timeout(const Duration(seconds: 5));
+        f.readRelease!.complete();
+        expect(await shortcut, OwnAiChatEntry.busy);
+        expect(runtime.conversations, isEmpty);
+      } finally {
+        if (!releaseRefresh.isCompleted) releaseRefresh.complete();
+        await ordinary;
+        await f.dispose(runtime);
+      }
+    },
+  );
+
+  test('shortcut checks only visibility and consent, leaving the queue unsent', () async {
     final f = await _ConsentFixture.create();
     final runtime = await f.runtime();
     const directId = 'direct-conversation';
     final sync = <String?>[];
-    final syncStarted = Completer<void>();
-    final releaseSync = Completer<void>();
     var posts = 0;
     f.native.serve = (request) async {
       if (request.uri.path == Routes.directConversations) {
         await request.drain<void>();
         return f.native.reply(request, {
           'conversations': [
-            {'id': directId, 'kind': 'direct'},
+            {
+              'id': directId,
+              'kind': 'direct',
+              'accountLow': 'ai-account',
+              'accountHigh': 'alice',
+            },
           ],
         });
       }
       if (request.uri.path == '/api/v1/conversations/$directId/sync') {
         await request.drain<void>();
         sync.add(request.uri.queryParameters['afterSeq']);
-        if (!syncStarted.isCompleted) {
-          syncStarted.complete();
-          await releaseSync.future;
-        }
         return f.native.reply(request, {'messages': [], 'hasMore': false});
       }
       if (request.uri.path == '/api/v1/conversations/$directId/messages') {
@@ -255,23 +399,27 @@ void main() {
       await runtime.shell.enqueue(directId, MessageKind.text, {
         'text': 'queued',
       });
-      final opening = runtime.refreshForOwnAiChat();
-      await syncStarted.future.timeout(const Duration(seconds: 5));
+      f.enabled = true;
+      f.revision = 1;
+      await runtime.loadOwnAiDirectConsent('ai-account');
+      f.calls.clear();
+      expect(
+        await runtime.checkOwnAiChatEntry('ai-account'),
+        OwnAiChatEntry.ready,
+      );
       expect(runtime.conversations.single.id, directId);
-      expect(sync, ['0']);
+      expect(sync, isEmpty);
       expect(posts, 0);
       expect(runtime.queuedCount, 1);
+      expect(f.calls, [
+        'GET ${Routes.ownerAiDirectConsent.replaceFirst('{aiId}', 'profile-distinct')}',
+      ]);
 
-      // An independently requested ordinary refresh must still flush, even
-      // while the shortcut's read-only refresh is in flight.
-      final ordinary = runtime.refreshConversations();
-      releaseSync.complete();
-      expect(await opening, isTrue);
-      await ordinary;
+      await runtime.refreshConversations();
+      expect(sync, ['0']);
       expect(posts, 1);
       expect(runtime.queuedCount, 0);
     } finally {
-      if (!releaseSync.isCompleted) releaseSync.complete();
       await f.dispose(runtime);
     }
   });

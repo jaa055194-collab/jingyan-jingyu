@@ -23,6 +23,7 @@ class OwnerChatFixture extends TestShellModel {
   Object epoch = Object();
   bool enabled = true;
   bool visible = true;
+  OwnAiChatEntry? entryResult;
   Completer<void>? refreshGate;
   int refreshes = 0, writes = 0, sends = 0;
   final selections = <String>[];
@@ -50,9 +51,10 @@ class OwnerChatFixture extends TestShellModel {
       );
 
   @override
-  Future<bool> refreshForOwnAiChat() async {
+  Future<OwnAiChatEntry> checkOwnAiChatEntry(String aiAccountId) async {
     refreshes++;
     await refreshGate?.future;
+    if (entryResult case final result?) return result;
     if (visible) {
       conversations = [
         ...conversations,
@@ -60,7 +62,7 @@ class OwnerChatFixture extends TestShellModel {
       ];
     }
     notifyListeners();
-    return true;
+    return visible ? OwnAiChatEntry.ready : OwnAiChatEntry.notVisible;
   }
 
   @override
@@ -136,8 +138,36 @@ void main() {
     expect(model.refreshes, 1);
     expect(model.selections, isEmpty);
     expect(find.byKey(const Key('composer')), findsNothing);
-    expect(find.text('未能找到该私聊，请刷新授权状态后再试。'), findsOneWidget);
+    expect(find.text('此私聊在当前会话列表中不可见。'), findsOneWidget);
   });
+
+  for (final (result, notice) in [
+    (OwnAiChatEntry.consentChanged, '宿主的私聊授权已变化，未打开会话。'),
+    (OwnAiChatEntry.busy, '正在更新会话，请稍后再试。'),
+    (OwnAiChatEntry.unavailable, '暂时无法核对私聊，请检查连接或登录状态后再试。'),
+  ]) {
+    testWidgets('$result is shown without selecting a conversation', (
+      tester,
+    ) async {
+      final model = OwnerChatFixture()
+        ..entryResult = result
+        ..refreshGate = Completer<void>();
+      await openOwnerSettings(tester, model);
+      await tester.ensureVisible(find.byKey(entry));
+      await tester.tap(find.byKey(entry));
+      if (result == OwnAiChatEntry.busy) {
+        model.busy = true;
+        model.notifyListeners();
+      }
+      model.refreshGate!.complete();
+      // The busy indicator animates continuously; don't wait for it to settle.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text(notice), findsOneWidget);
+      expect(model.selections, isEmpty);
+      expect(find.byKey(const Key('composer')), findsNothing);
+    });
+  }
 
   for (final interruption in ['lock', 'logout', 'consent change']) {
     testWidgets('$interruption during refresh prevents delayed navigation', (
