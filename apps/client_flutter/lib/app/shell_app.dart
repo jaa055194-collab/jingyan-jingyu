@@ -15,14 +15,24 @@ import '../net/friends_api.dart';
 import '../features/inbox/inbox_screen.dart';
 import '../features/creative/creative_screen.dart';
 
-class WhaleChatApp extends StatelessWidget {
+class WhaleChatApp extends StatefulWidget {
   const WhaleChatApp({super.key, required this.model});
   final ShellViewModel model;
+
+  @override
+  State<WhaleChatApp> createState() => _WhaleChatAppState();
+}
+
+class _WhaleChatAppState extends State<WhaleChatApp> {
+  final _navigation = _NavigationIntentObserver();
+  ShellViewModel get model => widget.model;
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: model,
     builder: (context, _) => MaterialApp(
       title: '鲸言鲸语',
+      navigatorObservers: [_navigation],
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff16776e)),
@@ -53,14 +63,39 @@ class WhaleChatApp extends StatelessWidget {
               model: model,
               initialStep: model.authenticated ? 1 : 0,
             )
-          : _ShellHome(model: model),
+          : _ShellHome(model: model, navigation: _navigation),
     ),
   );
 }
 
+// Observes route intent without altering any push, pop, or back behavior. A
+// generation tracks transient dialogs/pages even if the source is current again.
+class _NavigationIntentObserver extends NavigatorObserver {
+  int generation = 0;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      generation++;
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      generation++;
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      generation++;
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
+      generation++;
+  @override
+  void didStartUserGesture(
+    Route<dynamic> route,
+    Route<dynamic>? previousRoute,
+  ) => generation++;
+}
+
 class _ShellHome extends StatefulWidget {
-  const _ShellHome({required this.model});
+  const _ShellHome({required this.model, required this.navigation});
   final ShellViewModel model;
+  final _NavigationIntentObserver navigation;
   @override
   State<_ShellHome> createState() => _ShellHomeState();
 }
@@ -81,6 +116,96 @@ class _ShellHomeState extends State<_ShellHome> {
     await widget.model.selectConversation(id);
     if (mounted && widget.model.selectedConversationId == id) {
       setState(() => mobileChat = true);
+    }
+  }
+
+  String? _openingOwnAiAccount;
+
+  Future<void> openOwnAiChat(BuildContext source, String accountId) async {
+    final route = ModalRoute.of(source);
+    final navigation = widget.navigation;
+    final intent = navigation.generation;
+    final model = widget.model;
+    final owner = model.connectedAccountId;
+    final session = model.ownAiSessionContext;
+    final epoch = model.ownAiDirectContext;
+    final initial = model.ownAiDirectState(accountId);
+    final id = initial.conversationId;
+    if (_openingOwnAiAccount != null ||
+        route == null ||
+        !route.isCurrent ||
+        owner == null ||
+        session == null ||
+        epoch == null ||
+        initial.phase != ShellOwnAiDirectPhase.ready ||
+        initial.enabled != true ||
+        initial.profileId?.isNotEmpty != true ||
+        initial.revision == null ||
+        id == null ||
+        id.isEmpty) {
+      return;
+    }
+
+    bool current() {
+      if (!mounted ||
+          !source.mounted ||
+          !route.isCurrent ||
+          navigation.generation != intent ||
+          !settings ||
+          !identical(widget.model, model) ||
+          !model.authenticated ||
+          model.locked ||
+          model.connectedAccountId != owner ||
+          model.ownAiSessionContext != session ||
+          !identical(model.ownAiDirectContext, epoch) ||
+          !model.ownAiAccounts.any(
+            (ai) => ai.accountId == accountId && !ai.disabled,
+          )) {
+        return false;
+      }
+      final state = model.ownAiDirectState(accountId);
+      return state.phase == ShellOwnAiDirectPhase.ready &&
+          state.enabled == true &&
+          state.profileId == initial.profileId &&
+          state.revision == initial.revision &&
+          state.conversationId == id;
+    }
+
+    if (!current() || !model.online) return;
+    setState(() => _openingOwnAiAccount = accountId);
+    try {
+      final result = await model.checkOwnAiChatEntry(accountId);
+      if (!mounted || !current() || result == OwnAiChatEntry.cancelled) return;
+      final notice = switch (result) {
+        OwnAiChatEntry.busy => '正在更新会话，请稍后再试。',
+        OwnAiChatEntry.unavailable => '暂时无法核对私聊，请检查连接或登录状态后再试。',
+        OwnAiChatEntry.notVisible => '此私聊在当前会话列表中不可见。',
+        OwnAiChatEntry.consentChanged => '宿主的私聊授权已变化，未打开会话。',
+        OwnAiChatEntry.ready || OwnAiChatEntry.cancelled => null,
+      };
+      if (notice != null) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(notice)));
+        return;
+      }
+      if (model.busy ||
+          !model.online ||
+          !model.conversations.any((c) => c.id == id && c.kind == 'direct')) {
+        return;
+      }
+      await model.selectConversation(id);
+      if (current() &&
+          !model.busy &&
+          model.online &&
+          model.selectedConversationId == id) {
+        setState(() {
+          destination = 0;
+          settings = false;
+          mobileChat = true;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _openingOwnAiAccount = null);
     }
   }
 
@@ -214,7 +339,12 @@ class _ShellHomeState extends State<_ShellHome> {
       final content = settings
           ? SettingsScreen(
               model: model,
-              onBack: () => setState(() => settings = false),
+              onBack: () => setState(() {
+                widget.navigation.generation++;
+                settings = false;
+              }),
+              onOpenOwnAiChat: openOwnAiChat,
+              checkingOwnAiAccount: _openingOwnAiAccount,
             )
           : destination == 4
           ? world()
@@ -258,7 +388,10 @@ class _ShellHomeState extends State<_ShellHome> {
             ),
             IconButton(
               tooltip: '设置',
-              onPressed: () => setState(() => settings = !settings),
+              onPressed: () => setState(() {
+                widget.navigation.generation++;
+                settings = !settings;
+              }),
               icon: const Icon(Icons.settings_outlined),
             ),
           ],
@@ -271,6 +404,7 @@ class _ShellHomeState extends State<_ShellHome> {
                   labelType: NavigationRailLabelType.all,
                   selectedIndex: destination,
                   onDestinationSelected: (value) => setState(() {
+                    widget.navigation.generation++;
                     destination = value;
                     settings = false;
                   }),
@@ -321,6 +455,7 @@ class _ShellHomeState extends State<_ShellHome> {
             : NavigationBar(
                 selectedIndex: destination,
                 onDestinationSelected: (value) => setState(() {
+                  widget.navigation.generation++;
                   destination = value;
                   mobileChat = false;
                 }),

@@ -65,6 +65,10 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> selectConversation(String id);
   Future<void> createGroup(String name);
   Future<void> refreshConversations();
+
+  /// Checks current visibility and consent for this shortcut without sending.
+  Future<OwnAiChatEntry> checkOwnAiChatEntry(String aiAccountId) async =>
+      OwnAiChatEntry.unavailable;
   Future<void> addGroupMember(String groupId, String accountId);
   bool get canAddMembersToSelectedGroup;
   void updateDraft(String value);
@@ -84,6 +88,15 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> setThemeMode(ThemeMode value);
   Future<void> setFontScale(double value);
   void clearError();
+}
+
+enum OwnAiChatEntry {
+  ready,
+  busy,
+  unavailable,
+  notVisible,
+  consentChanged,
+  cancelled,
 }
 
 enum ShellOwnAiDirectPhase { unknown, loading, ready, uncertain }
