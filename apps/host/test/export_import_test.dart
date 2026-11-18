@@ -1,9 +1,14 @@
 /// M12 导出/导入（AC-29 / A-12 / NFR-11）。
 ///
 /// 覆盖：完整导出再导入到空宿主后会话与记忆数量一致；仅人格导入不导聊天记录；
-/// 导出包不含 T2 明文与 API key 明文；SHA256SUMS 防篡改；冲突不覆盖、生成新 id。
+/// 导出包不含 T2 明文与 API key 明文；SHA256SUMS 防篡改；冲突不覆盖、生成新 id；
+/// 校验和正确但结构损坏的导入数据在任何写入前被拒绝（FR-65 / A-12）。
 library;
 
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/src/lifecycle/export.dart';
 import 'package:jingyu_host/src/lifecycle/import.dart';
 import 'package:test/test.dart';
@@ -31,10 +36,7 @@ void main() {
     source.addConversation(
       ExportConversation(
         conversationId: 'c1',
-        messages: [
-          message('m1', 'c1', 1, '你好'),
-          message('m2', 'c1', 2, '在吗'),
-        ],
+        messages: [message('m1', 'c1', 1, '你好'), message('m2', 'c1', 2, '在吗')],
       ),
     );
     source.addConversation(
@@ -45,7 +47,11 @@ void main() {
     );
     source.addMemory({'memoryId': 'mem1', 'tier': 'T0', 'text': '喜欢咖啡'});
     source.addMemory({'memoryId': 'mem2', 'tier': 'T1', 'text': '养了一只猫'});
-    source.addMemory({'memoryId': 'mem3', 'tier': 'T2', 'text': 'T2-SECRET-BODY'});
+    source.addMemory({
+      'memoryId': 'mem3',
+      'tier': 'T2',
+      'text': 'T2-SECRET-BODY',
+    });
     source.addAttachment({
       'attachmentId': 'a1',
       'name': 'cat.png',
@@ -85,10 +91,7 @@ void main() {
         expect(parts.length, 2);
         listed.add(parts[1]);
       }
-      expect(
-        listed,
-        bundle.files.keys.where((k) => k != 'SHA256SUMS').toSet(),
-      );
+      expect(listed, bundle.files.keys.where((k) => k != 'SHA256SUMS').toSet());
     });
   });
 
@@ -150,6 +153,40 @@ void main() {
       expect(await sink.hasPersona('u1'), isTrue);
       expect(sink.conversationCount('u1'), 0);
     });
+
+    test('仅人格导入不解析损坏的未使用数据', () async {
+      final bundle = (await exportService.export('u1')).value;
+      // 损坏未使用数据且让 SHA256SUMS 与内容保持一致（覆盖全包），
+      // 隔离"模式不解析"语义，避免防篡改检查先拦截。
+      final files = {...bundle.files};
+      files['conversations/c2.jsonl'] =
+          '${jsonEncode(message('m3', 'c2', 1, '晚安').toJson())}\n'
+          '{broken: MARKER-坏行';
+      final paths = files.keys.toList()..sort();
+      files[ExportService.checksumsFile] = paths
+          .where((p) => p != ExportService.checksumsFile)
+          .map((p) => '${sha256.convert(utf8.encode(files[p]!))}  $p')
+          .join('\n');
+      final corrupt = ExportBundle(
+        ownerAccountId: bundle.ownerAccountId,
+        files: files,
+      );
+      final sink = InMemoryImportSink();
+      final report = (await ImportService().import(
+        bundle: corrupt,
+        mode: ImportMode.personaOnly,
+        ownerAccountId: 'u1',
+        sink: sink,
+      )).value;
+
+      expect(report.checksumVerified, isTrue);
+      expect(report.importedPersona, 1);
+      expect(report.importedConversations, 0);
+      expect(await sink.hasPersona('u1'), isTrue);
+      expect(sink.conversationCount('u1'), 0);
+      expect(sink.memoriesFor('u1'), isEmpty);
+      expect(sink.attachmentsFor('u1'), isEmpty);
+    });
   });
 
   group('SHA256SUMS 防篡改', () {
@@ -185,6 +222,110 @@ void main() {
         sink: InMemoryImportSink(),
       );
       expect(result.isErr, isTrue);
+    });
+  });
+
+  group('A-12 拒绝校验和正确但损坏的导入数据且不写入', () {
+    // 构造"SHA256SUMS 校验通过但内容损坏"的包：改动一个文件后按导出格式
+    // 重算全部条目哈希（crypto.sha256 over UTF-8），使防篡改检查不会拦截。
+    ExportBundle corruptBundle(
+      ExportBundle bundle,
+      String path,
+      String content,
+    ) {
+      final files = {...bundle.files};
+      files[path] = content;
+      final paths = files.keys.toList()..sort();
+      files[ExportService.checksumsFile] = paths
+          .where((p) => p != ExportService.checksumsFile)
+          .map((p) => '${sha256.convert(utf8.encode(files[p]!))}  $p')
+          .join('\n');
+      return ExportBundle(ownerAccountId: bundle.ownerAccountId, files: files);
+    }
+
+    Future<void> expectRejectedWithoutWrites(
+      ExportBundle bundle, {
+      required String marker,
+    }) async {
+      final sink = InMemoryImportSink();
+      final result = await ImportService().import(
+        bundle: bundle,
+        mode: ImportMode.personaAndConversations,
+        ownerAccountId: 'u1',
+        sink: sink,
+      );
+
+      expect(result.isErr, isTrue, reason: '损坏的导入数据应被拒绝');
+      expect(result.failureOrNull!.code, FailureCode.invalidArgument);
+      expect(
+        result.failureOrNull!.message.contains(marker),
+        isFalse,
+        reason: '失败信息不得回显导入数据内容',
+      );
+      // 任何写入都不得发生：人格、会话、消息、记忆、附件全空。
+      expect(await sink.hasPersona('u1'), isFalse, reason: '人格不应被写入');
+      expect(sink.conversationCount('u1'), 0, reason: '会话不应被写入');
+      expect(sink.messageCount('u1'), 0, reason: '消息不应被写入');
+      expect(sink.memoriesFor('u1'), isEmpty, reason: '记忆不应被写入');
+      expect(sink.attachmentsFor('u1'), isEmpty, reason: '附件不应被写入');
+    }
+
+    test('会话 JSONL 语法损坏 → 拒绝且不写入', () async {
+      final bundle = (await exportService.export('u1')).value;
+      final corrupt = corruptBundle(
+        bundle,
+        'conversations/c2.jsonl',
+        '${jsonEncode(message('m3', 'c2', 1, '晚安').toJson())}\n'
+            '{broken: MARKER-坏行',
+      );
+      await expectRejectedWithoutWrites(corrupt, marker: 'MARKER-坏行');
+    });
+
+    test('会话 JSONL 字段类型损坏 → 拒绝且不写入', () async {
+      final bundle = (await exportService.export('u1')).value;
+      final badLine = message('m3', 'c2', 1, '晚安MARKER-类型').toJson();
+      badLine['seq'] = '1'; // seq 应为整数
+      final corrupt = corruptBundle(
+        bundle,
+        'conversations/c2.jsonl',
+        jsonEncode(badLine),
+      );
+      await expectRejectedWithoutWrites(corrupt, marker: 'MARKER-类型');
+    });
+
+    test('记忆条目类型损坏 → 拒绝且不写入', () async {
+      final bundle = (await exportService.export('u1')).value;
+      final corrupt = corruptBundle(
+        bundle,
+        ExportService.memoriesFile,
+        jsonEncode({
+          'memories': [
+            {'memoryId': 'mem1', 'tier': 'T0', 'text': '喜欢咖啡'},
+            {
+              'memoryId': 'memX',
+              'tier': <String>['T0'],
+              'text': 'MARKER-记忆',
+            },
+          ],
+          'excludedT2Count': 0,
+        }),
+      );
+      await expectRejectedWithoutWrites(corrupt, marker: 'MARKER-记忆');
+    });
+
+    test('附件索引条目类型损坏 → 拒绝且不写入', () async {
+      final bundle = (await exportService.export('u1')).value;
+      final corrupt = corruptBundle(
+        bundle,
+        ExportService.attachmentsFile,
+        jsonEncode({
+          'attachments': [
+            {'attachmentId': 'a1', 'name': 'cat.png', 'sha256': 'deadbeef'},
+            'MARKER-附件',
+          ],
+        }),
+      );
+      await expectRejectedWithoutWrites(corrupt, marker: 'MARKER-附件');
     });
   });
 
