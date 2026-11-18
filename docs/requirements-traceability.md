@@ -182,6 +182,6 @@
 | REQ-M15-07 | #117 / task-73；live 测试辅助 | 共享环境门控、迁移与配置；没有 live 配置时跳过；离线覆盖人格装配 | #117 已合并 `f95547d` | `provider_trusted_chain_test` 5/5；live probe 与 worker E2E 两项跳过 | 离线验证通过；实时调用本次未验证 |
 | REQ-M15-08 | #122 / task-98；诊断面板说明 | 解释探针状态及能力边界，不把探针状态当作模型可用 | #122 已合并 `0c23edd` | `module_test_panel_test` 7/7 | 单测及 widget 验证通过；真机性能与真实宿主联调未验 |
 
-历史真实 `auto` 回复与 SQLite 回存证据见 [验收 §G.1](acceptance.md#g1-复跑方式与结果)：#102 的 `63f4c2e` 本地进程内集成测试显式启用 gzip，非本次复跑。M15 复跑基线 `0c23edd` 的模型子进程未显式启用 gzip；#126 仅为 `ModelRuntime.withProcess` 的模型调用显式启用 gzip，其他调用方默认行为不变。打包 worker 成功出站与宿主默认启动端到端仍未验证。
+历史真实 `auto` 回复与 SQLite 回存证据见 [验收 §G.1](acceptance.md#g1-复跑方式与结果)：#102 的 `63f4c2e` 本地进程内集成测试显式启用 gzip，非本次复跑。M15 复跑基线 `0c23edd` 的模型子进程未显式启用 gzip；#126 仅为 `ModelRuntime.withProcess` 的模型调用显式启用 gzip，其他调用方默认行为不变。基线 `8e77c9d` 加本次测试及子进程环境隔离改动，后续实测经仓库 HTTP worker 得到真实 `auto` 回复、SQLite 重开读回及一致的用量结算，详见同节。默认宿主启动后的用户会话端到端仍未验证。
 
 M14 附件列表后续复核见 [验收 §F.3](acceptance.md#f3-汇总与限制)：宿主 #107 已合并且路由测试 4/4 通过，保留上表的历史基线记录。

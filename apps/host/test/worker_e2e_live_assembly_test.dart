@@ -6,9 +6,11 @@
 //   + BudgetConfiguration + PersonaService
 //   -> OwnerAiDirectIncoming (one inbound owner text)
 //   -> OwnerAiDirectReplyObserver (trusted worker, maxTokens 256)
-//   -> StatelessOwnerChat -> ModelRuntime -> ModelGateway -> UrlGuard
-//   -> OpenAiCompatibleChatAdapter -> real HTTPS provider
+//   -> StatelessOwnerChat -> ModelRuntime.withProcess -> ModelGateway
+//   -> packaged HTTP worker -> guarded HTTPS provider
 //   -> canonical assistant message persisted + owner read-back + budget used.
+// This test assembles the production transport factory and worker, but does
+// not boot the default host executable or exercise its network listeners.
 //
 // Runs only when JINGYU_LIVE_BASE_URL + JINGYU_LIVE_API_KEY are set
 // (JINGYU_LIVE_MODEL defaults to "auto"); otherwise the group SKIPS honestly.
@@ -24,10 +26,8 @@ import 'package:jingyu_host/src/brain/owner_reply_attempts.dart';
 import 'package:jingyu_host/src/messages/sqlite_message_store.dart';
 import 'package:jingyu_host/src/models/binding_matrix.dart';
 import 'package:jingyu_host/src/models/model_runtime.dart';
-import 'package:jingyu_host/src/models/openai_chat_adapter.dart';
 import 'package:jingyu_host/src/models/stateless_owner_chat.dart';
 import 'package:jingyu_host/src/models/usage_meter.dart';
-import 'package:jingyu_host/src/security/guarded_http.dart';
 import 'package:jingyu_host/src/security/url_guard.dart';
 import 'package:jingyu_host/src/social/owner_ai_direct_consent.dart';
 import 'package:jingyu_host/src/storage/cipher.dart';
@@ -89,17 +89,13 @@ void main() {
         );
         incoming = OwnerAiDirectIncoming(database: db, messages: messages);
         consent = OwnerAiDirectConsent(database: db, clock: clock);
-        final runtime = ModelRuntime(
+        final runtime = ModelRuntime.withProcess(
           db: db,
           cipher: cipher,
           clock: clock,
           urlGuard: guard,
-          // Same guarded transport the production worker runs. autoUncompress
-          // is opted in for live providers that always gzip (PR#93 diagnosis);
-          // the inflated body stays bounded by maxResponseBytes.
-          adapter: OpenAiCompatibleChatAdapter(
-            GuardedHttpTransport(autoUncompress: true),
-          ),
+          executable: Platform.resolvedExecutable,
+          workerPath: File('bin/http_worker.dart').absolute.path,
         );
         observer = OwnerAiDirectReplyObserver(
           database: db,

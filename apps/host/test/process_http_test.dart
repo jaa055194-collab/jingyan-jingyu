@@ -43,12 +43,18 @@ void main() {
   test(
     'credentials use only stdin and response preserves request contract',
     () async {
+      // If an opted-in live probe supplies a key in the parent environment,
+      // that variable must not cross the process boundary. PATH is normally
+      // present in test runners and independently detects ambient inheritance.
       final path = await script(r'''
 import 'dart:convert';
 import 'dart:io';
 Future<void> main(List<String> args) async {
   final request = jsonDecode(await stdin.transform(utf8.decoder).transform(const LineSplitter()).first) as Map;
   final safe = args.isEmpty && !Platform.executableArguments.join().contains('secret-token') &&
+    !Platform.environment.containsKey('JINGYU_WORKER_TEST_SENTINEL') &&
+    !Platform.environment.containsKey('JINGYU_LIVE_API_KEY') &&
+    !Platform.environment.keys.any((key) => key.toUpperCase() == 'PATH') &&
     !Platform.environment.values.any((v) => v.contains('secret-token')) &&
     request.keys.toSet().difference({'method','url','headers','body','timeout','maxResponseBytes'}).isEmpty &&
     request['method'] == 'POST' && request['headers']['Authorization'] == 'Bearer secret-token' &&
