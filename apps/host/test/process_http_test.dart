@@ -24,11 +24,13 @@ void main() {
     String path, {
     Duration timeout = const Duration(seconds: 15),
     int maxResponseBytes = 1024,
+    bool autoUncompress = false,
   }) => ProcessHttpTransport(
     executable: Platform.resolvedExecutable,
     workerPath: path,
     timeout: timeout,
     maxResponseBytes: maxResponseBytes,
+    autoUncompress: autoUncompress,
   );
 
   void safeFailure(Result<GuardedResponse> result) {
@@ -157,6 +159,45 @@ Future<void> main() async {
     },
   );
 
+  test('packaged worker accepts only the single fixed gzip flag', () async {
+    final worker = File('bin/http_worker.dart').absolute.path;
+    for (final (arguments, expected) in [
+      (<String>[], 'forbidden'),
+      (['--decode-gzip'], 'forbidden'),
+      (['--unknown'], 'unavailable'),
+      (['--decode-gzip', '--decode-gzip'], 'unavailable'),
+      (['--decode-gzip', '--unknown'], 'unavailable'),
+    ]) {
+      final child = await Process.start(Platform.resolvedExecutable, [
+        worker,
+        ...arguments,
+      ]);
+      try {
+        final stdout = utf8.decoder.bind(child.stdout).join();
+        final stderr = utf8.decoder.bind(child.stderr).join();
+        child.stdin.writeln(
+          jsonEncode({
+            'method': 'GET',
+            'url': 'http://127.0.0.1',
+            'headers': {},
+            'body': null,
+            'timeout': 1000000,
+            'maxResponseBytes': 1024,
+          }),
+        );
+        await child.stdin.close();
+        expect(await child.exitCode.timeout(const Duration(seconds: 15)), 0);
+        expect(await stderr, isEmpty);
+        expect(jsonDecode(await stdout), {
+          'ok': false,
+          'code': expected,
+        }, reason: 'argv: $arguments');
+      } finally {
+        child.kill();
+      }
+    }
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
   test('production worker rejects localhost with no local bypass', () async {
     final client = transport(File('bin/http_worker.dart').absolute.path);
     for (final url in [
@@ -204,7 +245,11 @@ Future<void> main() async {
   await SecureSocket.secure(socket, host: 'api.example');
 }
 ''');
-      final client = transport(path, timeout: const Duration(seconds: 6));
+      final client = transport(
+        path,
+        timeout: const Duration(seconds: 6),
+        autoUncompress: true,
+      );
       for (var i = 0; i < 3; i++) {
         final resultFuture = client.request(
           'GET',

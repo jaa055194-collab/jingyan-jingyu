@@ -19,6 +19,7 @@ final class ProcessHttpTransport {
     required this.workerPath,
     this.timeout = const Duration(seconds: 15),
     this.maxResponseBytes = 4 * 1024 * 1024,
+    this.autoUncompress = false,
   }) {
     if (!File(executable).isAbsolute || !File(workerPath).isAbsolute) {
       throw ArgumentError('出站进程启动路径必须是受信绝对路径');
@@ -32,6 +33,9 @@ final class ProcessHttpTransport {
   final String workerPath;
   final Duration timeout;
   final int maxResponseBytes;
+
+  /// Trusted startup option; the request envelope cannot enable decoding.
+  final bool autoUncompress;
 
   static const _maxChildren = 4;
   static const _maxIpcBytes = 8 * 1024 * 1024;
@@ -73,7 +77,10 @@ final class ProcessHttpTransport {
       if (input.length > _maxIpcBytes) {
         return err(FailureCode.unavailable, '请求超过进程通信限额');
       }
-      child = await Process.start(executable, [workerPath]);
+      child = await Process.start(executable, [
+        workerPath,
+        if (autoUncompress) '--decode-gzip',
+      ]);
       final process = child;
       final exit = process.exitCode.then((code) {
         exited = true;

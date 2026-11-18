@@ -7,9 +7,12 @@ import 'dart:io';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/src/security/guarded_http.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   var response = <String, Object?>{'ok': false, 'code': 'unavailable'};
   try {
+    // Trusted launch option only; never accept this in request input.
+    final decodeGzip = args.length == 1 && args.single == '--decode-gzip';
+    if (args.isNotEmpty && !decodeGzip) throw const FormatException();
     const maxInput = 8 * 1024 * 1024;
     final bytes = <int>[];
     await for (final chunk in stdin) {
@@ -52,6 +55,7 @@ Future<void> main() async {
     final transport = GuardedHttpTransport(
       timeout: Duration(microseconds: input['timeout'] as int),
       maxResponseBytes: input['maxResponseBytes'] as int,
+      autoUncompress: decodeGzip,
     );
     final result = await transport.request(
       input['method'] as String,

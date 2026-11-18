@@ -313,6 +313,23 @@ void main() {
     },
   );
 
+  test('gzip opt-in enforces wire limit even if decoded body fits', () async {
+    final wire = gzip.encode([65]);
+    final limit = wire.length - 1;
+    handler = (request) async {
+      request.response.headers.set('content-encoding', 'gzip');
+      request.response.add(wire);
+      await request.response.close();
+    };
+    final result = await GuardedHttpTransport(
+      resolver: (_) async => [InternetAddress('93.184.216.34')],
+      connector: connector,
+      maxResponseBytes: limit,
+      autoUncompress: true,
+    ).request('GET', Uri.parse('http://api.example'));
+    expectSafeFailure(result, FailureCode.unavailable);
+  });
+
   test(
     'gzip bomb cannot expand past maxResponseBytes with autoUncompress',
     () async {

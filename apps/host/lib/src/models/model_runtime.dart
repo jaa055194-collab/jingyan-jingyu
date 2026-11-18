@@ -49,6 +49,7 @@ final class ModelRuntime {
         workerPath: workerPath,
         timeout: timeout,
         maxResponseBytes: maxResponseBytes,
+        autoUncompress: true,
       ).request,
     ),
   );

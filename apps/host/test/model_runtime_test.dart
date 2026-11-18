@@ -280,6 +280,76 @@ void main() {
     },
   );
 
+  for (final compressed in [false, true]) {
+    test(
+      'process chat reads a ${compressed ? 'gzip' : 'plain'} fixture response',
+      () async {
+        await configure(480);
+        final worker = File('${dir.path}/response_fixture.dart');
+        final plain = utf8.encode(
+          jsonEncode({
+            'choices': [
+              {
+                'message': {'role': 'assistant', 'content': 'fixture reply'},
+              },
+            ],
+            'usage': {
+              'prompt_tokens': 3,
+              'completion_tokens': 2,
+              'total_tokens': 5,
+            },
+          }),
+        );
+        final wire = compressed ? gzip.encode(plain) : plain;
+        // This child does no networking. It supplies the same raw bytes the
+        // packaged worker would return absent opt-in, or the decoded bytes the
+        // opt-in worker contract promises. The parent uses real process IPC.
+        await worker.writeAsString('''
+import 'dart:convert';
+import 'dart:io';
+Future<void> main(List<String> args) async {
+  final request = jsonDecode(await utf8.decoder.bind(stdin).join()) as Map;
+  final payload = jsonDecode(utf8.decode(base64Decode(request['body'] as String))) as Map;
+  if (request.length != 6 || request['method'] != 'POST' ||
+      Uri.parse(request['url'] as String).path != '/v1/chat/completions' ||
+      request['headers']['authorization'] != 'Bearer runtime-test-key' ||
+      payload['max_tokens'] != 256 || payload['model'] != 'chat-model' ||
+      Platform.executableArguments.any((arg) => arg.contains('runtime-test-key'))) {
+    exitCode = 1;
+    return;
+  }
+  final wire = base64Decode('${base64Encode(wire)}');
+  final decode = $compressed && args.length == 1 && args.single == '--decode-gzip';
+  final bytes = decode ? gzip.decode(wire) : wire;
+  stdout.writeln(jsonEncode({
+    'ok':true, 'statusCode':200,
+    'headers': ${compressed ? "{'content-encoding':['gzip']}" : '{}'},
+    'body':base64Encode(bytes),
+  }));
+}
+''');
+        final result = await chat(
+          'process-fixture',
+          service: ModelRuntime.withProcess(
+            db: db,
+            cipher: cipher,
+            urlGuard: guard,
+            clock: clock,
+            executable: Platform.resolvedExecutable,
+            workerPath: worker.path,
+          ),
+          maxTokens: 256,
+        );
+        expect(result.isOk, isTrue, reason: result.failureOrNull?.code.name);
+        expect(result.value.text, 'fixture reply');
+        expect(result.value.totalTokens, 5);
+        final usage = (await db.query('SELECT * FROM usage_ledger')).single;
+        expect(usage['source_usage_unknown'], 0);
+        expect(usage['total_tokens'], '5');
+      },
+    );
+  }
+
   test(
     'process factory blocks localhost before worker spawn or outbound request',
     () async {
