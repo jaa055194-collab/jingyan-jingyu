@@ -1,24 +1,36 @@
 package com.jingyu.client_flutter
 
 import android.Manifest
+import android.app.Activity
 import android.app.KeyguardManager
 import android.hardware.biometrics.BiometricPrompt
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.CancellationSignal
+import android.os.Handler
+import android.os.Looper
 import android.net.Uri
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
+import java.io.IOException
 
 class MainActivity : FlutterActivity() {
+    private companion object {
+        const val PICK_LIVE2D_ZIP_REQUEST = 1401
+    }
+
     private lateinit var channel: MethodChannel
     private lateinit var pinStore: PinStore
     private var pendingShare: Map<String, Any?>? = null
     private var authenticated = false
     private var biometricResult: MethodChannel.Result? = null
     private var biometricCancellation: CancellationSignal? = null
+    private var live2dZipResult: MethodChannel.Result? = null
+    private var live2dZipWorker: Thread? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -41,6 +53,8 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "getDataDirectory" -> result.success(filesDir.absolutePath)
+                    "getLive2DPreviewDirectory" -> result.success(Live2DZipCache.previewDirectory(cacheDir).absolutePath)
+                    "pickLive2DZip" -> pickLive2DZip(result)
                     "storeSession" -> {
                         pinStore.storeSession(call.argument<String>("json") ?: error("Session JSON required"))
                         result.success(null)
@@ -142,8 +156,93 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        val pendingZip = live2dZipResult
+        live2dZipResult = null
+        live2dZipWorker?.interrupt()
+        live2dZipWorker = null
+        pendingZip?.success(null)
         cancelBiometric()
         super.onDestroy()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun pickLive2DZip(result: MethodChannel.Result) {
+        if (live2dZipResult != null) {
+            result.error("live2d_zip_busy", "A ZIP selection is already in progress", null)
+            return
+        }
+        live2dZipResult = result
+        try {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/*"
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/zip", "application/x-zip-compressed"))
+            }, PICK_LIVE2D_ZIP_REQUEST)
+        } catch (_: Exception) {
+            live2dZipResult = null
+            live2dZipPickFailed(result)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != PICK_LIVE2D_ZIP_REQUEST) return
+        val pending = live2dZipResult ?: return
+        if (live2dZipWorker != null) return
+        if (resultCode != Activity.RESULT_OK) {
+            live2dZipResult = null
+            pending.success(null)
+            return
+        }
+        try {
+            val uri = data?.data
+            if (uri == null || uri.scheme != "content") {
+                live2dZipResult = null
+                live2dZipPickFailed(pending)
+                return
+            }
+            val resolver = applicationContext.contentResolver
+            val directory = cacheDir
+            live2dZipWorker = Thread({
+                var file: File? = null
+                var tooLarge = false
+                try {
+                    file = Live2DZipCache.copy(directory) {
+                        resolver.openInputStream(uri) ?: throw IOException()
+                    }
+                } catch (_: Live2DZipTooLargeException) {
+                    tooLarge = true
+                } catch (_: Exception) {
+                    // The provider's exception can contain a URI or path; never forward it.
+                }
+                if (!mainHandler.post { completeLive2DZipPick(pending, file, tooLarge) }) {
+                    file?.delete()
+                }
+            }, "jingyu-live2d-zip").also { it.start() }
+        } catch (_: Exception) {
+            live2dZipResult = null
+            live2dZipPickFailed(pending)
+        }
+    }
+
+    private fun completeLive2DZipPick(pending: MethodChannel.Result, file: File?, tooLarge: Boolean) {
+        if (live2dZipResult !== pending) {
+            // onDestroy already cancelled the call; ownership never passed to Dart.
+            file?.delete()
+            return
+        }
+        live2dZipResult = null
+        live2dZipWorker = null
+        when {
+            file != null -> pending.success(mapOf("path" to file.absolutePath, "temporary" to true))
+            tooLarge -> pending.error("live2d_zip_too_large", "ZIP exceeds the 160 MiB limit", null)
+            else -> live2dZipPickFailed(pending)
+        }
+    }
+
+    private fun live2dZipPickFailed(result: MethodChannel.Result) {
+        result.error("live2d_zip_pick_failed", "Could not open the selected ZIP", null)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {

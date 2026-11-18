@@ -2,6 +2,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
 import '../diagnostics/module_test_panel.dart';
+import 'live2d_import_panel.dart';
+import 'live2d_local_import.dart';
 
 /// Independent 3D world / avatar module surface (FR-12: not embedded in chat).
 ///
@@ -15,9 +17,11 @@ class WorldScreen extends StatelessWidget {
     super.key,
     required this.model,
     required this.onOpenSetup,
+    this.openLive2D,
   });
   final ShellViewModel model;
   final VoidCallback onOpenSetup;
+  final Future<Live2DImportSession?> Function()? openLive2D;
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +46,18 @@ class WorldScreen extends StatelessWidget {
           ),
         const Divider(height: 32),
         Text('形象模型（各端本地）', style: Theme.of(context).textTheme.titleMedium),
-        const Text('以各终端本地上传的模型为准：手机端与电脑端可以使用不同模型；上传即用，不校验授权（个人使用）。'),
+        const Text('手机与电脑可以各自选择不同模型。'),
+        const SizedBox(height: 8),
+        Live2DImportPanel(
+          key: ValueKey((
+            'live2d', model, model.connectedAccountId,
+            model.ownAiSessionContext, model.appLockEnabled,
+          )),
+          enabled: model.authenticated && !model.busy && !model.appLockEnabled,
+          open: openLive2D ?? openLocalLive2DZip,
+        ),
+        if (model.appLockEnabled)
+          const Text('应用锁已开启，暂不支持切换到系统文件选择器。'),
         const Divider(height: 32),
         Text('3D 渲染', style: Theme.of(context).textTheme.titleMedium),
         const Card(

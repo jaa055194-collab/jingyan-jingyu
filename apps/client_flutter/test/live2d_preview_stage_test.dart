@@ -1,7 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:client_flutter/features/world/live2d_import_panel.dart';
+import 'package:client_flutter/features/world/live2d_local_import.dart';
 import 'package:client_flutter/features/world/live2d_preview_stage.dart';
+import 'package:client_flutter/platform/native_platform.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 
@@ -33,6 +37,65 @@ void main() {
     parent = await Directory.systemTemp.createTemp('jingyu preview #%-');
     addTearDown(() => parent.delete(recursive: true));
     bundle = prepareLive2DPreview(base64Decode(_previewZip));
+  });
+
+  test(
+    'prepares a selected ZIP in the isolate and preserves the source',
+    () async {
+      final source = File.fromUri(parent.uri.resolve('selected.zip'));
+      await source.writeAsBytes(base64Decode(_previewZip));
+      final session = await openLocalLive2DZip(
+        platform: _Picker(parent.path, {
+          'path': source.path,
+          'temporary': false,
+        }),
+      );
+      expect(session, isNotNull);
+      expect(await parent.list().where((item) => item is Directory).length, 1);
+      await session!.close();
+      expect(await parent.list().where((item) => item is Directory).length, 0);
+      expect(await source.exists(), isTrue);
+    },
+  );
+
+  test(
+    'a pending picker blocks overlapping imports and releases its guard',
+    () async {
+      final pending = Completer<Map<Object?, Object?>?>();
+      final picker = _PendingPicker(parent.path, pending.future);
+      final first = openLocalLive2DZip(platform: picker);
+      try {
+        await expectLater(
+          openLocalLive2DZip(platform: picker),
+          throwsA(isA<Live2DImportFailure>()),
+        );
+      } finally {
+        pending.complete(null);
+      }
+      expect(await first, isNull);
+      expect(await openLocalLive2DZip(platform: picker), isNull);
+    },
+  );
+
+  test('invalid temporary ZIP is deleted and exposes no path', () async {
+    final source = File.fromUri(parent.uri.resolve('live2d-zip-test.zip'));
+    await source.writeAsBytes([1, 2, 3]);
+    await expectLater(
+      openLocalLive2DZip(
+        platform: _Picker(parent.path, {
+          'path': source.path,
+          'temporary': true,
+        }),
+      ),
+      throwsA(
+        isA<Live2DImportFailure>().having(
+          (error) => error.message,
+          'message',
+          isNot(contains(source.path)),
+        ),
+      ),
+    );
+    expect(await parent.list().toList(), isEmpty);
   });
 
   test('stages only the fixed-name preview files and reopens them', () async {
@@ -117,22 +180,25 @@ void main() {
     expect(await parent.list().toList(), isEmpty);
   });
 
-  test('preserves both errors when rollback fails and can retry cleanup', () async {
-    final staging = IOOverrides.runWithIOOverrides(
-      () => stageLive2DPreview(_CleanupFaultDirectory(parent), bundle),
-      _BlockMocWrite(),
-    );
-    try {
-      await staging;
-      fail('Expected staging to fail');
-    } on Live2DPreviewCleanupFailure catch (failure) {
-      expect(failure.writeError, isA<FileSystemException>());
-      expect(failure.cleanupError, isA<FileSystemException>());
-      expect(await parent.list().toList(), hasLength(1));
-      await failure.retryCleanup();
-      expect(await parent.list().toList(), isEmpty);
-    }
-  });
+  test(
+    'preserves both errors when rollback fails and can retry cleanup',
+    () async {
+      final staging = IOOverrides.runWithIOOverrides(
+        () => stageLive2DPreview(_CleanupFaultDirectory(parent), bundle),
+        _BlockMocWrite(),
+      );
+      try {
+        await staging;
+        fail('Expected staging to fail');
+      } on Live2DPreviewCleanupFailure catch (failure) {
+        expect(failure.writeError, isA<FileSystemException>());
+        expect(failure.cleanupError, isA<FileSystemException>());
+        expect(await parent.list().toList(), hasLength(1));
+        await failure.retryCleanup();
+        expect(await parent.list().toList(), isEmpty);
+      }
+    },
+  );
 
   test('does not create a missing trusted parent', () async {
     final missing = Directory.fromUri(parent.uri.resolve('missing/'));
@@ -171,6 +237,38 @@ final class _CleanupFaultDirectory implements Directory {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _Picker extends NativePlatform {
+  _Picker(this.directory, this.selection);
+
+  final String directory;
+  final Map<Object?, Object?> selection;
+
+  @override
+  Future<T?> invoke<T>(String method, [Map<String, Object?>? arguments]) async {
+    return switch (method) {
+      'getLive2DPreviewDirectory' => directory as T,
+      'pickLive2DZip' => selection as T,
+      _ => throw StateError('Unexpected platform operation'),
+    };
+  }
+}
+
+final class _PendingPicker extends NativePlatform {
+  _PendingPicker(this.directory, this.selection);
+
+  final String directory;
+  final Future<Map<Object?, Object?>?> selection;
+
+  @override
+  Future<T?> invoke<T>(String method, [Map<String, Object?>? arguments]) async {
+    return switch (method) {
+      'getLive2DPreviewDirectory' => directory as T,
+      'pickLive2DZip' => (await selection) as T?,
+      _ => throw StateError('Unexpected platform operation'),
+    };
+  }
 }
 
 final class _BlockMocWrite extends IOOverrides {
