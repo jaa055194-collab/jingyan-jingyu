@@ -1,0 +1,59 @@
+import 'package:client_flutter/app/shell_view_model.dart';
+import 'package:material_ui/material_ui.dart';
+
+import 'ui_test.dart' show TestShellModel;
+
+const entry = Key('own-ai-direct-chat-ai-owner');
+const directId = 'canonical-direct';
+
+/// Synthetic Settings state using only APIs present on the Before revision.
+class OwnerChatFixture extends TestShellModel {
+  OwnerChatFixture() {
+    connectedAccountId = 'fixture-owner';
+    online = true;
+    themeMode = ThemeMode.light;
+    conversations = const [
+      ShellConversation(id: 'other', title: '私聊', kind: 'direct'),
+    ];
+  }
+
+  final Object _epoch = Object();
+  final selections = <String>[];
+  int writes = 0, sends = 0;
+
+  @override
+  bool get ownAiLoaded => true;
+  @override
+  List<ShellOwnedAi> get ownAiAccounts => const [
+    ShellOwnedAi(accountId: 'ai-owner', displayName: 'Fixture Nora', disabled: false),
+  ];
+  @override
+  Object? get ownAiDirectContext => authenticated && !locked ? _epoch : null;
+  @override
+  ShellOwnAiDirectState ownAiDirectState(String account) =>
+      const ShellOwnAiDirectState(
+        phase: ShellOwnAiDirectPhase.ready,
+        profileId: 'profile-owner',
+        revision: 1,
+        enabled: true,
+        conversationId: directId,
+      );
+
+  @override
+  Future<void> selectConversation(String id) async {
+    selections.add(id);
+    await super.selectConversation(id);
+  }
+
+  @override
+  Future<void> setOwnAiDirectConsent(
+    String account, {
+    required String profileId,
+    required int expectedRevision,
+    required bool enabled,
+    required Object interactionContext,
+  }) async => writes++;
+
+  @override
+  Future<void> sendMessage() async => sends++;
+}

@@ -10,7 +10,7 @@ The PNGs are unedited renders of the production `WhaleChatApp` widget tree, not 
 
 ## Reproduce
 
-1. Use isolated worktrees at the listed revisions. From this evidence revision, copy [the driver](owner-chat-capture.dart.txt) into each app's `test/owner_chat_capture_test.dart`. For Before only, also copy the [fixture test](../test/owner_chat_entry_test.dart) from `4770984` into the same `test/` directory; the capture imports its synthetic model, not its test entry point. After already has that fixture. Do not run the full test suite with the temporary driver in place.
+1. Use isolated worktrees at the listed revisions. From this evidence revision, copy [the driver](owner-chat-capture.dart.txt) into each app's `test/owner_chat_capture_test.dart`. In the Before worktree only, copy [the baseline fixture template](owner-chat-before-fixture.dart.txt) to `test/owner_chat_entry_test.dart`, the import path expected by the driver. This fixture uses only APIs available at `32ac64f`; do not copy the newer regression test into Before. For After use the [fixture already tracked at `4770984`](../test/owner_chat_entry_test.dart) without replacement. Run only the capture test in these worktrees.
 2. Resolve both apps with the same Flutter SDK and lockfile (`flutter pub get --offline`). Use Windows `simhei.ttf` and the Flutter SDK's `bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf`.
 3. In each isolated `apps/client_flutter` directory run the following, setting `$out` to an absolute PNG path prefix, `$after` to the literal `false` for Before or `true` for After, `$cjkFont` to the Windows font path and `$iconFont` to the SDK font path:
 
