@@ -21,17 +21,17 @@ ArchiveFile _textFile(String name, String text) =>
     _bytesFile(name, utf8.encode(text));
 
 List<int> _pngHeader(int width, int height) {
-  final b = BytesBuilder();
-  b.add(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-  final data = ByteData(13 + 4);
-  data.setUint32(0, 13, Endian.big); // IHDR length
-  b.add(data.buffer.asUint8List(0, 4));
-  b.add(ascii.encode('IHDR'));
-  data.setUint32(0, width, Endian.big);
-  data.setUint32(4, height, Endian.big);
-  b.add(data.buffer.asUint8List(0, 8));
-  b.add(const [8, 6, 0, 0, 0]); // bit depth, color type, ...
-  return b.toBytes();
+  // Only the signature and complete IHDR chunk: these tests do not decode PNGs.
+  final bytes = Uint8List(33);
+  final data = ByteData.sublistView(bytes);
+  bytes.setAll(0, const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+  data.setUint32(8, 13);
+  bytes.setAll(12, ascii.encode('IHDR'));
+  data.setUint32(16, width);
+  data.setUint32(20, height);
+  bytes.setAll(24, const [8, 6, 0, 0, 0]); // bit depth, color type, ...
+  data.setUint32(29, getCrc32(bytes.sublist(12, 29)));
+  return bytes;
 }
 
 List<int> _moc3([int version = 5]) {
@@ -92,7 +92,9 @@ void main() {
         moc: '大肥鱼.moc3',
         textures: ['tex0.png'],
         extra: {
-          'Physics': 'physics3.json',
+          'Physics': 'avatar.physics3.json',
+          'Pose': 'avatar.pose3.json',
+          'DisplayInfo': 'avatar.cdi3.json',
           'Expressions': [
             {'Name': 'happy', 'File': 'exp/happy.exp3.json'},
           ],
@@ -103,14 +105,18 @@ void main() {
           },
         },
       );
-      final r = validateLive2DPackage(_zip([
-        _textFile('模型/大肥鱼.model3.json', text),
-        _bytesFile('模型/大肥鱼.moc3', _moc3()),
-        _bytesFile('模型/tex0.png', _pngHeader(1024, 1024)),
-        _textFile('模型/physics3.json', '{}'),
-        _textFile('模型/exp/happy.exp3.json', '{}'),
-        _textFile('模型/motion/idle.motion3.json', '{}'),
-      ]));
+      final r = validateLive2DPackage(
+        _zip([
+          _textFile('模型/大肥鱼.model3.json', text),
+          _bytesFile('模型/大肥鱼.moc3', _moc3()),
+          _bytesFile('模型/tex0.png', _pngHeader(1024, 1024)),
+          _textFile('模型/avatar.physics3.json', '{}'),
+          _textFile('模型/avatar.pose3.json', '{}'),
+          _textFile('模型/avatar.cdi3.json', '{}'),
+          _textFile('模型/exp/happy.exp3.json', '{}'),
+          _textFile('模型/motion/idle.motion3.json', '{}'),
+        ]),
+      );
       expect(r.ok, isTrue, reason: r.issues.join(', '));
       expect(r.model3Path, '模型/大肥鱼.model3.json');
     });
@@ -190,6 +196,33 @@ void main() {
       expect(_has(two, Live2DPackageIssueCode.multipleModel3), isTrue);
     });
 
+    test('rejects a valid ZIP entry when manifest bytes exceed its cap', () {
+      final r = validateLive2DPackage(
+        _zip(_validEntries()),
+        limits: const Live2DPackageLimits(maxModel3Bytes: 32),
+      );
+      expect(r.ok, isFalse);
+      expect(r.issues.single.code, Live2DPackageIssueCode.model3TooLarge);
+    });
+
+    test('rejects an ordinary PNG with a corrupted ZIP checksum', () {
+      final archive = Archive()
+        ..addFile(_textFile('model/avatar.model3.json', _model3()))
+        ..addFile(_bytesFile('model/avatar.moc3', _moc3()))
+        ..addFile(ArchiveFile.noCompress(
+          'model/tex0.png', 34, Uint8List.fromList([..._pngHeader(64, 64), 42]),
+        ));
+      final bytes = Uint8List.fromList(ZipEncoder().encode(archive, level: 0)!);
+      final marker = _pngHeader(64, 64);
+      final start = Iterable<int>.generate(bytes.length - marker.length)
+          .firstWhere((i) => List.generate(marker.length, (j) => bytes[i + j])
+              .toString() == marker.toString());
+      bytes[start + marker.length] ^= 1; // Ordinary data corruption, outside IHDR.
+      final result = validateLive2DPackage(bytes);
+      expect(result.ok, isFalse);
+      expect(result.issues.single.code, Live2DPackageIssueCode.notZip);
+    });
+
     test('rejects invalid JSON and excessive nesting', () {
       final bad = validateLive2DPackage(_zip(
         _validEntries(model3Text: '{not json'),
@@ -224,6 +257,62 @@ void main() {
       expect(_has(noTex, Live2DPackageIssueCode.missingTextures), isTrue);
     });
 
+    for (final reference in ['./tex0.png', r'textures\tex0.png']) {
+      test('requires a canonical texture reference: $reference', () {
+        final r = validateLive2DPackage(
+          _zip([
+            ..._validEntries(model3Text: _model3(textures: [reference])),
+            _bytesFile('model/textures/tex0.png', _pngHeader(64, 64)),
+          ]),
+        );
+        expect(r.ok, isFalse);
+        expect(r.issues.single.code, Live2DPackageIssueCode.unsafeEntryPath);
+        expect(r.issues.single.path, reference);
+      });
+    }
+
+    final wrongTypes = <String, String Function(String)>{
+      'Moc': (path) => _model3(moc: path),
+      'Texture': (path) => _model3(textures: [path]),
+      'Physics': (path) => _model3(extra: {'Physics': path}),
+      'Pose': (path) => _model3(extra: {'Pose': path}),
+      'DisplayInfo': (path) => _model3(extra: {'DisplayInfo': path}),
+      'Expression': (path) => _model3(
+        extra: {
+          'Expressions': [
+            {'Name': 'Smile', 'File': path},
+          ],
+        },
+      ),
+      'Motion': (path) => _model3(
+        extra: {
+          'Motions': {
+            'Idle': [
+              {'File': path},
+            ],
+          },
+        },
+      ),
+    };
+    for (final MapEntry(key: role, value: manifest) in wrongTypes.entries) {
+      test('requires the expected file suffix for $role', () {
+        const reference = 'asset.txt';
+        final r = validateLive2DPackage(
+          _zip([
+            ..._validEntries(model3Text: manifest(reference)),
+            _bytesFile('model/$reference', switch (role) {
+              'Moc' => _moc3(),
+              'Texture' => _pngHeader(64, 64),
+              _ => utf8.encode('{}'),
+            }),
+          ]),
+        );
+        expect(r.ok, isFalse);
+        expect(r.issues.single.code, Live2DPackageIssueCode.model3Invalid);
+        expect(r.issues.single.path, reference);
+      });
+    }
+
     test('rejects missing referenced entries', () {
       final missingMoc = validateLive2DPackage(_zip([
         _textFile('model/avatar.model3.json', _model3()),
@@ -255,6 +344,55 @@ void main() {
         _bytesFile('model/tex0.png', [1, 2, 3, 4]),
       ]));
       expect(_has(badPng, Live2DPackageIssueCode.badTextureMagic), isTrue);
+    });
+
+    final header = _pngHeader(64, 64);
+    final invalidHeaders = <String, List<int>>{
+      'truncated IHDR': header.sublist(0, 29),
+      'wrong first chunk': [...header]..setAll(12, ascii.encode('tEXt')),
+      'wrong IHDR length': [...header]..[11] = 12,
+      'incorrect IHDR CRC': [...header]..[32] ^= 1,
+    };
+    for (final MapEntry(key: reason, value: bytes) in invalidHeaders.entries) {
+      test('rejects a PNG with $reason', () {
+        final r = validateLive2DPackage(
+          _zip([
+            _textFile('model/avatar.model3.json', _model3()),
+            _bytesFile('model/avatar.moc3', _moc3()),
+            _bytesFile('model/tex0.png', bytes),
+          ]),
+        );
+        expect(r.ok, isFalse);
+        expect(r.issues.single.code, Live2DPackageIssueCode.badTextureMagic);
+      });
+    }
+
+    test('reports the first texture outside the cumulative pixel budget', () {
+      final zip = _zip([
+        ..._validEntries(
+          model3Text: _model3(textures: ['tex0.png', 'tex1.png']),
+          width: 10,
+          height: 10,
+        ),
+        _bytesFile('model/tex1.png', _pngHeader(5, 5)),
+      ]);
+      final exact = validateLive2DPackage(
+        zip,
+        limits: const Live2DPackageLimits(maxTotalPixels: 125),
+      );
+      expect(exact.ok, isTrue, reason: exact.issues.join(', '));
+      expect(exact.totalPixels, 125);
+
+      final over = validateLive2DPackage(
+        zip,
+        limits: const Live2DPackageLimits(maxTotalPixels: 124),
+      );
+      expect(over.ok, isFalse);
+      expect(
+        over.issues.single.code,
+        Live2DPackageIssueCode.textureBudgetExceeded,
+      );
+      expect(over.issues.single.path, 'model/tex1.png');
     });
 
     test('enforces texture pixel budget', () {

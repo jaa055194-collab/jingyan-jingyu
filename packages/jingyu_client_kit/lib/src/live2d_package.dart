@@ -1,13 +1,11 @@
 /// Device-local Live2D model package (`*.model3.json` bundle) safety checks.
 ///
 /// Pure Dart, no file system or network: the caller hands the zip bytes in and
-/// receives a structured result. This validates archive safety, the referenced
-/// MOC3/PNG resources and texture memory budget. It pre-scans the central
-/// directory using declared sizes before decompression; archive decoding is not
-/// itself a bounded stream, so treat a forged header as residual risk and only
-/// import user-selected local files. It does not render, decode full model
-/// geometry, verify that a parameter name exists in the model, or prove that
-/// the model will display correctly.
+/// receives a structured preflight result, not a safe extraction guarantee.
+/// The archive pre-scan checks declared sizes; reads of the manifest, MOC3,
+/// and referenced textures also cap actual output and check ZIP CRC. This
+/// checks headers, not complete model geometry or PNG image data, and does not
+/// validate every optional payload or write files.
 library;
 
 import 'dart:convert';
@@ -96,6 +94,8 @@ class Live2DPackageValidation {
   final String? model3Path;
   final String? mocPath;
   final List<String> textures;
+
+  /// Pixels counted before the budget was exhausted; exact for a valid package.
   final int totalPixels;
   final String sha256Hex;
   final List<Live2DPackageIssue> issues;
@@ -113,16 +113,29 @@ const Set<String> _disallowedExtensions = {
   'bat', 'cmd', 'sh', 'ps1', 'py', 'jar', 'apk', 'dex',
 };
 
-bool _isPng(List<int> bytes) =>
-    bytes.length >= 24 &&
-    bytes[0] == 0x89 &&
-    bytes[1] == 0x50 &&
-    bytes[2] == 0x4E &&
-    bytes[3] == 0x47 &&
-    bytes[4] == 0x0D &&
-    bytes[5] == 0x0A &&
-    bytes[6] == 0x1A &&
-    bytes[7] == 0x0A;
+({int width, int height})? _pngDimensions(List<int> bytes) {
+  // The first chunk must be a complete 13-byte IHDR, including its CRC.
+  const signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+  if (bytes.length < 33) return null;
+  for (var i = 0; i < signature.length; i++) {
+    if (bytes[i] != signature[i]) return null;
+  }
+  if (_u32be(bytes, 8) != 13 ||
+      _u32be(bytes, 12) != 0x49484452 || // IHDR
+      _u32be(bytes, 29) != getCrc32(bytes.sublist(12, 29))) {
+    return null;
+  }
+  final width = _u32be(bytes, 16);
+  final height = _u32be(bytes, 20);
+  const maxPngDimension = 0x7fffffff;
+  if (width <= 0 ||
+      height <= 0 ||
+      width > maxPngDimension ||
+      height > maxPngDimension) {
+    return null;
+  }
+  return (width: width, height: height);
+}
 
 bool _isMoc3(List<int> bytes) =>
     bytes.length >= 8 &&
@@ -132,39 +145,90 @@ bool _isMoc3(List<int> bytes) =>
     bytes[3] == 0x33; // 3
 
 int _u32be(List<int> bytes, int offset) =>
-    (bytes[offset] << 24) |
-    (bytes[offset + 1] << 16) |
-    (bytes[offset + 2] << 8) |
+    bytes[offset] * 0x1000000 +
+    bytes[offset + 1] * 0x10000 +
+    bytes[offset + 2] * 0x100 +
     bytes[offset + 3];
 
-int _jsonDepth(Object? value) {
-  if (value is Map) {
-    var max = 0;
-    for (final v in value.values) {
-      final d = _jsonDepth(v);
-      if (d > max) max = d;
+bool _exceedsJsonDepth(String text, int limit) {
+  var depth = 0;
+  var inString = false;
+  var escaped = false;
+  for (final c in text.codeUnits) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (c == 0x5c) {
+        escaped = true;
+      } else if (c == 0x22) {
+        inString = false;
+      }
+    } else if (c == 0x22) {
+      inString = true;
+    } else if (c == 0x7b || c == 0x5b) {
+      if (++depth > limit) return true;
+    } else if ((c == 0x7d || c == 0x5d) && depth > 0) {
+      depth--;
     }
-    return max + 1;
   }
-  if (value is List) {
-    var max = 0;
-    for (final v in value) {
-      final d = _jsonDepth(v);
-      if (d > max) max = d;
-    }
-    return max + 1;
-  }
-  return 0;
+  return false;
 }
 
-String? _dirName(String path) {
-  final i = path.lastIndexOf('/');
-  return i < 0 ? null : path.substring(0, i);
+class _LimitedEntryOutput extends OutputStream {
+  _LimitedEntryOutput(this.limit) : super(size: 32768);
+
+  final int limit;
+
+  void _check(int count) {
+    if (count < 0 || count > limit - length) {
+      throw const FormatException('ZIP entry exceeds its declared length');
+    }
+  }
+
+  @override
+  void writeByte(int value) {
+    _check(1);
+    super.writeByte(value);
+  }
+
+  @override
+  void writeBytes(List<int> bytes, [int? len]) {
+    _check(len ?? bytes.length);
+    super.writeBytes(bytes, len);
+  }
+
+  @override
+  void writeInputStream(InputStreamBase stream) {
+    _check(stream.length);
+    super.writeInputStream(stream);
+  }
 }
 
-String? _joinAndSanitize(String base, String relative) {
-  final combined = base.isEmpty ? relative : '$base/$relative';
-  return sanitizePackageEntryPath(combined);
+// Do not use ArchiveFile.content: it materializes the entry before checking
+// its declared size. Selected entries are read once and checked against CRC.
+List<int> _readVerifiedEntry(ArchiveFile file) {
+  final raw = file.rawContent;
+  if (raw == null || file.size < 0) {
+    throw const FormatException('missing ZIP entry data');
+  }
+  final List<int> bytes;
+  switch (file.compressionType) {
+    case ArchiveFile.STORE:
+      if (raw.length != file.size) {
+        throw const FormatException('stored ZIP entry length mismatch');
+      }
+      bytes = raw.toUint8List();
+    case ArchiveFile.DEFLATE:
+      final output = _LimitedEntryOutput(file.size);
+      Inflate.stream(InputStream(raw.toUint8List()), output);
+      bytes = output.getBytes();
+    default:
+      throw const FormatException('unsupported ZIP entry compression');
+  }
+  if (bytes.length != file.size || getCrc32(bytes) != file.crc32) {
+    throw const FormatException('ZIP entry length or checksum mismatch');
+  }
+  return bytes;
 }
 
 class _PreScan {
@@ -313,8 +377,8 @@ Live2DPackageValidation validateLive2DPackage(
     return fail();
   }
 
-  // Fail-closed pre-scan of the central directory using declared sizes, so a
-  // forged-header zip bomb is rejected before archive eagerly decompresses it.
+  // Check central-directory metadata before calling the decoder. Declared
+  // sizes can reject obvious violations but do not bound actual output.
   final preScan = _preScanCentralDirectory(bytes, limits);
   issues.addAll(preScan.issues);
   if (!preScan.allowDecode) {
@@ -322,8 +386,20 @@ Live2DPackageValidation validateLive2DPackage(
   }
 
   Archive archive;
+  final headers = <String, ZipFileHeader>{};
   try {
-    archive = ZipDecoder().decodeBytes(bytes);
+    final decoder = ZipDecoder();
+    archive = decoder.decodeBytes(bytes);
+    for (final header in decoder.directory.fileHeaders) {
+      final path = sanitizePackageEntryPath(header.filename);
+      if (path == null) continue;
+      if (headers.containsKey(path)) {
+        issues.add(Live2DPackageIssue(Live2DPackageIssueCode.duplicateEntry,
+            'duplicate ZIP header', path: path));
+        continue;
+      }
+      headers[path] = header;
+    }
   } catch (error) {
     issues.add(Live2DPackageIssue(
         Live2DPackageIssueCode.notZip, 'not a valid zip: $error'));
@@ -392,6 +468,8 @@ Live2DPackageValidation validateLive2DPackage(
     }
   }
 
+  if (issues.isNotEmpty) return fail();
+
   final model3Paths = entries.keys
       .where((name) => name.toLowerCase().endsWith('.model3.json'))
       .toList()
@@ -408,17 +486,46 @@ Live2DPackageValidation validateLive2DPackage(
   }
   final model3Path = model3Paths.single;
   final model3File = entries[model3Path]!;
-  final model3Bytes = model3File.content as List<int>;
-  if (model3Bytes.length > limits.maxModel3Bytes) {
+  if (model3File.size > limits.maxModel3Bytes) {
     issues.add(Live2DPackageIssue(Live2DPackageIssueCode.model3TooLarge,
         'model3 manifest exceeds ${limits.maxModel3Bytes} bytes',
         path: model3Path));
     return fail(model3Path: model3Path);
   }
 
+  List<int>? verify(ArchiveFile file, String path) {
+    try {
+      final header = headers[path];
+      final zipFile = header?.file;
+      if (header == null || zipFile == null ||
+          header.uncompressedSize != file.size ||
+          header.compressedSize != file.rawContent?.length ||
+          header.compressedSize != zipFile.compressedSize ||
+          header.crc32 != file.crc32 ||
+          header.compressionMethod != file.compressionType ||
+          header.generalPurposeBitFlag != zipFile.flags ||
+          (zipFile.flags & 1) != 0) {
+        throw const FormatException('ZIP entry metadata mismatch');
+      }
+      return _readVerifiedEntry(file);
+    } catch (_) {
+      issues.add(Live2DPackageIssue(Live2DPackageIssueCode.notZip,
+          'invalid ZIP entry data', path: path));
+      return null;
+    }
+  }
+
+  final model3Bytes = verify(model3File, model3Path);
+  if (model3Bytes == null) return fail(model3Path: model3Path);
   Map<String, Object?> root;
   try {
-    final decoded = jsonDecode(utf8.decode(model3Bytes));
+    final text = utf8.decode(model3Bytes);
+    if (_exceedsJsonDepth(text, limits.maxJsonDepth)) {
+      issues.add(Live2DPackageIssue(Live2DPackageIssueCode.model3TooDeep,
+          'model3 JSON nesting exceeds ${limits.maxJsonDepth}', path: model3Path));
+      return fail(model3Path: model3Path);
+    }
+    final decoded = jsonDecode(text);
     if (decoded is! Map<String, Object?>) {
       issues.add(Live2DPackageIssue(Live2DPackageIssueCode.model3Invalid,
           'model3 root is not an object', path: model3Path));
@@ -428,11 +535,6 @@ Live2DPackageValidation validateLive2DPackage(
   } on FormatException catch (error) {
     issues.add(Live2DPackageIssue(Live2DPackageIssueCode.model3InvalidJson,
         'model3 is not valid JSON: ${error.message}', path: model3Path));
-    return fail(model3Path: model3Path);
-  }
-  if (_jsonDepth(root) > limits.maxJsonDepth) {
-    issues.add(Live2DPackageIssue(Live2DPackageIssueCode.model3TooDeep,
-        'model3 JSON nesting exceeds ${limits.maxJsonDepth}', path: model3Path));
     return fail(model3Path: model3Path);
   }
 
@@ -456,58 +558,69 @@ Live2DPackageValidation validateLive2DPackage(
     return fail(model3Path: model3Path);
   }
 
-  final base = _dirName(model3Path) ?? '';
-
+  final base = model3Path.substring(0, model3Path.lastIndexOf('/') + 1);
   final referenced = <String>[];
-  final mocPath = _joinAndSanitize(base, mocRef);
-  if (mocPath == null) {
-    issues.add(Live2DPackageIssue(Live2DPackageIssueCode.unsafeEntryPath,
-        'unsafe Moc reference', path: mocRef));
-  } else {
-    referenced.add(mocPath);
+
+  String? requireReference(Object? value, String label, String suffix) {
+    if (value is! String || value.trim().isEmpty) {
+      issues.add(
+        Live2DPackageIssue(
+          Live2DPackageIssueCode.model3Invalid,
+          'invalid $label reference',
+          path: model3Path,
+        ),
+      );
+      return null;
+    }
+    // Validate the raw reference, not the combined path. The manifest is not
+    // rewritten, so a normalized alias is not equivalent to a canonical path.
+    if (sanitizePackageEntryPath(value) != value) {
+      issues.add(
+        Live2DPackageIssue(
+          Live2DPackageIssueCode.unsafeEntryPath,
+          '$label reference must be a canonical relative path',
+          path: value,
+        ),
+      );
+      return null;
+    }
+    if (!value.toLowerCase().endsWith(suffix)) {
+      issues.add(
+        Live2DPackageIssue(
+          Live2DPackageIssueCode.model3Invalid,
+          '$label reference must point to a $suffix file',
+          path: value,
+        ),
+      );
+      return null;
+    }
+    final resolved = '$base$value';
+    referenced.add(resolved);
+    return resolved;
   }
 
+  final mocPath = requireReference(mocRef, 'Moc', '.moc3');
   final texturePaths = <String>[];
   for (final raw in rawTextures) {
-    if (raw is! String || raw.trim().isEmpty) {
-      issues.add(Live2DPackageIssue(Live2DPackageIssueCode.model3Invalid,
-          'non-string texture reference', path: model3Path));
-      continue;
-    }
-    final resolved = _joinAndSanitize(base, raw);
-    if (resolved == null) {
-      issues.add(Live2DPackageIssue(Live2DPackageIssueCode.unsafeEntryPath,
-          'unsafe texture reference', path: raw));
-    } else {
-      texturePaths.add(resolved);
-      referenced.add(resolved);
-    }
+    final resolved = requireReference(raw, 'Texture', '.png');
+    if (resolved != null) texturePaths.add(resolved);
   }
 
-  void requireOptional(Object? value, String label) {
-    if (value == null) return;
-    if (value is! String || value.trim().isEmpty) {
-      issues.add(Live2DPackageIssue(
-          Live2DPackageIssueCode.model3Invalid, 'invalid $label reference',
-          path: model3Path));
-      return;
-    }
-    final resolved = _joinAndSanitize(base, value);
-    if (resolved == null) {
-      issues.add(Live2DPackageIssue(Live2DPackageIssueCode.unsafeEntryPath,
-          'unsafe $label reference', path: value));
-    } else {
-      referenced.add(resolved);
-    }
+  const optionalSuffixes = {
+    'Physics': '.physics3.json',
+    'Pose': '.pose3.json',
+    'DisplayInfo': '.cdi3.json',
+  };
+  for (final entry in optionalSuffixes.entries) {
+    final value = fileRefs[entry.key];
+    if (value != null) requireReference(value, entry.key, entry.value);
   }
-
-  requireOptional(fileRefs['Physics'], 'Physics');
-  requireOptional(fileRefs['Pose'], 'Pose');
-  requireOptional(fileRefs['DisplayInfo'], 'DisplayInfo');
   final expressions = fileRefs['Expressions'];
   if (expressions is List) {
     for (final item in expressions) {
-      if (item is Map<String, Object?>) requireOptional(item['File'], 'Expression');
+      if (item is Map<String, Object?>) {
+        requireReference(item['File'], 'Expression', '.exp3.json');
+      }
     }
   }
   final motions = fileRefs['Motions'];
@@ -515,7 +628,9 @@ Live2DPackageValidation validateLive2DPackage(
     for (final group in motions.values) {
       if (group is List) {
         for (final item in group) {
-          if (item is Map<String, Object?>) requireOptional(item['File'], 'Motion');
+          if (item is Map<String, Object?>) {
+            requireReference(item['File'], 'Motion', '.motion3.json');
+          }
         }
       }
     }
@@ -530,7 +645,8 @@ Live2DPackageValidation validateLive2DPackage(
 
   int totalPixels = 0;
   if (mocPath != null && entries.containsKey(mocPath)) {
-    final mocBytes = entries[mocPath]!.content as List<int>;
+    final mocBytes = verify(entries[mocPath]!, mocPath);
+    if (mocBytes == null) return fail(model3Path: model3Path, mocPath: mocPath);
     if (!_isMoc3(mocBytes)) {
       issues.add(Live2DPackageIssue(Live2DPackageIssueCode.badMocMagic,
           'MOC3 magic missing', path: mocPath));
@@ -544,28 +660,42 @@ Live2DPackageValidation validateLive2DPackage(
     }
   }
 
+  final dimensionsByPath = <String, ({int width, int height})?>{};
   for (final path in texturePaths) {
     final file = entries[path];
     if (file == null) continue;
-    final tex = file.content as List<int>;
-    if (!_isPng(tex)) {
-      issues.add(Live2DPackageIssue(Live2DPackageIssueCode.badTextureMagic,
-          'texture is not a PNG', path: path));
+    if (!dimensionsByPath.containsKey(path)) {
+      final textureBytes = verify(file, path);
+      if (textureBytes == null) {
+        return fail(model3Path: model3Path, mocPath: mocPath);
+      }
+      dimensionsByPath[path] = _pngDimensions(textureBytes);
+    }
+    final dimensions = dimensionsByPath[path];
+    if (dimensions == null) {
+      issues.add(
+        Live2DPackageIssue(
+          Live2DPackageIssueCode.badTextureMagic,
+          'texture has an invalid PNG signature or IHDR',
+          path: path,
+        ),
+      );
       continue;
     }
-    final width = _u32be(tex, 16);
-    final height = _u32be(tex, 20);
-    if (width <= 0 || height <= 0) {
-      issues.add(Live2DPackageIssue(Live2DPackageIssueCode.badTextureMagic,
-          'invalid PNG dimensions ${width}x$height', path: path));
-      continue;
+    final (width: width, height: height) = dimensions;
+    final remaining = limits.maxTotalPixels - totalPixels;
+    // Check the remaining budget before multiplying or adding dimensions.
+    if (remaining < 0 || width > remaining ~/ height) {
+      issues.add(
+        Live2DPackageIssue(
+          Live2DPackageIssueCode.textureBudgetExceeded,
+          '${width}x$height texture exceeds remaining pixel budget of $remaining',
+          path: path,
+        ),
+      );
+      break;
     }
     totalPixels += width * height;
-  }
-  if (totalPixels > limits.maxTotalPixels) {
-    issues.add(Live2DPackageIssue(
-        Live2DPackageIssueCode.textureBudgetExceeded,
-        'texture pixels $totalPixels > ${limits.maxTotalPixels}'));
   }
 
   final ok = issues.isEmpty;
