@@ -20,7 +20,6 @@ class InboxScreen extends StatefulWidget {
 class _InboxScreenState extends State<InboxScreen> {
   List<NotificationItem>? _items;
   bool _loading = false;
-  bool _unbound = false;
   String? _message;
 
   @override
@@ -31,23 +30,17 @@ class _InboxScreenState extends State<InboxScreen> {
 
   Future<void> _load() async {
     final load = widget.loadNotifications;
-    if (load == null) {
-      if (mounted) setState(() => _unbound = true);
-      return;
-    }
-    if (mounted) {
-      setState(() {
-        _loading = true;
-        _message = null;
-      });
-    }
+    if (!mounted || load == null || _loading) return;
+    setState(() {
+      _loading = true;
+      _message = null;
+    });
     try {
       final items = await load();
       if (!mounted) return;
       setState(() {
         _items = items;
         _loading = false;
-        _unbound = false;
       });
     } catch (error) {
       if (!mounted) return;
@@ -58,7 +51,6 @@ class _InboxScreenState extends State<InboxScreen> {
       setState(() {
         _items = null;
         _loading = false;
-        _unbound = false;
         _message = denied ? '未认证或无权限读取通知；不会自动重试' : '通知读取失败或结果未知；不会自动重试';
       });
     }
@@ -66,7 +58,7 @@ class _InboxScreenState extends State<InboxScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_unbound) {
+    if (widget.loadNotifications == null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -93,8 +85,40 @@ class _InboxScreenState extends State<InboxScreen> {
         ),
       );
     }
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: TextButton.icon(
+              key: const Key('inbox-refresh'),
+              onPressed: _loading ? null : _load,
+              icon: const Icon(Icons.refresh),
+              label: Text(_message == null ? '刷新收件箱' : '重试读取'),
+            ),
+          ),
+        ),
+        Expanded(child: _connectedBody()),
+      ],
+    );
+  }
+
+  Widget _connectedBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return Center(
+        child: Semantics(
+          liveRegion: true,
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 8),
+              Text('正在读取收件箱…'),
+            ],
+          ),
+        ),
+      );
     }
     if (_message != null) {
       return Center(

@@ -26,6 +26,7 @@ void main() {
     expect(find.text('当前未连接宿主，无法读取收件箱。'), findsOneWidget);
     expect(find.text('连接后可查看待处理的好友邀请。'), findsOneWidget);
     expect(find.byType(ListTile), findsNothing);
+    expect(find.byKey(const Key('inbox-refresh')), findsNothing);
   });
 
   testWidgets('renders friend-request invitations as metadata only', (
@@ -59,6 +60,72 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('inbox-empty')), findsOneWidget);
     expect(find.text('暂无新通知。'), findsOneWidget);
+  });
+
+  testWidgets(
+    'manual refresh rereads once and disables the action until complete',
+    (tester) async {
+      final refresh = find.byKey(const Key('inbox-refresh'));
+      final pending = Completer<List<NotificationItem>>();
+      var reads = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: InboxScreen(
+              loadNotifications: () async =>
+                  ++reads == 1 ? [_item()] : pending.future,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(reads, 1);
+      expect(find.byKey(const Key('notification-acct-a')), findsOneWidget);
+      await tester.tap(refresh);
+      await tester.pump();
+      expect(reads, 2);
+      expect(tester.widget<TextButton>(refresh).onPressed, isNull);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byKey(const Key('inbox-empty')), findsNothing);
+      await tester.pump(const Duration(minutes: 2));
+      expect(reads, 2);
+      pending.complete([]);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('notification-acct-a')), findsNothing);
+      expect(find.byKey(const Key('inbox-empty')), findsOneWidget);
+      expect(tester.widget<TextButton>(refresh).onPressed, isNotNull);
+    },
+  );
+
+  testWidgets('temporary failure can be retried explicitly without polling', (
+    tester,
+  ) async {
+    var reads = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: InboxScreen(
+            loadNotifications: () async {
+              if (++reads == 1) throw StateError('opaque-failure');
+              return [_item()];
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('inbox-message')), findsOneWidget);
+    expect(find.textContaining('opaque-failure'), findsNothing);
+    expect(find.byKey(const Key('inbox-empty')), findsNothing);
+    await tester.pump(const Duration(minutes: 2));
+    expect(reads, 1);
+    await tester.tap(find.byKey(const Key('inbox-refresh')));
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    expect(find.byKey(const Key('notification-acct-a')), findsOneWidget);
+    expect(find.byKey(const Key('inbox-message')), findsNothing);
+    await tester.pump(const Duration(minutes: 2));
+    expect(reads, 2);
   });
 
   testWidgets('denied read is reported honestly', (tester) async {
