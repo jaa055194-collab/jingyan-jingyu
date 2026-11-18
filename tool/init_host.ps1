@@ -11,7 +11,8 @@
 #     -DataDir C:\jingyu-data `
 #     -AdminName Root `
 #     -AdminPassword '<至少12位的口令>' `
-#     [-BindAddress 100.x.y.z] [-Port 8787] [-Dart <dart.exe 绝对路径>]
+#     [-BindAddress 100.x.y.z] [-Port 8787] [-Dart <官方 SDK dart.exe 绝对路径>]
+# Flutter 的 dart.bat 可用于初始化 SDK 缓存，但临时宿主始终由 SDK dart.exe 直接启动。
 #
 # 说明：密钥/口令只经进程环境变量传入子进程，不写入仓库、不打印。脚本只修改
 # $DataDir 下的数据，不改动源码；不 push / PR / merge。
@@ -43,6 +44,24 @@ if (-not (Test-Path (Join-Path $hostApp 'bin/server.dart'))) {
   throw "未找到宿主工程：$hostApp"
 }
 $dartPath = Resolve-Dart $Dart
+
+# Only an official SDK dart.exe is supported for the owned server launch.
+# This checks the SDK layout, not the authenticity of caller-supplied binaries.
+function Resolve-ServerDart([string]$cliPath) {
+  $candidate = $cliPath
+  if ([IO.Path]::GetExtension($cliPath) -in @('.bat', '.cmd')) {
+    $candidate = Join-Path (Split-Path -Parent $cliPath) 'cache/dart-sdk/bin/dart.exe'
+  }
+  $bin = Split-Path -Parent $candidate
+  $sdk = Split-Path -Parent $bin
+  if ((Split-Path -Leaf $candidate) -ne 'dart.exe' -or (Split-Path -Leaf $bin) -ne 'bin' -or
+      -not (Test-Path -LiteralPath $candidate -PathType Leaf) -or
+      -not (Test-Path -LiteralPath (Join-Path $sdk 'version') -PathType Leaf) -or
+      -not (Test-Path -LiteralPath (Join-Path $sdk 'lib/_internal/vm_platform_strong.dill') -PathType Leaf)) {
+    throw '临时宿主必须由官方 SDK dart.exe 直接启动，请用 -Dart 指定 SDK 中的 dart.exe（不支持 shim）。'
+  }
+  return (Resolve-Path -LiteralPath $candidate).Path
+}
 
 # 数据目录必须可创建或为空，保证“从零搭建、不依赖旧库/旧配置”。
 $DataDir = [System.IO.Path]::GetFullPath($DataDir)
@@ -101,22 +120,43 @@ try {
 Write-Host "== 2/4 启动临时宿主（$BindAddress`:$Port）=="
 $logOut = Join-Path $dataRoot 'init-server.out.log'
 $logErr = Join-Path $dataRoot 'init-server.err.log'
-$server = Start-Process -FilePath $dartPath `
-  -ArgumentList @('run', 'bin/server.dart') `
+# Dependencies are resolved above. Running the script directly avoids the
+# intermediate `dart run` process; the returned object owns the listener.
+$serverDart = Resolve-ServerDart $dartPath
+$server = Start-Process -FilePath $serverDart `
+  -ArgumentList 'bin/server.dart' `
   -WorkingDirectory $hostApp `
   -RedirectStandardOutput $logOut `
   -RedirectStandardError $logErr `
   -PassThru -WindowStyle Hidden
 
+$serverHandleHeld = $false
 try {
+  # Keep a handle to this instance, rather than rediscovering it by PID.
+  $null = $server.Handle
+  $serverHandleHeld = $true
   $base = "http://$BindAddress`:$Port"
   $healthy = $false
+  $listenerReady = $false
+  $listenerSuffix = " listening on $BindAddress`:$Port"
   for ($i = 0; $i -lt 120; $i++) {
     if ($server.HasExited) { break }
-    try {
-      $h = Invoke-RestMethod -Uri "$base/api/v1/health" -TimeoutSec 2
-      if ($h.status -eq 'ok') { $healthy = $true; break }
-    } catch { }
+    if (-not $listenerReady) {
+      # The entrypoint prints this only after binding successfully. A response
+      # from a listener already occupying the requested port is not readiness.
+      foreach ($line in (Get-Content -LiteralPath $logOut -ErrorAction SilentlyContinue)) {
+        if ($line.StartsWith('jingyu host ') -and $line.EndsWith($listenerSuffix, [StringComparison]::Ordinal)) {
+          $listenerReady = $true
+          break
+        }
+      }
+    }
+    if ($listenerReady) {
+      try {
+        $h = Invoke-RestMethod -Uri "$base/api/v1/health" -TimeoutSec 2
+        if ($h.status -eq 'ok' -and -not $server.HasExited) { $healthy = $true; break }
+      } catch { }
+    }
     Start-Sleep -Milliseconds 500
   }
   if (-not $healthy) {
@@ -145,13 +185,16 @@ try {
   if (-not $inviteCode) { throw '未生成邀请码' }
 } finally {
   Write-Host '== 4/4 停止临时宿主并写入配置 =='
-  if ($server -and -not $server.HasExited) {
-    Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+  try {
+    if ($serverHandleHeld) {
+      if (-not $server.HasExited) {
+        try { $server.Kill() } catch { if (-not $server.HasExited) { throw } }
+      }
+      if (-not $server.WaitForExit(5000)) { throw '临时宿主未在清理限时内停止。' }
+    }
+  } finally {
+    $server.Dispose()
   }
-  # 尽力清理 dart run 拉起的子进程（按命令行匹配本工程的 bin/server.dart）。
-  Get-CimInstance Win32_Process -Filter "Name = 'dart.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -match 'bin[\\/]server\.dart' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
 $configPath = Join-Path $dataRoot 'host.env'

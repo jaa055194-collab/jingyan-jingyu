@@ -279,4 +279,6 @@ flutter test test/voice_call_list_api_test.dart test/voice_call_list_screen_test
 本次未运行全仓套件、实时模型调用、客户端与真实宿主联调或真机验收。
 
 **历史实测（不计入本次复跑）**：在 #102 的 `63f4c2e` 修订上，本地显式启用进程内 `GuardedHttpTransport(autoUncompress: true)`，运行 `worker_e2e_live_assembly_test`；真实 `auto` 回复非空，canonical `s2` 回复持久化到 SQLite，重开可读，预算差与结算用量一致。
-该集成测试不走默认启动链路。生产模型出站装配走 `ModelRuntime.withProcess` → `ProcessHttpTransport` → `bin/http_worker.dart`，worker 未显式开启 gzip。**生产子进程出站与宿主默认启动端到端均未由上述测试验证**。
+该集成测试不走默认启动链路。M15 复跑基线 `0c23edd` 的模型子进程未显式启用 gzip；#126 仅在 `ModelRuntime.withProcess` 的模型出站装配中经 `ProcessHttpTransport` 向 `bin/http_worker.dart` 显式传入 gzip opt-in，其他调用方默认行为不变。
+
+**仓库 worker 实测（2026-11-18，主干基线 `8e77c9d` 加本次测试与子进程环境隔离改动）**：在 Windows 的 `apps/host` 目录，仅在测试进程设置 `JINGYU_LIVE_BASE_URL`、`JINGYU_LIVE_API_KEY` 和 `JINGYU_LIVE_MODEL=auto`，运行 `dart test --compiler source -r expanded test/worker_e2e_live_assembly_test.dart`。通过 `ModelRuntime.withProcess` 启动仓库的 HTTP worker，真实单轮测试 1 项通过。响应非空，SQLite 中的 canonical `s2` 回复在重开后可读，回复尝试指向该消息；用量为 99 输入 + 67 输出 = 166，与预算用量增量一致。子进程不继承父进程环境，仅在 Windows 保留启动所需的 `SystemRoot`。该检查使用临时测试数据库和真实供应商，不启动默认宿主可执行程序、HTTP/WebSocket 监听或客户端；**默认宿主启动后的用户会话端到端仍未验证**。

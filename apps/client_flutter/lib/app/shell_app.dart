@@ -134,10 +134,8 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
-  /// Host-backed read-only friends loader with the same semantics as
-  /// [creative]: wire [FriendsApi.list] only when the runtime exposes a live
-  /// connection; otherwise the contacts screen keeps its honest empty state.
-  /// The shell only wires loaders here — tab layout and settings are untouched.
+  /// Wire the contacts list and explicit invite actions only when the runtime
+  /// has a host connection. The screen never submits an action on load.
   Widget contacts() {
     final model = widget.model;
     final HostConnection? connection = model is ClientRuntime
@@ -145,7 +143,11 @@ class _ShellHomeState extends State<_ShellHome> {
         : null;
     if (connection == null) return const ContactsScreen();
     final api = FriendsApi(connection);
-    return ContactsScreen(loadFriends: api.list);
+    return ContactsScreen(
+      loadFriends: api.list,
+      acceptFriend: api.acceptFriend,
+      denyFriend: api.denyFriend,
+    );
   }
 
   /// Host-backed read-only notifications loader with the same semantics as
@@ -159,7 +161,10 @@ class _ShellHomeState extends State<_ShellHome> {
         : null;
     if (connection == null) return const InboxScreen();
     final api = NotificationApi(connection);
-    return InboxScreen(loadNotifications: () => api.readNotifications());
+    return InboxScreen(
+      key: ObjectKey(connection),
+      loadNotifications: () => api.readNotifications(),
+    );
   }
 
   Widget empty() {

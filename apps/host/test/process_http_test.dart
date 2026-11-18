@@ -24,11 +24,13 @@ void main() {
     String path, {
     Duration timeout = const Duration(seconds: 15),
     int maxResponseBytes = 1024,
+    bool autoUncompress = false,
   }) => ProcessHttpTransport(
     executable: Platform.resolvedExecutable,
     workerPath: path,
     timeout: timeout,
     maxResponseBytes: maxResponseBytes,
+    autoUncompress: autoUncompress,
   );
 
   void safeFailure(Result<GuardedResponse> result) {
@@ -41,12 +43,18 @@ void main() {
   test(
     'credentials use only stdin and response preserves request contract',
     () async {
+      // If an opted-in live probe supplies a key in the parent environment,
+      // that variable must not cross the process boundary. PATH is normally
+      // present in test runners and independently detects ambient inheritance.
       final path = await script(r'''
 import 'dart:convert';
 import 'dart:io';
 Future<void> main(List<String> args) async {
   final request = jsonDecode(await stdin.transform(utf8.decoder).transform(const LineSplitter()).first) as Map;
   final safe = args.isEmpty && !Platform.executableArguments.join().contains('secret-token') &&
+    !Platform.environment.containsKey('JINGYU_WORKER_TEST_SENTINEL') &&
+    !Platform.environment.containsKey('JINGYU_LIVE_API_KEY') &&
+    !Platform.environment.keys.any((key) => key.toUpperCase() == 'PATH') &&
     !Platform.environment.values.any((v) => v.contains('secret-token')) &&
     request.keys.toSet().difference({'method','url','headers','body','timeout','maxResponseBytes'}).isEmpty &&
     request['method'] == 'POST' && request['headers']['Authorization'] == 'Bearer secret-token' &&
@@ -157,6 +165,45 @@ Future<void> main() async {
     },
   );
 
+  test('packaged worker accepts only the single fixed gzip flag', () async {
+    final worker = File('bin/http_worker.dart').absolute.path;
+    for (final (arguments, expected) in [
+      (<String>[], 'forbidden'),
+      (['--decode-gzip'], 'forbidden'),
+      (['--unknown'], 'unavailable'),
+      (['--decode-gzip', '--decode-gzip'], 'unavailable'),
+      (['--decode-gzip', '--unknown'], 'unavailable'),
+    ]) {
+      final child = await Process.start(Platform.resolvedExecutable, [
+        worker,
+        ...arguments,
+      ]);
+      try {
+        final stdout = utf8.decoder.bind(child.stdout).join();
+        final stderr = utf8.decoder.bind(child.stderr).join();
+        child.stdin.writeln(
+          jsonEncode({
+            'method': 'GET',
+            'url': 'http://127.0.0.1',
+            'headers': {},
+            'body': null,
+            'timeout': 1000000,
+            'maxResponseBytes': 1024,
+          }),
+        );
+        await child.stdin.close();
+        expect(await child.exitCode.timeout(const Duration(seconds: 15)), 0);
+        expect(await stderr, isEmpty);
+        expect(jsonDecode(await stdout), {
+          'ok': false,
+          'code': expected,
+        }, reason: 'argv: $arguments');
+      } finally {
+        child.kill();
+      }
+    }
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
   test('production worker rejects localhost with no local bypass', () async {
     final client = transport(File('bin/http_worker.dart').absolute.path);
     for (final url in [
@@ -204,7 +251,11 @@ Future<void> main() async {
   await SecureSocket.secure(socket, host: 'api.example');
 }
 ''');
-      final client = transport(path, timeout: const Duration(seconds: 6));
+      final client = transport(
+        path,
+        timeout: const Duration(seconds: 6),
+        autoUncompress: true,
+      );
       for (var i = 0; i < 3; i++) {
         final resultFuture = client.request(
           'GET',

@@ -55,3 +55,30 @@ dart test test/live_model_chat_test.dart -r expanded
 - `.gitignore` 已忽略 `.env`、`.env.*`、`secrets.local/`；不要把这些值写进任何跟踪文件、PR 描述或日志。
 - 该验证只证明「单次真实对话经宿主链路可用」；它不代表已实现自动回复触发链、客户端 UI、
   流式、多轮记忆授权或完整 FR-57 验收。
+
+## 默认宿主装配与真实本地 HTTP 监听
+
+以下独立验收使用 `buildHost`、`serve` 和 `127.0.0.1` 的临时端口，不改宿主路由或 worker 安全策略。测试以临时 SQLite 播种合成账号、AI 与设备；后续配置、授权、单次消息发送、回复状态、历史和用量读取均走真实 HTTP 与 bearer 校验。读回使用新连接；关闭并重开同一数据库后再次核对。**不覆盖客户端 UI、口令登录或 `bin/server.dart` 入口。**
+
+在 `apps/host` 目录运行离线验收（默认执行，不使用真实凭据、不会向公网发送请求）：
+
+```powershell
+Remove-Item Env:JINGYU_RUN_LIVE_LISTENER -ErrorAction SilentlyContinue
+dart test --compiler source test/host_live_listener_test.dart -r expanded
+```
+
+离线用例走真实宿主和真实子进程 IPC，但子进程仅返回合成回复；它不验证打包 worker 成功出站。实时分支默认跳过。获授权之后，先安全地向本进程注入 `JINGYU_LIVE_BASE_URL`（HTTPS）和 `JINGYU_LIVE_API_KEY`（限本次运行，勿写脚本、历史或日志），然后仅跑一次实时用例：
+
+```powershell
+$env:JINGYU_RUN_LIVE_LISTENER = '1'
+$env:JINGYU_LIVE_MODEL = 'auto'
+try {
+  dart test --compiler source test/host_live_listener_test.dart -r expanded --plain-name 'live: real host HTTP and packaged worker persist one auto reply'
+} finally {
+  Remove-Item Env:JINGYU_RUN_LIVE_LISTENER,Env:JINGYU_LIVE_MODEL,Env:JINGYU_LIVE_BASE_URL,Env:JINGYU_LIVE_API_KEY -ErrorAction SilentlyContinue
+}
+```
+
+实时分支使用仓库的 `apps/host/bin/http_worker.dart`，提交一条合成消息，不自动重试。缺失或无效配置在显式启用后会失败，不会回退为合成成功。成功只打印回复长度、已结算 token 数和已重开标志。测试诊断不附带消息正文、HTTP 响应、凭据或上游报文。宿主按生产方式加密保存供应商凭据于临时 SQLite，测试结束后清理该临时目录。
+
+**实测（2026-11-18，Windows，`32b5ad6` 加本节的监听器验收测试）**：一次真实 `auto` 调用通过；回复非空，HTTP 回复状态与历史指向同一条 `s2` 消息，已结算用量为 342 tokens。重开数据库并建立新连接后，再次通过 HTTP 读到相同回复和用量。该结果不代表口令登录、客户端 UI 或独立宿主进程的整个用户会话通过验收。

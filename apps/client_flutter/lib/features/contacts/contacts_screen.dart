@@ -10,12 +10,22 @@ import '../../net/host_connection.dart';
 /// renders it, reporting loading/empty/denied/unknown honestly. Without a
 /// loader the screen keeps the original honest empty state instead of
 /// fabricating contacts. A read-only per-account lookup ([lookupState]) remains
-/// available and no relationship mutation is ever performed here.
+/// available. Incoming pending invitations can be explicitly accepted/denied
+/// only when [acceptFriend]/[denyFriend] are wired; every action is
+/// user-triggered, refreshes the list afterwards and reports failures honestly.
 class ContactsScreen extends StatefulWidget {
-  const ContactsScreen({super.key, this.lookupState, this.loadFriends});
+  const ContactsScreen({
+    super.key,
+    this.lookupState,
+    this.loadFriends,
+    this.acceptFriend,
+    this.denyFriend,
+  });
 
   final Future<FriendState> Function(String accountId)? lookupState;
   final Future<List<FriendContact>> Function()? loadFriends;
+  final Future<void> Function(String accountId)? acceptFriend;
+  final Future<void> Function(String accountId)? denyFriend;
 
   @override
   State<ContactsScreen> createState() => _ContactsScreenState();
@@ -28,6 +38,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   List<FriendContact>? _friends;
   bool _loadingFriends = false;
   String? _friendsMessage;
+  String? _friendActionBusy;
 
   @override
   void initState() {
@@ -101,6 +112,47 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
   }
 
+  Future<void> _respondFriend(
+    FriendContact contact, {
+    required bool accept,
+  }) async {
+    final action = accept ? widget.acceptFriend : widget.denyFriend;
+    if (action == null || _friendActionBusy != null) return;
+    setState(() => _friendActionBusy = contact.accountId);
+    try {
+      await action(contact.accountId);
+      if (!mounted) return;
+      setState(() {
+        _friendActionBusy = null;
+        _friendsMessage = null;
+      });
+      await _loadFriends();
+    } catch (error) {
+      if (!mounted) return;
+      final denied =
+          error is HostRequestException &&
+          (error.failure.code == FailureCode.forbidden ||
+              error.failure.code == FailureCode.unauthenticated);
+      setState(() {
+        _friendActionBusy = null;
+        _friendsMessage = denied
+            ? '未认证或无权限处理邀请；不会自动重试'
+            : error is FormatException
+            ? '好友操作响应无效；不会自动重试'
+            : '好友操作失败或结果未知；不会自动重试';
+      });
+    }
+  }
+
+  // Account names may contain controls per the host contract. Only the
+  // rendered label changes; the DTO and account ID are kept intact.
+  static final _displayControls = RegExp(r'[\x00-\x1f\x7f-\x9f]');
+
+  static String _contactTitle(FriendContact friend) {
+    final display = friend.displayName.replaceAll(_displayControls, ' ');
+    return display.trim().isEmpty ? friend.accountId : display;
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     body: SafeArea(
@@ -115,14 +167,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
               Text('联系人', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               const Text(
-                '数据来自宿主实时读取；以下为只读展示，不在本页修改好友关系。',
+                '数据来自宿主实时读取；仅显式点击「接受/拒绝」处理好友邀请，其余只读。',
                 key: Key('contacts-live-note'),
               ),
               if (widget.loadFriends == null)
-                const Text(
-                  '宿主未提供好友列表路由；接入好友列表后可在此显示。',
-                  textAlign: TextAlign.center,
-                )
+                const Text('当前未连接宿主，无法读取联系人。', textAlign: TextAlign.center)
               else if (_loadingFriends)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
@@ -132,17 +181,46 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 Text(_friendsMessage!, textAlign: TextAlign.center)
               else if (_friends != null) ...[
                 if (_friends!.isEmpty)
-                  const Text('暂无好友；这不代表没有待处理请求。', textAlign: TextAlign.center)
+                  const Text('暂无联系人或待处理的好友邀请。', textAlign: TextAlign.center)
                 else
                   for (final friend in _friends!)
                     ListTile(
                       key: Key('contacts-friend-${friend.accountId}'),
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.person_outline),
-                      title: Text(friend.displayName),
+                      title: Text(_contactTitle(friend)),
                       subtitle: Text(
                         '${friend.accountId} · ${_label(friend.state)}',
                       ),
+                      trailing: friend.state == FriendState.incomingPending
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                TextButton(
+                                  key: Key('friend-accept-${friend.accountId}'),
+                                  onPressed:
+                                      _friendActionBusy == null &&
+                                          widget.acceptFriend != null
+                                      ? () =>
+                                            _respondFriend(friend, accept: true)
+                                      : null,
+                                  child: const Text('接受'),
+                                ),
+                                TextButton(
+                                  key: Key('friend-deny-${friend.accountId}'),
+                                  onPressed:
+                                      _friendActionBusy == null &&
+                                          widget.denyFriend != null
+                                      ? () => _respondFriend(
+                                          friend,
+                                          accept: false,
+                                        )
+                                      : null,
+                                  child: const Text('拒绝'),
+                                ),
+                              ],
+                            )
+                          : null,
                     ),
               ],
               if (widget.lookupState != null) ...[

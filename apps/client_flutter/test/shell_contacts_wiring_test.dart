@@ -15,8 +15,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('联系人'), findsWidgets);
-    expect(find.textContaining('宿主未提供好友列表路由'), findsOneWidget);
-    expect(find.textContaining('接入好友列表后可在此显示'), findsOneWidget);
+    expect(find.text('当前未连接宿主，无法读取联系人。'), findsOneWidget);
     // No fabricated friend rows.
     expect(find.byKey(const Key('contacts-friend-x')), findsNothing);
   });
