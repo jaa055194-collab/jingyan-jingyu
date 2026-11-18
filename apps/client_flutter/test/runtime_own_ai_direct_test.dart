@@ -218,6 +218,64 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   HttpOverrides.global = null;
 
+  test('owner chat shortcut sync leaves a queued message unsent', () async {
+    final f = await _ConsentFixture.create();
+    final runtime = await f.runtime();
+    const directId = 'direct-conversation';
+    final sync = <String?>[];
+    final syncStarted = Completer<void>();
+    final releaseSync = Completer<void>();
+    var posts = 0;
+    f.native.serve = (request) async {
+      if (request.uri.path == Routes.directConversations) {
+        await request.drain<void>();
+        return f.native.reply(request, {
+          'conversations': [
+            {'id': directId, 'kind': 'direct'},
+          ],
+        });
+      }
+      if (request.uri.path == '/api/v1/conversations/$directId/sync') {
+        await request.drain<void>();
+        sync.add(request.uri.queryParameters['afterSeq']);
+        if (!syncStarted.isCompleted) {
+          syncStarted.complete();
+          await releaseSync.future;
+        }
+        return f.native.reply(request, {'messages': [], 'hasMore': false});
+      }
+      if (request.uri.path == '/api/v1/conversations/$directId/messages') {
+        await request.drain<void>();
+        posts++;
+        return f.native.reply(request, {});
+      }
+      return f.serve(request);
+    };
+    try {
+      await runtime.shell.enqueue(directId, MessageKind.text, {
+        'text': 'queued',
+      });
+      final opening = runtime.refreshForOwnAiChat();
+      await syncStarted.future.timeout(const Duration(seconds: 5));
+      expect(runtime.conversations.single.id, directId);
+      expect(sync, ['0']);
+      expect(posts, 0);
+      expect(runtime.queuedCount, 1);
+
+      // An independently requested ordinary refresh must still flush, even
+      // while the shortcut's read-only refresh is in flight.
+      final ordinary = runtime.refreshConversations();
+      releaseSync.complete();
+      expect(await opening, isTrue);
+      await ordinary;
+      expect(posts, 1);
+      expect(runtime.queuedCount, 0);
+    } finally {
+      if (!releaseSync.isCompleted) releaseSync.complete();
+      await f.dispose(runtime);
+    }
+  });
+
   test(
     'delayed GET cannot publish after lock and unlock finish before response',
     () async {

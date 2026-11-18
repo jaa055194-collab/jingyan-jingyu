@@ -24,6 +24,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   late Directory _dataRoot;
   late FilePersistence _settingsStorage;
   Future<void>? _refreshWork;
+  bool _refreshFlushesOutbox = true;
   Future<bool>? _renewWork;
   Future<void> _secureTail = Future<void>.value();
   ClientCredentials? _credentials;
@@ -539,24 +540,41 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Future<void> _savePreferences() =>
       writeClientSection(_settingsStorage, 'preferences', {...preferences});
 
-  Future<void> _refresh() {
+  Future<void> _refresh({bool flushOutbox = true}) {
     if (_disposed || connection == null || _switching || locked) {
       return Future<void>.value();
     }
     final active = _refreshWork;
-    if (active != null) return active;
-    final work = _performRefresh(connection!, shell, _generation);
+    final generation = _generation;
+    if (active != null) {
+      if (!flushOutbox || _refreshFlushesOutbox) return active;
+      // A normal refresh requested during a read-only refresh must still
+      // flush, but must not inherit work from an account that has since left.
+      return active.then<void>((_) async {
+        if (_current(generation)) await _refresh();
+      });
+    }
+    _refreshFlushesOutbox = flushOutbox;
+    late final Future<void> work;
+    work =
+        _performRefresh(
+          connection!,
+          shell,
+          generation,
+          flushOutbox: flushOutbox,
+        ).whenComplete(() {
+          if (identical(_refreshWork, work)) _refreshWork = null;
+        });
     _refreshWork = work;
-    return work.whenComplete(() {
-      if (identical(_refreshWork, work)) _refreshWork = null;
-    });
+    return work;
   }
 
   Future<void> _performRefresh(
     HostConnection sessionConnection,
     ClientShellController sessionShell,
-    int generation,
-  ) async {
+    int generation, {
+    required bool flushOutbox,
+  }) async {
     try {
       // `/host` is administrator-only on the current host. A friend client
       // legitimately receives 403; that must mean isHostMachine=false rather
@@ -595,7 +613,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       );
       _conversations = conversations;
       _online = true;
-      await sessionShell.flush();
+      if (flushOutbox) await sessionShell.flush();
       for (final conversation in conversations) {
         if (!_current(generation) || locked) return;
         await sessionConnection.sync(
@@ -770,6 +788,24 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _error = null;
       notifyListeners();
     }
+  }
+
+  @override
+  Future<bool> refreshForOwnAiChat() async {
+    if (_busy ||
+        !authenticated ||
+        !online ||
+        _sessionRejected ||
+        locked ||
+        _switching ||
+        _disposed ||
+        connection == null ||
+        _refreshWork != null) {
+      return false;
+    }
+    final generation = _generation;
+    await _refresh(flushOutbox: false);
+    return _current(generation) && authenticated && online && !locked;
   }
 
   bool _ownAiCurrentSession(int generation, HostConnection session) =>

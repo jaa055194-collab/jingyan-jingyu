@@ -65,6 +65,9 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> selectConversation(String id);
   Future<void> createGroup(String name);
   Future<void> refreshConversations();
+
+  /// Refresh visibility for the owner-AI chat shortcut without flushing sends.
+  Future<bool> refreshForOwnAiChat() async => false;
   Future<void> addGroupMember(String groupId, String accountId);
   bool get canAddMembersToSelectedGroup;
   void updateDraft(String value);

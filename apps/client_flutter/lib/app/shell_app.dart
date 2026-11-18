@@ -84,6 +84,77 @@ class _ShellHomeState extends State<_ShellHome> {
     }
   }
 
+  bool _openingOwnAiChat = false;
+
+  Future<void> openOwnAiChat(BuildContext source, String accountId) async {
+    final model = widget.model;
+    final owner = model.connectedAccountId;
+    final session = model.ownAiSessionContext;
+    final epoch = model.ownAiDirectContext;
+    final initial = model.ownAiDirectState(accountId);
+    final id = initial.conversationId;
+    if (_openingOwnAiChat ||
+        owner == null ||
+        session == null ||
+        epoch == null ||
+        initial.phase != ShellOwnAiDirectPhase.ready ||
+        initial.enabled != true ||
+        initial.profileId?.isNotEmpty != true ||
+        initial.revision == null ||
+        id == null ||
+        id.isEmpty) {
+      return;
+    }
+
+    bool current() {
+      if (!mounted ||
+          !source.mounted ||
+          !settings ||
+          !identical(widget.model, model) ||
+          !model.authenticated ||
+          model.locked ||
+          model.busy ||
+          model.connectedAccountId != owner ||
+          model.ownAiSessionContext != session ||
+          !identical(model.ownAiDirectContext, epoch) ||
+          !model.ownAiAccounts.any(
+            (ai) => ai.accountId == accountId && !ai.disabled,
+          )) {
+        return false;
+      }
+      final state = model.ownAiDirectState(accountId);
+      return state.phase == ShellOwnAiDirectPhase.ready &&
+          state.enabled == true &&
+          state.profileId == initial.profileId &&
+          state.revision == initial.revision &&
+          state.conversationId == id;
+    }
+
+    if (!current() || !model.online) return;
+    _openingOwnAiChat = true;
+    try {
+      final refreshed = await model.refreshForOwnAiChat();
+      if (!mounted || !current()) return;
+      if (!refreshed ||
+          !model.online ||
+          !model.conversations.any((c) => c.id == id && c.kind == 'direct')) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('未能找到该私聊，请刷新授权状态后再试。')));
+        return;
+      }
+      await model.selectConversation(id);
+      if (current() && model.online && model.selectedConversationId == id) {
+        setState(() {
+          destination = 0;
+          settings = false;
+          mobileChat = true;
+        });
+      }
+    } finally {
+      _openingOwnAiChat = false;
+    }
+  }
+
   void openWorldSetup() {
     final model = widget.model;
     Navigator.of(context).push(
@@ -212,6 +283,7 @@ class _ShellHomeState extends State<_ShellHome> {
           ? SettingsScreen(
               model: model,
               onBack: () => setState(() => settings = false),
+              onOpenOwnAiChat: openOwnAiChat,
             )
           : destination == 4
           ? world()

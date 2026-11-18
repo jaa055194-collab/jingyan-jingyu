@@ -21,9 +21,15 @@ import '../voice/voice_screen.dart';
 import '../world/world_status_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, required this.model, required this.onBack});
+  const SettingsScreen({
+    super.key,
+    required this.model,
+    required this.onBack,
+    this.onOpenOwnAiChat,
+  });
   final ShellViewModel model;
   final VoidCallback onBack;
+  final Future<void> Function(BuildContext, String)? onOpenOwnAiChat;
 
   /// Builds the lifecycle/backup screen, wiring the real [LifecycleApi] when a
   /// host connection exists so export/import are usable. Cleanup stays disabled
@@ -492,7 +498,11 @@ class SettingsScreen extends StatelessWidget {
                         '${ai.displayName} · ${ai.disabled ? "已停用" : "未停用"}',
                       ),
                       SelectableText(ai.accountId),
-                      _OwnAiDirectControls(model: model, ai: ai),
+                      _OwnAiDirectControls(
+                        model: model,
+                        ai: ai,
+                        onOpenChat: onOpenOwnAiChat,
+                      ),
                     ],
                   ),
                 ),
@@ -505,9 +515,14 @@ class SettingsScreen extends StatelessWidget {
 }
 
 class _OwnAiDirectControls extends StatelessWidget {
-  const _OwnAiDirectControls({required this.model, required this.ai});
+  const _OwnAiDirectControls({
+    required this.model,
+    required this.ai,
+    required this.onOpenChat,
+  });
   final ShellViewModel model;
   final ShellOwnedAi ai;
+  final Future<void> Function(BuildContext, String)? onOpenChat;
 
   @override
   Widget build(BuildContext context) {
@@ -563,6 +578,17 @@ class _OwnAiDirectControls extends StatelessWidget {
                       )
                     : null,
                 child: Text(state.enabled! ? '撤销私聊授权' : '授权主人私聊'),
+              ),
+            if (ready &&
+                state.enabled == true &&
+                state.conversationId?.isNotEmpty == true &&
+                onOpenChat != null)
+              TextButton(
+                key: Key('own-ai-direct-chat-${ai.accountId}'),
+                onPressed: available
+                    ? () => onOpenChat!(context, ai.accountId)
+                    : null,
+                child: const Text('打开私聊'),
               ),
           ],
         ),
