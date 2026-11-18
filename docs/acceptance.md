@@ -279,4 +279,4 @@ flutter test test/voice_call_list_api_test.dart test/voice_call_list_screen_test
 本次未运行全仓套件、实时模型调用、客户端与真实宿主联调或真机验收。
 
 **历史实测（不计入本次复跑）**：在 #102 的 `63f4c2e` 修订上，本地显式启用进程内 `GuardedHttpTransport(autoUncompress: true)`，运行 `worker_e2e_live_assembly_test`；真实 `auto` 回复非空，canonical `s2` 回复持久化到 SQLite，重开可读，预算差与结算用量一致。
-该集成测试不走默认启动链路。生产模型出站装配走 `ModelRuntime.withProcess` → `ProcessHttpTransport` → `bin/http_worker.dart`，worker 未显式开启 gzip。**生产子进程出站与宿主默认启动端到端均未由上述测试验证**。
+该集成测试不走默认启动链路。M15 复跑基线 `0c23edd` 的模型子进程未显式启用 gzip；#126 仅在 `ModelRuntime.withProcess` 的模型出站装配中经 `ProcessHttpTransport` 向 `bin/http_worker.dart` 显式传入 gzip opt-in，其他调用方默认行为不变。**打包 worker 成功出站与宿主默认启动端到端仍未验证**。
