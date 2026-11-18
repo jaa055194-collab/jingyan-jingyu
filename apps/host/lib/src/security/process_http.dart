@@ -77,10 +77,17 @@ final class ProcessHttpTransport {
       if (input.length > _maxIpcBytes) {
         return err(FailureCode.unavailable, '请求超过进程通信限额');
       }
-      child = await Process.start(executable, [
-        workerPath,
-        if (autoUncompress) '--decode-gzip',
-      ]);
+      // Keep deployment credentials out of the child's ambient environment.
+      // Windows still needs SystemRoot when the Dart executable starts a script.
+      child = await Process.start(
+        executable,
+        [workerPath, if (autoUncompress) '--decode-gzip'],
+        environment: {
+          if (Platform.isWindows && Platform.environment['SystemRoot'] != null)
+            'SystemRoot': Platform.environment['SystemRoot']!,
+        },
+        includeParentEnvironment: false,
+      );
       final process = child;
       final exit = process.exitCode.then((code) {
         exited = true;
