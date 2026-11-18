@@ -1,6 +1,6 @@
 # Friend actions — Flutter painter comparison
 
-Before: `4ea0f6b` (main includes #116 and #124). After: `40b28f7762ab193479e1abc732da647e048ae975`.
+Before: `4ea0f6b` (main includes #116 and #124). After images were captured at `40b28f7762ab193479e1abc732da647e048ae975` and re-rendered at product revision `44fbf626815504ac3d0b68c51b1c4e5995dad6e0`. The pending, unbound, and empty After PNGs all matched the existing files byte-for-byte (SHA-256). The new account-ID fallback applies only to names that become blank after control-character replacement, a separate case covered by a widget regression.
 
 | Scene | Before | After |
 | --- | --- | --- |
