@@ -14,7 +14,41 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart' as crypto;
 
+import 'live2d_preview_inflate_stub.dart'
+    if (dart.library.io) 'live2d_preview_inflate_io.dart';
 import 'plugin_package.dart';
+
+/// Checked renderer inputs only. Names are generated, never taken from the ZIP.
+/// This is not a fully decoded model or a ready-to-render signal.
+final class Live2DPreviewBundle {
+  Live2DPreviewBundle._(Map<String, Uint8List> files)
+      : files = Map.unmodifiable(files);
+
+  String get model3Name => 'model.model3.json';
+  final Map<String, Uint8List> files;
+}
+
+/// Prepare an isolated static preview, without extracting arbitrary ZIP entries.
+/// Callers must cap file reads before passing their bytes here, and must not
+/// expose these resources to a network-enabled or untrusted viewer.
+Live2DPreviewBundle prepareLive2DPreview(
+  Uint8List bytes, {
+  Live2DPackageLimits limits = const Live2DPackageLimits(),
+  int maxArchiveBytes = 160 * 1024 * 1024,
+  int maxPreviewBytes = 96 * 1024 * 1024,
+}) {
+  if (maxArchiveBytes < 1 || bytes.length > maxArchiveBytes) {
+    throw const FormatException('Live2D ZIP exceeds the preview input cap');
+  }
+  final output = <String, Uint8List>{};
+  final result = _validateLive2DPackage(
+    bytes, limits: limits, preview: output, maxPreviewBytes: maxPreviewBytes,
+  );
+  if (!result.ok) {
+    throw FormatException('Live2D preview rejected: ${result.issues.first.code.name}');
+  }
+  return Live2DPreviewBundle._(output);
+}
 
 /// Safety and resource limits for a local Live2D package.
 class Live2DPackageLimits {
@@ -206,7 +240,7 @@ class _LimitedEntryOutput extends OutputStream {
 
 // Do not use ArchiveFile.content: it materializes the entry before checking
 // its declared size. Selected entries are read once and checked against CRC.
-List<int> _readVerifiedEntry(ArchiveFile file) {
+List<int> _readVerifiedEntry(ArchiveFile file, {required bool forPreview}) {
   final raw = file.rawContent;
   if (raw == null || file.size < 0) {
     throw const FormatException('missing ZIP entry data');
@@ -219,9 +253,14 @@ List<int> _readVerifiedEntry(ArchiveFile file) {
       }
       bytes = raw.toUint8List();
     case ArchiveFile.DEFLATE:
-      final output = _LimitedEntryOutput(file.size);
-      Inflate.stream(InputStream(raw.toUint8List()), output);
-      bytes = output.getBytes();
+      final input = raw.toUint8List();
+      if (forPreview) {
+        bytes = inflatePreviewEntry(input, file.size);
+      } else {
+        final output = _LimitedEntryOutput(file.size);
+        Inflate.stream(InputStream(input), output);
+        bytes = output.getBytes();
+      }
     default:
       throw const FormatException('unsupported ZIP entry compression');
   }
@@ -242,16 +281,24 @@ class _PreScan {
 _PreScan _preScanCentralDirectory(
     Uint8List bytes, Live2DPackageLimits limits) {
   final issues = <Live2DPackageIssue>[];
-  if (bytes.length < 22) return _PreScan(true, issues);
+  const invalidEnd = Live2DPackageIssue(
+      Live2DPackageIssueCode.notZip, 'missing or malformed ZIP end record');
+  if (bytes.length < 22) return const _PreScan(false, [invalidEnd]);
   final data = ByteData.sublistView(bytes);
   var eocd = -1;
-  for (var i = bytes.length - 22; i >= 0; i--) {
+  // Match archive's last-signature selection, but reject a candidate that
+  // cannot be a complete end record. Do not let the decoder select another.
+  final minOffset = bytes.length > 65557 ? bytes.length - 65557 : 0;
+  for (var i = bytes.length - 5; i >= minOffset; i--) {
     if (data.getUint32(i, Endian.little) == 0x06054b50) {
       eocd = i;
       break;
     }
   }
-  if (eocd < 0) return _PreScan(true, issues);
+  if (eocd < 0 || eocd + 22 > bytes.length ||
+      eocd + 22 + data.getUint16(eocd + 20, Endian.little) != bytes.length) {
+    return const _PreScan(false, [invalidEnd]);
+  }
 
   final rawEntries = data.getUint16(eocd + 10, Endian.little);
   final cdSize = data.getUint32(eocd + 12, Endian.little);
@@ -266,14 +313,15 @@ _PreScan _preScanCentralDirectory(
         Live2DPackageIssueCode.notZip, 'zip64 packages are not supported'));
     return _PreScan(false, issues);
   }
+  if (rawEntries > limits.maxEntries) {
+    return _PreScan(false, [Live2DPackageIssue(Live2DPackageIssueCode.tooManyEntries,
+        '$rawEntries entries > ${limits.maxEntries}')]);
+  }
   final cdEnd = cdOffset + cdSize;
-  if (cdOffset < 0 || cdEnd > bytes.length || cdOffset + 46 > cdEnd) {
-    if (cdOffset + 46 > cdEnd && cdEnd <= bytes.length) {
-      return _PreScan(true, issues); // empty/short directory handled by decoder
-    }
-    issues.add(const Live2DPackageIssue(
-        Live2DPackageIssueCode.notZip, 'central directory out of bounds'));
-    return _PreScan(false, issues);
+  if (cdEnd != eocd || data.getUint16(eocd + 4, Endian.little) != 0 ||
+      data.getUint16(eocd + 6, Endian.little) != 0 ||
+      data.getUint16(eocd + 8, Endian.little) != rawEntries) {
+    return const _PreScan(false, [invalidEnd]);
   }
 
   var off = cdOffset;
@@ -282,12 +330,28 @@ _PreScan _preScanCentralDirectory(
   var blocking = false;
   var malformed = false;
   while (off + 46 <= cdEnd) {
-    if (data.getUint32(off, Endian.little) != 0x02014b50) {
+    if (count >= rawEntries ||
+        data.getUint32(off, Endian.little) != 0x02014b50) {
       malformed = true;
       break;
     }
     final versionMadeBy = data.getUint16(off + 4, Endian.little);
+    final compressedSize = data.getUint32(off + 20, Endian.little);
     final uncompressedSize = data.getUint32(off + 24, Endian.little);
+    final localOffset = data.getUint32(off + 42, Endian.little);
+    if (compressedSize == 0xffffffff || uncompressedSize == 0xffffffff ||
+        data.getUint16(off + 34, Endian.little) != 0 || localOffset + 30 > cdOffset ||
+        data.getUint32(localOffset, Endian.little) != 0x04034b50) {
+      malformed = true;
+      break;
+    }
+    final payloadOffset = localOffset + 30 +
+        data.getUint16(localOffset + 26, Endian.little) +
+        data.getUint16(localOffset + 28, Endian.little);
+    if (payloadOffset + compressedSize > cdOffset) {
+      malformed = true;
+      break;
+    }
     final nameLen = data.getUint16(off + 28, Endian.little);
     final extraLen = data.getUint16(off + 30, Endian.little);
     final commentLen = data.getUint16(off + 32, Endian.little);
@@ -343,6 +407,14 @@ Live2DPackageValidation validateLive2DPackage(
   Uint8List bytes, {
   Live2DPackageLimits limits = const Live2DPackageLimits(),
   String? expectedSha256Hex,
+}) => _validateLive2DPackage(bytes, limits: limits, expectedSha256Hex: expectedSha256Hex);
+
+Live2DPackageValidation _validateLive2DPackage(
+  Uint8List bytes, {
+  required Live2DPackageLimits limits,
+  String? expectedSha256Hex,
+  Map<String, Uint8List>? preview,
+  int maxPreviewBytes = 0,
 }) {
   final issues = <Live2DPackageIssue>[];
   final sha256Hex = crypto.sha256.convert(bytes).toString();
@@ -388,9 +460,31 @@ Live2DPackageValidation validateLive2DPackage(
   Archive archive;
   final headers = <String, ZipFileHeader>{};
   try {
-    final decoder = ZipDecoder();
-    archive = decoder.decodeBytes(bytes);
-    for (final header in decoder.directory.fileHeaders) {
+    final ZipDirectory directory;
+    if (preview == null) {
+      final decoder = ZipDecoder();
+      archive = decoder.decodeBytes(bytes);
+      directory = decoder.directory;
+    } else {
+      // Read metadata and raw streams only; ZipDecoder eagerly expands links.
+      directory = ZipDirectory.read(InputStream(bytes));
+      archive = Archive();
+      for (final header in directory.fileHeaders) {
+        final entry = header.file!;
+        final type = (header.externalFileAttributes! >> 16) & 0xf000;
+        final unix = header.versionMadeBy >> 8 == 3;
+        if (unix && type == 0xa000) {
+          throw const FormatException('symbolic links are not preview inputs');
+        }
+        final file = ArchiveFile(entry.filename, entry.uncompressedSize!, entry,
+            entry.compressionMethod)
+          ..isFile = !entry.filename.endsWith('/') &&
+              (!unix || type == 0 || type == 0x8000)
+          ..crc32 = entry.crc32;
+        archive.addFile(file);
+      }
+    }
+    for (final header in directory.fileHeaders) {
       final path = sanitizePackageEntryPath(header.filename);
       if (path == null) continue;
       if (headers.containsKey(path)) {
@@ -507,7 +601,7 @@ Live2DPackageValidation validateLive2DPackage(
           (zipFile.flags & 1) != 0) {
         throw const FormatException('ZIP entry metadata mismatch');
       }
-      return _readVerifiedEntry(file);
+      return _readVerifiedEntry(file, forPreview: preview != null);
     } catch (_) {
       issues.add(Live2DPackageIssue(Live2DPackageIssueCode.notZip,
           'invalid ZIP entry data', path: path));
@@ -643,9 +737,27 @@ Live2DPackageValidation validateLive2DPackage(
     }
   }
 
+  if (preview != null && issues.isNotEmpty) return fail(model3Path: model3Path);
+
+  var previewBytes = 0;
+  void checkPreviewBudget(int size) {
+    if (preview != null && size > maxPreviewBytes - previewBytes) {
+      throw const FormatException('Live2D preview exceeds its resource byte cap');
+    }
+  }
+
+  void retain(String name, List<int> data) {
+    checkPreviewBudget(data.length);
+    // Stored ZIP bytes may alias the caller's original buffer.
+    preview![name] = Uint8List.fromList(data).asUnmodifiableView();
+    previewBytes += data.length;
+  }
+
   int totalPixels = 0;
   if (mocPath != null && entries.containsKey(mocPath)) {
-    final mocBytes = verify(entries[mocPath]!, mocPath);
+    final mocEntry = entries[mocPath]!;
+    checkPreviewBudget(mocEntry.size);
+    final mocBytes = verify(mocEntry, mocPath);
     if (mocBytes == null) return fail(model3Path: model3Path, mocPath: mocPath);
     if (!_isMoc3(mocBytes)) {
       issues.add(Live2DPackageIssue(Live2DPackageIssueCode.badMocMagic,
@@ -656,16 +768,21 @@ Live2DPackageValidation validateLive2DPackage(
       if (version < 1 || version > 5) {
         issues.add(Live2DPackageIssue(Live2DPackageIssueCode.badMocMagic,
             'unsupported MOC3 version $version', path: mocPath));
+      } else if (preview != null) {
+        retain('model.moc3', mocBytes);
       }
     }
   }
 
+  final previewNames = <String, String>{};
   final dimensionsByPath = <String, ({int width, int height})?>{};
   for (final path in texturePaths) {
     final file = entries[path];
     if (file == null) continue;
+    List<int>? textureBytes;
     if (!dimensionsByPath.containsKey(path)) {
-      final textureBytes = verify(file, path);
+      checkPreviewBudget(file.size);
+      textureBytes = verify(file, path);
       if (textureBytes == null) {
         return fail(model3Path: model3Path, mocPath: mocPath);
       }
@@ -696,9 +813,23 @@ Live2DPackageValidation validateLive2DPackage(
       break;
     }
     totalPixels += width * height;
+    if (preview != null && textureBytes != null) {
+      final name = 'texture-${previewNames.length}.png';
+      previewNames[path] = name;
+      retain(name, textureBytes);
+    }
   }
 
   final ok = issues.isEmpty;
+  if (preview != null && ok) {
+    retain('model.model3.json', utf8.encode(jsonEncode({
+      'Version': 3,
+      'FileReferences': {
+        'Moc': 'model.moc3',
+        'Textures': [for (final path in texturePaths) previewNames[path]!],
+      },
+    })));
+  }
   return Live2DPackageValidation._(
     ok: ok,
     model3Path: model3Path,

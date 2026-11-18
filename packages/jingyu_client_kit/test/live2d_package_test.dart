@@ -76,6 +76,42 @@ bool _has(Live2DPackageValidation r, Live2DPackageIssueCode code) =>
     r.issues.any((i) => i.code == code);
 
 void main() {
+  group('prepareLive2DPreview', () {
+    test('emits only generated renderer inputs in texture-slot order', () {
+      final zip = _zip([
+        ..._validEntries(model3Text: _model3(textures: ['tex0.png', 'tex1.png', 'tex0.png'])),
+        ArchiveFile.noCompress('model/tex1.png', 33, Uint8List.fromList(_pngHeader(32, 16))),
+        _textFile('notes.txt', 'not a renderer resource'),
+      ]);
+      final bundle = prepareLive2DPreview(zip);
+      expect(bundle.model3Name, 'model.model3.json');
+      expect(bundle.files.keys, unorderedEquals([
+        'model.model3.json', 'model.moc3', 'texture-0.png', 'texture-1.png',
+      ]));
+      expect(bundle.files['model.moc3'], _moc3());
+      expect(jsonDecode(utf8.decode(bundle.files[bundle.model3Name]!)), {
+        'Version': 3,
+        'FileReferences': {'Moc': 'model.moc3', 'Textures': ['texture-0.png', 'texture-1.png', 'texture-0.png']},
+      });
+      expect(() => bundle.files.clear(), throwsUnsupportedError);
+      expect(() => bundle.files['model.moc3']![0] = 0, throwsUnsupportedError);
+    });
+
+    test('caps the aggregate bytes of generated preview resources', () {
+      final zip = _zip(_validEntries());
+      final result = prepareLive2DPreview(zip);
+      final size = result.files.values.fold(0, (sum, file) => sum + file.length);
+      expect(prepareLive2DPreview(zip, maxPreviewBytes: size).files.keys,
+          unorderedEquals(result.files.keys));
+      expect(() => prepareLive2DPreview(zip, maxPreviewBytes: size - 1),
+          throwsFormatException);
+    });
+
+    test('refuses invalid packages and honors the input cap', () {
+      expect(() => prepareLive2DPreview(Uint8List(1)), throwsFormatException);
+      expect(() => prepareLive2DPreview(_zip(_validEntries()), maxArchiveBytes: 1), throwsFormatException);
+    });
+  });
   group('validateLive2DPackage: valid', () {
     test('accepts a model3 package and reports its resources', () {
       final r = validateLive2DPackage(_zip(_validEntries()));
