@@ -385,11 +385,7 @@ WHERE operator.id = ? AND operator.kind = 'human' AND operator.disabled = 0
       } else {
         await tx.execute(
           'INSERT OR REPLACE INTO group_announcements(conversation_id, sealed, updated_at) VALUES (?, ?, ?)',
-          [
-            conversationId,
-            sealed,
-            clock.now().toUtc().millisecondsSinceEpoch,
-          ],
+          [conversationId, sealed, clock.now().toUtc().millisecondsSinceEpoch],
         );
       }
       return const Ok<void>(null);
@@ -422,7 +418,10 @@ WHERE operator.id = ? AND operator.kind = 'human' AND operator.disabled = 0
         aad: 'conversation:announcement:$conversationId',
       );
       if (decoded.isErr) {
-        return err(FailureCode.internal, 'stored announcement cannot be decoded');
+        return err(
+          FailureCode.internal,
+          'stored announcement cannot be decoded',
+        );
       }
       return Ok<String?>(decoded.value);
     });
@@ -489,14 +488,24 @@ WHERE account.id = ? AND account.disabled = 0
   @override
   Future<int?> firstVisibleSeq(String accountId, String conversationId) async {
     if (!_validId(accountId) || !_validId(conversationId)) return null;
-    return _database.transaction((tx) async {
-      if (!await _accountExists(tx, accountId)) return null;
-      final rows = await tx.query(
-        'SELECT m.first_visible_seq FROM social_members m INNER JOIN social_conversations c ON c.id = m.conversation_id WHERE m.account_id = ? AND m.conversation_id = ?',
-        [accountId, conversationId],
-      );
-      return rows.isEmpty ? null : rows.single['first_visible_seq'] as int;
-    });
+    return _database.transaction(
+      (tx) => firstVisibleSeqInTransaction(tx, accountId, conversationId),
+    );
+  }
+
+  /// Reads the same authorization bound inside a caller-owned transaction.
+  Future<int?> firstVisibleSeqInTransaction(
+    Tx tx,
+    String accountId,
+    String conversationId,
+  ) async {
+    if (!_validId(accountId) || !_validId(conversationId)) return null;
+    if (!await _accountExists(tx, accountId)) return null;
+    final rows = await tx.query(
+      'SELECT m.first_visible_seq FROM social_members m INNER JOIN social_conversations c ON c.id = m.conversation_id WHERE m.account_id = ? AND m.conversation_id = ?',
+      [accountId, conversationId],
+    );
+    return rows.isEmpty ? null : rows.single['first_visible_seq'] as int;
   }
 
   @override

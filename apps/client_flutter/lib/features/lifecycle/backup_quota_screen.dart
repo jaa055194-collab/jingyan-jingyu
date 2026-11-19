@@ -142,9 +142,15 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
       if (!mounted) return;
       setState(() {
         _exported = bundle;
+        final coverage = bundle.manifest['coverage'];
+        final chatOnly =
+            coverage is Map &&
+            coverage['scope'] == 'chatHistory' &&
+            coverage['completeAccountExport'] == false;
         _actionNotice =
             '已导出到内存：文件 ${bundle.fileCount} 个，计数 ${bundle.counts}，'
-            '校验和${bundle.hasChecksums ? '存在' : '缺失'}。仅显示摘要，不显示文件内容或密钥。';
+            '校验和${bundle.hasChecksums ? '存在' : '缺失'}。仅显示摘要，不显示文件内容或密钥。'
+            '${chatOnly ? '\n当前仅导出有权读取的聊天记录；不包含人格、记忆和附件内容，不是完整账号备份。' : ''}';
       });
     } catch (_) {
       if (mounted) {

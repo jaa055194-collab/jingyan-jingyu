@@ -50,6 +50,7 @@ import 'src/models/models_module.dart';
 import 'src/security/url_guard.dart';
 import 'src/security/process_http.dart';
 import 'src/messages/sqlite_message_store.dart';
+import 'src/social/combined_membership.dart';
 import 'src/social/conversation_service.dart';
 import 'src/social/social_migrations.dart';
 import 'src/social/conversation_preferences_migration.dart';
@@ -63,6 +64,7 @@ import 'src/social/social_module.dart';
 import 'src/storage/migrations.dart';
 import 'src/storage/storage_module.dart';
 import 'src/config.dart';
+import 'src/http_server.dart' show maxJsonBodyBytes;
 import 'src/messages/blind_index.dart';
 import 'src/messages/favorite_blind_index.dart';
 import 'src/messages/favorites.dart';
@@ -93,8 +95,10 @@ import 'src/world/world_module.dart';
 import 'src/world/sqlite_avatar_registry.dart';
 import 'src/world/sqlite_presence_service.dart';
 import 'src/world/sqlite_space_layout_store.dart';
+import 'src/lifecycle/chat_history_export_source.dart';
 import 'src/lifecycle/cleanup.dart';
 import 'src/lifecycle/departure.dart';
+import 'src/lifecycle/export.dart';
 import 'src/lifecycle/lifecycle_migrations.dart';
 import 'src/lifecycle/lifecycle_module.dart';
 import 'src/lifecycle/quota_service.dart';
@@ -206,6 +210,31 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       'SELECT id FROM account WHERE id = ? AND disabled = 0',
       [id],
     )).isNotEmpty,
+  );
+  final direct = PrivateConversations(db: storage.database, clock: clock);
+  final membership = CombinedMembership(
+    db: storage.database,
+    group: conversations,
+    direct: direct,
+    groupHistoryInTransaction: conversations.firstVisibleSeqInTransaction,
+  );
+  final chatExport = ExportService(
+    clock: clock,
+    maxImportRequestBytes: maxJsonBodyBytes,
+    source: ChatHistoryExportSource(
+      listConversationIds: (owner) async {
+        final groups = (await conversations.list(owner)).value;
+        final directs = (await direct.list(owner)).value;
+        return [
+          for (final group in groups) group.id,
+          for (final conversation in directs) conversation.id,
+        ];
+      },
+      firstVisibleSeq: membership.firstVisibleSeq,
+      readVisibilitySnapshot: membership.historySnapshot,
+      headSeq: messages.headSeq,
+      readPage: messages.since,
+    ),
   );
   final accounts = AccountsDomain(
     store: SqlAccountsStore(storage.database),
@@ -433,7 +462,7 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
     ),
     AttachmentsModule(attachments: attachments),
     SocialModule(
-      direct: PrivateConversations(db: storage.database, clock: clock),
+      direct: direct,
       conversations: conversations,
       database: storage.database,
       clock: clock,
@@ -475,6 +504,7 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
     LifecycleModule(
       clock: clock,
       audit: storage.auditLog,
+      exportService: chatExport,
       quota: QuotaService(
         store: SqliteQuotaStore(database: storage.database, clock: clock),
       ),
