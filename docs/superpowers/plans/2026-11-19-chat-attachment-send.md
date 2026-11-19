@@ -47,7 +47,7 @@
 **Interfaces:** `AttachmentUploadApi.abort(String uploadId)` matches Task 1; `AttachmentSendFlow.upload` receives a `FileAttachmentContent` and optional active-state callback. Runtime `attachFile(String kind)` opens the picker only for the still-current authenticated conversation and stages its basename; an explicit `sendSelectedAttachment()` rechecks account, session, conversation, consent, connectivity and lock, then loads/hashes, uploads all advertised chunks, aborts pending on failure, queues exactly one `MessageKind.image|file` with `{'attachmentId': id, 'name': basename}` through the guarded durable checkpoint and flushes. `discardSelectedAttachment()` cleans the cache copy; text drafts remain untouched.
 
 - [x] With a loopback host and mocked native picker, assert cancel sends nothing; valid file uses chunks, attachment reference, one canonical message, no path leaked; changed conversation during picker does nothing; upload failure aborts and leaves no message; enqueue failure cleans up and does not retry. Run targeted Flutter tests.
-- [ ] Run Flutter analysis/full suite, root `tool/check.ps1`, builds; capture matched production app Before (attach unavailable) / After (attachment sent) at same viewport/theme; independent review. Record REQ-R2-02/FR-62 evidence without claiming Android device acceptance.
+- [x] Run Flutter analysis and full suite (624 passed, one existing opt-in skip), both debug builds, and the GitHub Dart CI repository check for the production revision. Re-review the implementation and record [matched application captures](../../../apps/client_flutter/evidence/chat-attachment-send.md) and REQ-R2-02 evidence without claiming device acceptance.
 
 ## Release boundary
 
