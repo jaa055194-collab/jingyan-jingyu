@@ -328,6 +328,215 @@ void main() {
       expect(done.value['sha256'], sha256.convert(bytes).toString());
     });
 
+    group('chunk recovery', () {
+      Future<String> startUpload(int size) async {
+        final init = await service.initiateUpload(
+          ownerAccountId: owner,
+          mime: 'application/octet-stream',
+          size: size,
+          kind: 'file',
+        );
+        return init.value['uploadId'] as String;
+      }
+
+      Future<Result<Map<String, Object?>>> sendChunk(
+        String uploadId,
+        int index,
+        String text,
+      ) => service.uploadChunk(
+        ownerAccountId: owner,
+        uploadId: uploadId,
+        index: index,
+        bytes: utf8.encode(text),
+      );
+
+      File partFor(String uploadId) => File('$mediaDir/$owner/$uploadId.part');
+
+      test(
+        'reopens a committed prefix and replaces only the stray suffix',
+        () async {
+          final uploadId = await startUpload(6);
+          expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+          final part = partFor(uploadId);
+          await part.writeAsString('X', mode: FileMode.append, flush: true);
+          await db.close();
+          db = await SqliteDatabase.open(
+            '${directory.path}/host.sqlite',
+            migrations: [...allMigrations, ...messagesMigrations],
+          );
+          service = AttachmentService(
+            database: db,
+            cipher: cipher,
+            mediaDir: mediaDir,
+            clock: clock,
+            diskSpace: ampleDisk,
+          );
+
+          final duplicate = await sendChunk(uploadId, 0, 'ABC');
+          expect(duplicate.value, {'received': 3, 'nextChunk': 1});
+          expect(
+            await part.readAsString(),
+            'abcX',
+          ); // A duplicate does not write.
+          final next = await sendChunk(uploadId, 1, 'def');
+          expect(next.value, {'received': 6, 'nextChunk': 2});
+          expect(await part.readAsString(), 'abcdef');
+
+          final digest = sha256.convert(utf8.encode('abcdef')).toString();
+          final done = await service.completeUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+            expectedSha256: digest,
+          );
+          expect(done.value['sha256'], digest);
+          final attachmentId = done.value['id'];
+          expect(
+            await File('$mediaDir/$owner/$attachmentId').readAsString(),
+            'abcdef',
+          );
+        },
+      );
+
+      test(
+        'completion hashes a fully committed prefix without a stray suffix',
+        () async {
+          final uploadId = await startUpload(3);
+          expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+          final part = partFor(uploadId);
+          await part.writeAsString('X', mode: FileMode.append, flush: true);
+
+          final digest = sha256.convert(utf8.encode('abc')).toString();
+          final done = await service.completeUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+            expectedSha256: digest,
+          );
+          expect(done.isOk, isTrue, reason: '${done.failureOrNull}');
+          expect(done.value['sha256'], digest);
+          final attachmentId = done.value['id'];
+          expect(
+            await File('$mediaDir/$owner/$attachmentId').readAsString(),
+            'abc',
+          );
+        },
+      );
+
+      test('completion can publish an empty file without a part', () async {
+        final uploadId = await startUpload(0);
+        final done = await service.completeUpload(
+          ownerAccountId: owner,
+          uploadId: uploadId,
+        );
+        expect(done.value['size'], 0);
+        final attachmentId = done.value['id'];
+        expect(await File('$mediaDir/$owner/$attachmentId').length(), 0);
+      });
+
+      for (final missing in [false, true]) {
+        test(
+          'refuses retries with a ${missing ? 'missing' : 'short'} committed prefix',
+          () async {
+            final uploadId = await startUpload(3);
+            expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+            final part = partFor(uploadId);
+            if (missing) {
+              await part.delete();
+            } else {
+              await part.writeAsString('ab', flush: true);
+            }
+
+            final duplicate = await sendChunk(uploadId, 0, 'abc');
+            final next = await sendChunk(uploadId, 1, '');
+            final done = await service.completeUpload(
+              ownerAccountId: owner,
+              uploadId: uploadId,
+            );
+            expect(
+              duplicate.isErr,
+              isTrue,
+              reason: 'duplicate must not acknowledge lost bytes',
+            );
+            expect(
+              next.isErr,
+              isTrue,
+              reason: 'new chunk must not advance the ledger',
+            );
+            expect(done.isErr, isTrue);
+            expect(await part.exists(), !missing);
+            if (!missing) expect(await part.readAsString(), 'ab');
+            final ledger = await db.query(
+              'SELECT received_bytes, next_chunk, status FROM attachment_uploads WHERE id = ?',
+              [uploadId],
+            );
+            expect(ledger.single, {
+              'received_bytes': 3,
+              'next_chunk': 1,
+              'status': 'pending',
+            });
+            expect(await db.query('SELECT id FROM attachments'), isEmpty);
+          },
+        );
+      }
+
+      test('foreign owner cannot mutate or complete a pending part', () async {
+        final uploadId = await startUpload(3);
+        expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+        final part = partFor(uploadId);
+        await part.writeAsString('X', mode: FileMode.append, flush: true);
+
+        final chunk = await service.uploadChunk(
+          ownerAccountId: 'acct-other',
+          uploadId: uploadId,
+          index: 1,
+          bytes: [],
+        );
+        final done = await service.completeUpload(
+          ownerAccountId: 'acct-other',
+          uploadId: uploadId,
+        );
+        expect(chunk.failureOrNull?.code, FailureCode.notFound);
+        expect(done.failureOrNull?.code, FailureCode.notFound);
+        expect(await part.readAsString(), 'abcX');
+        expect(await db.query('SELECT id FROM attachments'), isEmpty);
+      });
+
+      test('overlapping retries check the committed chunk size', () async {
+        final uploadId = await startUpload(3);
+        final results = await Future.wait([
+          sendChunk(uploadId, 0, 'abc'),
+          sendChunk(uploadId, 0, 'a'),
+        ]);
+        expect(results[0].value, {'received': 3, 'nextChunk': 1});
+        expect(results[1].failureOrNull?.code, FailureCode.invalidArgument);
+        expect(await partFor(uploadId).readAsString(), 'abc');
+      });
+
+      test('overlapping retries and completion publish one copy', () async {
+        final uploadId = await startUpload(3);
+        // Start all operations before yielding: without a per-upload guard
+        // each SQLite SELECT is queued before the first write can commit.
+        final results = await Future.wait([
+          sendChunk(uploadId, 0, 'abc'),
+          sendChunk(uploadId, 0, 'ABC'),
+          service.completeUpload(ownerAccountId: owner, uploadId: uploadId),
+          service.completeUpload(ownerAccountId: owner, uploadId: uploadId),
+        ]);
+        expect(results[0].value, {'received': 3, 'nextChunk': 1});
+        expect(results[1].value, {'received': 3, 'nextChunk': 1});
+        expect(results[2].isOk, isTrue, reason: '${results[2].failureOrNull}');
+        final attachmentId = results[2].value['id'];
+        expect(results[3].failureOrNull?.code, FailureCode.conflict);
+        expect(
+          await File('$mediaDir/$owner/$attachmentId').readAsString(),
+          'abc',
+        );
+        expect(await db.query('SELECT id FROM attachments'), [
+          {'id': attachmentId},
+        ]);
+        expect(await partFor(uploadId).exists(), isFalse);
+      });
+    });
+
     test('declared-size and sha256 mismatches are rejected without inserting',
         () async {
       final bytes = utf8.encode('abcdef');
