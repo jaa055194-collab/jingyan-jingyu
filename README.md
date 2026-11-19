@@ -24,9 +24,10 @@ tool/check.ps1              全仓分析与测试
 
 需要 Dart 3.9 及以上（本机 Flutter 3.50 自带 Dart 3.14）。
 
+首次部署、同机登录和跨设备访问见[Windows 宿主启动与连接](docs/host-setup.md)。开发检查：
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File tool/check.ps1                       # 全部包：pub get + analyze + test
-cd apps/host; dart run bin/server.dart    # 启动宿主，默认 127.0.0.1:8787
+powershell -ExecutionPolicy Bypass -File tool/check.ps1 # pub get + analyze + test
 ```
 
 ## 给实现模型
