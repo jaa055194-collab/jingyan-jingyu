@@ -388,6 +388,7 @@ class ImportService {
     if (sumsText == null || sumsText.trim().isEmpty) {
       return err(FailureCode.invalidArgument, '缺少 SHA256SUMS');
     }
+    final verified = <String>{};
     for (final line in sumsText.split('\n')) {
       if (line.trim().isEmpty) continue;
       final separator = line.indexOf('  ');
@@ -405,6 +406,12 @@ class ImportService {
       if (actual != expected) {
         return err(FailureCode.invalidArgument, 'SHA256 校验失败：$path');
       }
+      verified.add(path);
+    }
+    if (bundle.files.keys.any(
+      (path) => path != ExportService.checksumsFile && !verified.contains(path),
+    )) {
+      return err(FailureCode.invalidArgument, 'SHA256SUMS 未覆盖全部导出文件');
     }
     return const Ok<void>(null);
   }
