@@ -30,4 +30,4 @@
 - [x] Wire default host; root checks passed (host 1,525 passed, 15 existing skips); scoped policy/adapter/default-host 47 passed.
 - [x] Surface honest scope; focused client 17 passed, full Flutter 625 passed / one opt-in skip and analysis clean.
 - [x] Independent final code review found no blockers for this partial export.
-- [ ] Add matched application captures, push and bind PR, then wait final checks and report review-ready (not full R2 or formal release).
+- [x] Add [matched application captures](../../../apps/client_flutter/evidence/chat-export-scope.md), bind PR #146, and publish the reviewed source. Final head checks gate review-ready status; this remains partial chat export, not full R2 or a formal release.
