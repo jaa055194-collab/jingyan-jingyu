@@ -31,39 +31,52 @@ void main() {
     expect(response.status, 404);
   });
 
-  test('history lower bound filters messages on the server', () async {
-    final services = HostServices();
-    final store = InMemoryMessageStore();
-    for (var i = 1; i <= 4; i++) {
-      await store.append(
-        conversationId: 'c',
-        senderId: 'owner',
-        clientMsgId: 'm$i',
-        kind: MessageKind.text,
-        body: {'text': 'message $i'},
+  test(
+    'sync reports the history lower bound independently of the page',
+    () async {
+      final services = HostServices();
+      final store = InMemoryMessageStore();
+      for (var i = 1; i <= 4; i++) {
+        await store.append(
+          conversationId: 'c',
+          senderId: 'owner',
+          clientMsgId: 'm$i',
+          kind: MessageKind.text,
+          body: {'text': 'message $i'},
+        );
+      }
+      services.provide<MembershipCheck>(_History(), owner: 'test');
+      services.provide<HistoryMembershipCheck>(_History(), owner: 'test');
+      final module = MessagesModule(store: store);
+      await module.configure(services);
+      final router = Router();
+      module.mount(router);
+      final pipeline = Pipeline(
+        router: router,
+        authenticate: (_) async =>
+            const Principal(accountId: 'member', deviceId: 'd'),
       );
-    }
-    services.provide<MembershipCheck>(_History(), owner: 'test');
-    services.provide<HistoryMembershipCheck>(_History(), owner: 'test');
-    final module = MessagesModule(store: store);
-    await module.configure(services);
-    final router = Router();
-    module.mount(router);
-    final pipeline = Pipeline(
-      router: router,
-      authenticate: (_) async =>
-          const Principal(accountId: 'member', deviceId: 'd'),
-    );
-    final response = await pipeline.handle(
-      HostRequest(
-        method: 'GET',
-        path: Routes.sync.replaceFirst('{conversationId}', 'c'),
-        query: {'afterSeq': '0', 'limit': '1'},
-      ),
-    );
-    expect(response.status, 200);
-    final data = response.json as Map;
-    expect((data['messages'] as List).map((m) => (m as Map)['seq']), [3]);
-    expect(data['hasMore'], isTrue);
-  });
+      for (final (afterSeq, sequences, hasMore) in [
+        ('0', [3], true),
+        ('3', [4], false),
+        ('99', <int>[], false),
+      ]) {
+        final response = await pipeline.handle(
+          HostRequest(
+            method: 'GET',
+            path: Routes.sync.replaceFirst('{conversationId}', 'c'),
+            query: {'afterSeq': afterSeq, 'limit': '1'},
+          ),
+        );
+        expect(response.status, 200);
+        final data = response.json as Map;
+        expect(data['firstVisibleSeq'], 3, reason: 'afterSeq=$afterSeq');
+        expect(
+          (data['messages'] as List).map((m) => (m as Map)['seq']),
+          sequences,
+        );
+        expect(data['hasMore'], hasMore);
+      }
+    },
+  );
 }

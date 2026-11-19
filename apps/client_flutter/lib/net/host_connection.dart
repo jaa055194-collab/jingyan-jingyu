@@ -172,12 +172,17 @@ class HostConnection {
     return decoded.value as MessageEventFrame;
   }
 
+  /// Validate each page before applying its authorized floor or any rows.
+  /// Legacy hosts can omit the floor; they still have to send contiguous rows.
   Future<void> sync(
     SyncRequestFrame frame,
-    Future<void> Function(MessageEventFrame) accept,
-  ) async {
+    Future<void> Function(MessageEventFrame) accept, {
+    Future<void> Function(int firstVisibleSeq)? applyHistoryFloor,
+    void Function()? checkActive,
+  }) async {
     var after = frame.afterSeq;
     while (true) {
+      checkActive?.call();
       final page = await request(
         'GET',
         Routes.sync.replaceAll(
@@ -186,16 +191,50 @@ class HostConnection {
         ),
         query: {'afterSeq': '$after'},
       );
-      final messages = (page['messages'] as List)
-          .map((e) => decodeMessage((e as Map).cast<String, Object?>()))
-          .toList();
-      for (final message in messages) {
-        if (message.seq != after + 1) throw const FormatException('差集仍存在缺口');
-        await accept(message);
-        after = message.seq;
+      checkActive?.call();
+      final floor = page['firstVisibleSeq'];
+      final rows = page['messages'];
+      final hasMore = page['hasMore'];
+      if ((page.containsKey('firstVisibleSeq') && (floor is! int || floor < 1)) ||
+          rows is! List ||
+          hasMore is! bool ||
+          (hasMore && rows.isEmpty)) {
+        throw const FormatException('差集响应无效');
       }
-      if (page['hasMore'] != true) break;
-      if (messages.isEmpty) throw const FormatException('空差集分页');
+
+      var next = after;
+      if (floor is int && applyHistoryFloor != null && floor - 1 > next) {
+        next = floor - 1;
+      }
+      final messages = <MessageEventFrame>[];
+      for (final row in rows) {
+        if (row is! Map<String, Object?>) {
+          throw const FormatException('消息响应无效');
+        }
+        final message = decodeMessage(row);
+        if (message.conversationId != frame.conversationId ||
+            message.seq <= next ||
+            message.seq != next + 1) {
+          throw const FormatException('差集会话或序号不匹配');
+        }
+        // Parsed numeric overflow can be non-finite; the snapshot cannot
+        // encode it. Reject the entire page before applying its floor or rows.
+        try {
+          jsonEncode(message.body);
+        } on JsonUnsupportedObjectError {
+          throw const FormatException('消息正文无效');
+        }
+        messages.add(message);
+        next = message.seq;
+      }
+      if (floor is int && applyHistoryFloor != null) {
+        await applyHistoryFloor(floor);
+      }
+      for (final message in messages) {
+        await accept(message);
+      }
+      if (!hasMore) return;
+      after = next;
     }
   }
 
