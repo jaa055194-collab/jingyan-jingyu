@@ -252,6 +252,28 @@ void main() {
     },
   );
 
+  test('durable enqueue failure leaves no sendable in-memory item', () async {
+    final store = MemoryPersistence();
+    final shell = historyShell(store);
+    await shell.initialize();
+    store.fail = true;
+    await expectLater(
+      shell.enqueueDurable('c', MessageKind.file, {
+        'attachmentId': 'attachment-1',
+      }),
+      throwsStateError,
+    );
+    expect(shell.outbox.items, isEmpty);
+    store.fail = false;
+    final id = await shell.enqueueDurable('c', MessageKind.file, {
+      'attachmentId': 'attachment-1',
+    });
+    expect(shell.outbox.items.single.clientMsgId, id);
+    final reboot = historyShell(store);
+    await reboot.initialize();
+    expect(reboot.outbox.items.single.clientMsgId, id);
+  });
+
   test('invalid floors and an unchanged floor never write', () async {
     final store = MemoryPersistence();
     final shell = historyShell(store);

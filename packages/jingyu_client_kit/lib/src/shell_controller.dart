@@ -93,6 +93,25 @@ class ClientShellController {
     return id;
   });
 
+  /// Queues an item only after its durable checkpoint. Unlike [enqueue], a
+  /// failed checkpoint does not leave an in-memory item that later retries can
+  /// submit without a backing attachment or other external resource.
+  Future<String> enqueueDurable(
+    String conversationId,
+    MessageKind kind,
+    Map<String, Object?> body, {
+    void Function()? checkActive,
+  }) => _serial.run(() async {
+    _requireInitialized();
+    checkActive?.call();
+    return outbox.enqueueWithCheckpoint(
+      conversationId,
+      kind,
+      body,
+      (item) => _persist(pendingItem: item, checkActive: checkActive),
+    );
+  });
+
   /// Queues an explicitly sent text and consumes its matching local draft in
   /// the same checkpoint. A failed replacement leaves both unchanged.
   Future<String> enqueueTextDraft(String conversationId, String text) =>

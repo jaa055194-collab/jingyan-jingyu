@@ -1,5 +1,6 @@
 #include "platform_integration.h"
 #include <flutter/standard_method_codec.h>
+#include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <propkey.h>
@@ -250,6 +251,36 @@ void PlatformIntegration::Handle(const flutter::MethodCall<Value>& call, std::un
     else if (method == "storeSession") SaveSession(Text(a, "json"));
     else if (method == "readSession") { result->Success(ReadSession()); return; }
     else if (method == "clearSession") ClearSession();
+    else if (method == "pickAttachment") {
+      const std::string kind = Text(a, "kind");
+      if (kind != "image" && kind != "file") throw std::invalid_argument("Unsupported attachment kind");
+      static const wchar_t kImageFilter[] =
+          L"Images\0*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp\0All files\0*.*\0";
+      static const wchar_t kAllFilesFilter[] = L"All files\0*.*\0";
+      std::wstring path(32768, L'\0');
+      OPENFILENAMEW dialog{};
+      dialog.lStructSize = sizeof(dialog);
+      dialog.hwndOwner = window_;
+      dialog.lpstrFilter = kind == "image" ? kImageFilter : kAllFilesFilter;
+      dialog.lpstrFile = path.data();
+      dialog.nMaxFile = static_cast<DWORD>(path.size());
+      dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+      if (GetOpenFileNameW(&dialog)) {
+        path.resize(wcslen(path.c_str()));
+        const auto separator = path.find_last_of(L"\\/");
+        const std::wstring name = separator == std::wstring::npos ? path : path.substr(separator + 1);
+        result->Success(Value(Map{
+            {Value("path"), Value(Utf8(path))},
+            {Value("name"), Value(Utf8(name))},
+            {Value("temporary"), Value(false)},
+        }));
+      } else if (CommDlgExtendedError() == 0) {
+        result->Success(Value());
+      } else {
+        throw std::runtime_error("Cannot open attachment picker");
+      }
+      return;
+    }
     else if (method == "notify") Toast(Text(a, "title"), Text(a, "body"), Flag(a, "hideBody"));
     else if (method == "setAutostart") SetAutostart(Flag(a, "enabled"));
     else if (method == "lock") Lock();

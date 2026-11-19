@@ -243,6 +243,44 @@ class AttachmentApi {
     }
   }
 
+  /// Owner-only cleanup for a completed but unsent attachment.
+  Future<void> deleteAttachment(
+    String attachmentId, {
+    bool retryAuthentication = true,
+  }) async {
+    String path;
+    try {
+      path = Routes.attachment.replaceAll(
+        '{attachmentId}',
+        Uri.encodeComponent(validateId(attachmentId, kind: 'attachment')),
+      );
+    } on FormatException {
+      throw const FormatException('附件标识参数无效');
+    }
+    try {
+      final body = await connection.request(
+        'DELETE',
+        path,
+        retryAuthentication: retryAuthentication,
+      );
+      if (body['removed'] != true) throw const FormatException();
+    } on FormatException {
+      throw const FormatException('附件删除响应无效');
+    } on SocketException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on HttpException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on TimeoutException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    }
+  }
+
   /// Owner-scoped metadata list: `GET /attachments`.
   ///
   /// [conversationId] optionally filters to one conversation; [limit] is 1..100;

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:client_flutter/app/runtime.dart';
 import 'package:client_flutter/app/shell_app.dart';
 import 'package:client_flutter/app/shell_view_model.dart';
+import 'package:client_flutter/features/chat/chat_pane.dart';
 
 class TestShellModel extends ShellViewModel {
   @override
@@ -206,6 +209,48 @@ class TestShellModel extends ShellViewModel {
   @override
   void clearError() {
     error = null;
+    notifyListeners();
+  }
+}
+
+class _AttachmentModel extends TestShellModel {
+  _AttachmentModel() {
+    connectedAccountId = 'account-a';
+    selectedConversationId = 'a';
+    online = true;
+    queuedCount = 0;
+  }
+
+  @override
+  String? selectedAttachmentName;
+  final choices = <(String, String?)>[];
+  final sent = <String>[];
+  int consentWrites = 0;
+  Completer<void>? consentGate;
+
+  @override
+  Future<void> setAiConsent(bool allowed) async {
+    consentWrites++;
+    await consentGate?.future;
+    await super.setAiConsent(allowed);
+  }
+
+  @override
+  Future<void> attachFile(String kind) async {
+    choices.add((kind, selectedConversationId));
+    selectedAttachmentName = '会议记录附件名称足够长用于检查布局.txt';
+    notifyListeners();
+  }
+
+  @override
+  Future<void> sendSelectedAttachment() async {
+    sent.add(selectedAttachmentName!);
+    await discardSelectedAttachment();
+  }
+
+  @override
+  Future<void> discardSelectedAttachment() async {
+    selectedAttachmentName = null;
     notifyListeners();
   }
 }
@@ -735,7 +780,10 @@ void main() {
   testWidgets('attachment consent cancel never opens file action', (
     tester,
   ) async {
-    final model = TestShellModel()..selectedConversationId = 'a';
+    final model = TestShellModel()
+      ..connectedAccountId = 'account-a'
+      ..selectedConversationId = 'a'
+      ..online = true;
     await tester.pumpWidget(WhaleChatApp(model: model));
     await tester.tap(find.byTooltip('添加图片'));
     await tester.pumpAndSettle();
@@ -749,6 +797,128 @@ void main() {
     await tester.tap(find.text('允许并继续'));
     await tester.pumpAndSettle();
     expect(find.text('file 文件选择不可用'), findsOneWidget);
+  });
+
+  testWidgets('attachment selection waits for explicit send', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final model = _AttachmentModel()
+      ..aiConsentGranted = true
+      ..fontScale = 1.5
+      ..drafts['a'] = '保留文字草稿';
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await tester.tap(find.byKey(const ValueKey('a')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('发送附件'), findsNothing);
+    await tester.tap(find.byTooltip('添加文件'));
+    await tester.pumpAndSettle();
+    expect(model.choices, [('file', 'a')]);
+    expect(model.sent, isEmpty);
+    const basename = '会议记录附件名称足够长用于检查布局.txt';
+    expect(find.text(basename), findsOneWidget);
+    expect(find.text('保留文字草稿'), findsOneWidget);
+
+    await tester.tap(find.text('发送附件'));
+    await tester.pumpAndSettle();
+    expect(model.sent, [basename]);
+    expect(find.text(basename), findsNothing);
+    expect(find.text('保留文字草稿'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'attachment can be selected and cancelled offline without sending',
+    (tester) async {
+      final model = _AttachmentModel()
+        ..aiConsentGranted = true
+        ..online = false;
+      await tester.pumpWidget(WhaleChatApp(model: model));
+      await tester.tap(find.byTooltip('添加图片'));
+      await tester.pumpAndSettle();
+      final send = find.widgetWithText(FilledButton, '发送附件');
+      expect(send, findsOneWidget);
+      expect(tester.widget<FilledButton>(send).onPressed, isNull);
+      await tester.tap(find.text('取消附件'));
+      await tester.pumpAndSettle();
+      expect(find.text('取消附件'), findsNothing);
+      expect(model.sent, isEmpty);
+      expect(model.choices, [('image', 'a')]);
+    },
+  );
+
+  testWidgets('attachment confirmation is disabled while busy or locked', (
+    tester,
+  ) async {
+    final model = _AttachmentModel()
+      ..selectedAttachmentName = 'notes.txt'
+      ..busy = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListenableBuilder(
+            listenable: model,
+            builder: (_, _) => ChatPane(model: model),
+          ),
+        ),
+      ),
+    );
+    for (final locked in [false, true]) {
+      model
+        ..busy = !locked
+        ..locked = locked
+        ..notifyListeners();
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, '发送附件'))
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, '取消附件'))
+            .onPressed,
+        isNull,
+      );
+    }
+    expect(model.sent, isEmpty);
+  });
+
+  testWidgets('attachment consent rejects a changed conversation', (
+    tester,
+  ) async {
+    final model = _AttachmentModel();
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await tester.tap(find.byTooltip('添加文件'));
+    await tester.pumpAndSettle();
+    await model.selectConversation('b');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('允许并继续'));
+    await tester.pumpAndSettle();
+    expect(model.consentWrites, 0);
+    expect(model.choices, isEmpty);
+  });
+
+  testWidgets('attachment consent write cannot open picker for a new account', (
+    tester,
+  ) async {
+    final gate = Completer<void>();
+    final model = _AttachmentModel()..consentGate = gate;
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await tester.tap(find.byTooltip('添加文件'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('允许并继续'));
+    await tester.pumpAndSettle();
+    expect(model.consentWrites, 1);
+    expect(model.choices, isEmpty);
+    model.connectedAccountId = 'account-b';
+    model.notifyListeners();
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(model.choices, isEmpty);
   });
 
   testWidgets('settings changes bind preferences and lock requires valid PIN', (

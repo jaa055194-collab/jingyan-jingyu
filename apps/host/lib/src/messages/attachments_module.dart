@@ -31,6 +31,7 @@ class AttachmentsModule extends HostModule {
     router.post(Routes.attachmentUploads, _initiate);
     router.put(Routes.attachmentUploadChunk, _chunk);
     router.post(Routes.attachmentUploadComplete, _complete);
+    router.delete(Routes.attachmentUpload, _abort);
     router.get(Routes.attachments, _list);
     router.get(Routes.attachment, _get);
     router.delete(Routes.attachment, _delete);
@@ -128,6 +129,16 @@ class AttachmentsModule extends HostModule {
       expectedSha256: expectedSha256,
     );
     return HostResponse.fromResult(result);
+  }
+
+  Future<HostResponse> _abort(HostRequest request) async {
+    final principal = request.principal!;
+    final uploadId = request.pathParams['uploadId']!;
+    final result = await _attachments.abortUpload(
+      ownerAccountId: principal.accountId,
+      uploadId: uploadId,
+    );
+    return HostResponse.fromResult(result, (_) => {'aborted': true});
   }
 
   Future<HostResponse> _list(HostRequest request) async {

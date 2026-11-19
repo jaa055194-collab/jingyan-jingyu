@@ -443,6 +443,69 @@ class AttachmentService {
     });
   }
 
+  /// 中止一次尚未完成的 pending 上传（仅 owner）。
+  ///
+  /// 标记为 aborted、删除分片账本与 `.part`。不存在或非本人一律 notFound；
+  /// 已 aborted 幂等成功；completed 等其它状态返回 conflict。与分片/完成共用
+  /// 每上传串行队列，避免中止与并发分片/完成交错。
+  Future<Result<void>> abortUpload({
+    required String ownerAccountId,
+    required String uploadId,
+  }) async {
+    try {
+      validateId(ownerAccountId, kind: 'account');
+      validateId(uploadId, kind: 'upload');
+    } on FormatException {
+      return err(FailureCode.invalidArgument, 'invalid id');
+    }
+    return _serializeUpload(
+      ownerAccountId,
+      uploadId,
+      () => _abortUpload(ownerAccountId, uploadId),
+    );
+  }
+
+  Future<Result<void>> _abortUpload(
+    String ownerAccountId,
+    String uploadId,
+  ) async {
+    final rows = await _database.query(
+      'SELECT status FROM attachment_uploads '
+      'WHERE id = ? AND owner_account_id = ?',
+      [uploadId, ownerAccountId],
+    );
+    if (rows.isEmpty) return err(FailureCode.notFound, 'upload not found');
+    final status = rows.single['status'] as String;
+    if (status == 'aborted') {
+      await _deletePartFile(ownerAccountId, uploadId);
+      return const Ok<void>(null);
+    }
+    if (status != 'pending') {
+      return err(FailureCode.conflict, 'upload is not pending');
+    }
+    await _database.transaction((tx) async {
+      await tx.execute(
+        'DELETE FROM attachment_upload_chunks WHERE upload_id = ?',
+        [uploadId],
+      );
+      await tx.execute(
+        "UPDATE attachment_uploads SET status = 'aborted' WHERE id = ?",
+        [uploadId],
+      );
+    });
+    await _deletePartFile(ownerAccountId, uploadId);
+    return const Ok<void>(null);
+  }
+
+  Future<void> _deletePartFile(String ownerAccountId, String uploadId) async {
+    try {
+      final part = File('${_ownerDir(ownerAccountId)}/$uploadId.part');
+      if (await part.exists()) await part.delete();
+    } catch (_) {
+      // 状态已持久化；孤立 .part 由后续清理负责，中止接口保持成功。
+    }
+  }
+
   /// 读取附件元数据；owner 或可读该会话的成员可见。extracted 时附带解密正文。
   Future<Result<Map<String, Object?>>> getAttachment({
     required String accountId,
