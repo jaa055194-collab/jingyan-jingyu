@@ -93,6 +93,14 @@ class SqliteCallService implements CallService, CallRuntimeDriver {
         switch (session.state) {
           case CallState.ringing:
             final now = clock.now().toUtc();
+            // 接听时直接执行响铃期限，不等待下一次 sweepMissed。
+            if (now.difference(session.startedAt) >= ringTimeout) {
+              await tx.execute(
+                'UPDATE voice_calls SET state=?,ended_at=? WHERE call_id=?',
+                [CallState.missed.name, now.toIso8601String(), callId],
+              );
+              return err<CallSession>(FailureCode.conflict, '通话已结束');
+            }
             await tx.execute(
               'UPDATE voice_calls SET state=?,answered_at=? WHERE call_id=?',
               [CallState.active.name, now.toIso8601String(), callId],

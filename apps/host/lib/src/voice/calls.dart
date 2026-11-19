@@ -234,9 +234,18 @@ class InMemoryCallService implements CallService, CallRuntimeDriver {
     }
     switch (runtime.session.state) {
       case CallState.ringing:
+        final now = _clock.now();
+        // 接听时直接执行响铃期限，不等待下一次 sweepMissed。
+        if (now.difference(runtime.session.startedAt) >= ringTimeout) {
+          runtime.session = runtime.session.copyWith(
+            state: CallState.missed,
+            endedAt: now,
+          );
+          return err<CallSession>(FailureCode.conflict, '通话已结束');
+        }
         runtime.session = runtime.session.copyWith(
           state: CallState.active,
-          answeredAt: _clock.now(),
+          answeredAt: now,
         );
         return Ok<CallSession>(runtime.session);
       case CallState.active:
