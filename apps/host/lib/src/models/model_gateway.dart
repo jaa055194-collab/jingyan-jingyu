@@ -175,21 +175,21 @@ final class ModelGateway {
     );
     if (begun case Err<UsageRequest>(:final failure)) return Err(failure);
     if (begun.value.replayed) return _replay();
-    final completion = await _adapter.chat(
+    final response = await _adapter.chatWithUsage(
       baseUrl: endpoint.value,
       apiKey: credential.value.apiKey,
       model: binding.value.model,
       messages: List.unmodifiable(turns),
       maxTokens: maxTokens,
     );
-    if (completion case Err<ChatCompletion>(:final failure)) {
+    if (response case Err<MeteredChatResponse>(:final failure)) {
       return err(
         failure.code,
         'Provider chat failed; usage requires reconciliation',
         {'sourceUsageUnknown': true, 'reconciliationRequired': true},
       );
     }
-    final value = completion.value;
+    final value = response.value;
     final recorded = await _usage.recordUsage(
       ai,
       requestId: requestId,
@@ -200,6 +200,12 @@ final class ModelGateway {
       total: value.totalTokens,
     );
     if (recorded case Err<void>(:final failure)) return Err(failure);
-    return Ok(value);
+    return switch (value) {
+      ChatCompletion completion => Ok(completion),
+      BlankChatReply() => err(
+        FailureCode.modelUnavailable,
+        'Provider chat unavailable',
+      ),
+    };
   }
 }
