@@ -18,24 +18,31 @@ LifecycleDepartureSurvey _survey() => LifecycleDepartureSurvey.fromJson({
   'totalObjects': 3,
 });
 
-LifecycleExportBundle _bundle() => LifecycleExportBundle.fromJson({
-  'ownerAccountId': 'owner',
-  'files': {
-    'manifest.json': '{}',
-    'persona.json': '{"name":"secret-persona-text"}',
-  },
-  'manifest': {
-    'formatVersion': 1,
-    'counts': {
-      'conversations': 1,
-      'messages': 2,
-      'memories': 3,
-      'attachments': 0,
-      'persona': 1,
-    },
-  },
-  'sha256sums': 'deadbeef  manifest.json',
-});
+LifecycleExportBundle _bundle({bool chatOnly = false}) =>
+    LifecycleExportBundle.fromJson({
+      'ownerAccountId': 'owner',
+      'files': {
+        'manifest.json': '{}',
+        'persona.json': '{"name":"secret-persona-text"}',
+      },
+      'manifest': {
+        'formatVersion': 1,
+        if (chatOnly)
+          'coverage': {
+            'scope': 'chatHistory',
+            'completeAccountExport': false,
+            'pendingDomains': ['persona', 'memories', 'attachments'],
+          },
+        'counts': {
+          'conversations': 1,
+          'messages': 2,
+          'memories': 3,
+          'attachments': 0,
+          'persona': 1,
+        },
+      },
+      'sha256sums': 'deadbeef  manifest.json',
+    });
 
 LifecycleImportReport _report(LifecycleImportMode mode) =>
     LifecycleImportReport.fromJson({
@@ -167,6 +174,20 @@ void main() {
       expect(api.importCalls, 1);
       expect(api.lastMode, LifecycleImportMode.personaAndConversations);
       expect(api.lastFiles, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'partial chat export identifies missing domains without file contents',
+    (tester) async {
+      final api = _FakeApi()..exportResult = _bundle(chatOnly: true);
+      await pump(tester, api);
+      await tapKey(tester, 'export-lifecycle');
+      expect(find.textContaining('当前仅导出有权读取的聊天记录'), findsOneWidget);
+      expect(find.textContaining('不包含人格、记忆和附件内容'), findsOneWidget);
+      expect(find.textContaining('不是完整账号备份'), findsOneWidget);
+      expect(find.textContaining('secret-persona-text'), findsNothing);
+      expect(api.importCalls, 0);
     },
   );
 

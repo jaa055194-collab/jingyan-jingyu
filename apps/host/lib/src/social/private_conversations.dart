@@ -190,9 +190,18 @@ AND (account_low=? OR account_high=?)''',
   Future<int?> firstVisibleSeq(String accountId, String conversationId) async {
     if (!_valid(accountId) || !_valid(conversationId)) return null;
     return _db.transaction(
-      (tx) async =>
-          (await _member(tx, accountId, conversationId)).isEmpty ? null : 1,
+      (tx) => firstVisibleSeqInTransaction(tx, accountId, conversationId),
     );
+  }
+
+  /// Reads the same authorization bound inside a caller-owned transaction.
+  Future<int?> firstVisibleSeqInTransaction(
+    Tx tx,
+    String accountId,
+    String conversationId,
+  ) async {
+    if (!_valid(accountId) || !_valid(conversationId)) return null;
+    return (await _member(tx, accountId, conversationId)).isEmpty ? null : 1;
   }
 
   @override

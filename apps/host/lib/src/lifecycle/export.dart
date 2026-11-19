@@ -1,6 +1,6 @@
 /// M12 用户导出（口径 A-12 / AC-29 / NFR-11）。
 ///
-/// 导出该用户的**全部**数据，形成可校验、可导入的包：
+/// 按数据源的覆盖范围导出用户数据，形成可校验的数据包：
 /// * `manifest.json`：格式版本、账号、生成时间、对象计数、已排除项；
 /// * `SHA256SUMS`：每个数据文件的 sha256，供导入前校验；
 /// * `conversations/<id>.jsonl`：每个会话的消息逐行 JSON；
@@ -89,6 +89,11 @@ abstract class ExportSource {
   Future<List<Map<String, Object?>>> memories(String ownerAccountId);
 
   Future<List<Map<String, Object?>>> attachments(String ownerAccountId);
+}
+
+/// Optional manifest metadata describing the domains a source covers.
+abstract interface class ExportCoverage {
+  Map<String, Object?> get coverage;
 }
 
 /// 内存数据源：测试与框架示例使用。
@@ -192,11 +197,18 @@ class ExportBundle {
 
 /// 导出服务。
 class ExportService {
-  ExportService({required ExportSource source, this.clock = const SystemClock()})
-    : _source = source;
+  ExportService({
+    required ExportSource source,
+    this.clock = const SystemClock(),
+    this.maxImportRequestBytes,
+  }) : _source = source;
 
   final ExportSource _source;
   final Clock clock;
+
+  /// Optional transport bound for the complete version-1 JSON import request.
+  /// Null preserves legacy source behavior; exceeding a bound fails, never trims.
+  final int? maxImportRequestBytes;
 
   static const String manifestFile = 'manifest.json';
   static const String checksumsFile = 'SHA256SUMS';
@@ -211,6 +223,16 @@ class ExportService {
       return err(FailureCode.invalidArgument, '账号标识不能为空');
     }
 
+    try {
+      return Ok(await _buildBundle(ownerAccountId));
+    } catch (_) {
+      // Source and serialization errors may include private storage data.
+      return err(FailureCode.internal, 'Could not build export');
+    }
+  }
+
+  Future<ExportBundle> _buildBundle(String ownerAccountId) async {
+    final source = _source;
     final persona = sanitizeForExport(
       await _source.persona(ownerAccountId) ?? const <String, Object?>{},
     );
@@ -257,6 +279,7 @@ class ExportService {
         'persona': persona.isEmpty ? 0 : 1,
       },
       'excluded': {'t2Memories': excludedT2, 'byokSecrets': 'stripped'},
+      if (source case ExportCoverage(:final coverage)) 'coverage': coverage,
     });
 
     final paths = files.keys.toList()..sort();
@@ -264,6 +287,17 @@ class ExportService {
         .map((p) => '${sha256.convert(utf8.encode(files[p]!))}  $p')
         .join('\n');
 
-    return Ok(ExportBundle(ownerAccountId: ownerAccountId, files: files));
+    final requestLimit = maxImportRequestBytes;
+    if (requestLimit != null) {
+      final requestBytes = utf8
+          .encode(
+            jsonEncode({'mode': 'personaAndConversations', 'files': files}),
+          )
+          .length;
+      if (requestBytes > requestLimit) {
+        throw StateError('Export exceeds import transport limit');
+      }
+    }
+    return ExportBundle(ownerAccountId: ownerAccountId, files: files);
   }
 }

@@ -10,27 +10,60 @@ class CombinedMembership implements HistoryMembershipCheck {
     required Database db,
     required HistoryMembershipCheck group,
     required PrivateConversations direct,
+    Future<int?> Function(Tx, String, String)? groupHistoryInTransaction,
   }) : _db = db,
        _group = group,
-       _direct = direct;
+       _direct = direct,
+       _groupHistoryInTransaction = groupHistoryInTransaction;
 
   final Database _db;
   final HistoryMembershipCheck _group;
   final PrivateConversations _direct;
+  final Future<int?> Function(Tx, String, String)? _groupHistoryInTransaction;
 
-  Future<HistoryMembershipCheck?> _policy(String conversationId) =>
-      _db.transaction((tx) async {
-        final kinds = await tx.query(
-          '''
+  Future<String?> _kind(Tx tx, String conversationId) async {
+    final kinds = await tx.query(
+      '''
 SELECT 'group' AS kind FROM social_conversations WHERE id=?
 UNION ALL
 SELECT 'direct' AS kind FROM direct_conversations WHERE id=?
 ''',
-          [conversationId, conversationId],
-        );
-        if (kinds.length != 1) return null;
-        return kinds.single['kind'] == 'direct' ? _direct : _group;
+      [conversationId, conversationId],
+    );
+    return kinds.length == 1 ? kinds.single['kind'] as String : null;
+  }
+
+  Future<HistoryMembershipCheck?> _policy(String conversationId) =>
+      _db.transaction((tx) async {
+        final kind = await _kind(tx, conversationId);
+        return kind == null ? null : (kind == 'direct' ? _direct : _group);
       });
+
+  /// Observe all candidate visibility bounds together. Null means denied.
+  Future<Map<String, int?>> historySnapshot(
+    String accountId,
+    Iterable<String> conversationIds,
+  ) {
+    final groupHistory = _groupHistoryInTransaction;
+    if (groupHistory == null) {
+      throw StateError('Group history snapshot policy is not configured');
+    }
+    return _db.transaction((tx) async {
+      final floors = <String, int?>{};
+      for (final id in conversationIds) {
+        floors[id] = switch (await _kind(tx, id)) {
+          'group' => await groupHistory(tx, accountId, id),
+          'direct' => await _direct.firstVisibleSeqInTransaction(
+            tx,
+            accountId,
+            id,
+          ),
+          _ => null,
+        };
+      }
+      return floors;
+    });
+  }
 
   @override
   Future<bool> canPost(String accountId, String conversationId) async {
