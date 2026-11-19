@@ -163,14 +163,56 @@ class ClientShellController {
   int lastSeqFor(String conversationId) =>
       _cursors[conversationId]?.lastSeq ?? 0;
 
-  Future<MergeOutcome> acceptMessage(MessageEventFrame message) async {
+  /// Checkpoints a host-confirmed visibility bound before applying its page.
+  /// Only this conversation's canonical cache can be pruned; other gaps still
+  /// need to be filled by [acceptMessage]. [checkActive] may throw to cancel
+  /// when the operation reaches the queue head, before a write starts.
+  Future<void> applySyncHistoryFloor(
+    String conversationId,
+    int firstVisibleSeq, {
+    void Function()? checkActive,
+  }) => _serial.run(() async {
+    _requireInitialized();
+    checkActive?.call();
+    if (firstVisibleSeq < 1) {
+      throw ArgumentError.value(
+        firstVisibleSeq,
+        'firstVisibleSeq',
+        'must be positive',
+      );
+    }
+    final lastSeq = lastSeqFor(conversationId);
+    final hiddenThrough = firstVisibleSeq - 1;
+    final nextSeq = lastSeq < hiddenThrough ? hiddenThrough : lastSeq;
+    final cached = _messages[conversationId];
+    final retained =
+        cached != null && cached.any((m) => m.seq < firstVisibleSeq)
+        ? cached.where((m) => m.seq >= firstVisibleSeq).toList()
+        : null;
+    if (nextSeq == lastSeq && retained == null) return;
+
+    final cursor = SyncCursor(lastSeq: nextSeq);
+    await _persist(
+      cursors: {..._cursors, conversationId: cursor},
+      messages: retained == null
+          ? null
+          : {..._messages, conversationId: retained},
+      checkActive: checkActive,
+    );
+    _cursors[conversationId] = cursor;
+    if (retained != null) _messages[conversationId] = retained;
+  });
+
+  Future<MergeOutcome> acceptMessage(
+    MessageEventFrame message, {
+    void Function()? checkActive,
+  }) async {
     SyncRequestFrame? request;
     final outcome = await _serial.run(() async {
       _requireInitialized();
-      final cursor = _cursors.putIfAbsent(
-        message.conversationId,
-        SyncCursor.new,
-      );
+      checkActive?.call();
+      final conversationId = message.conversationId;
+      final cursor = SyncCursor(lastSeq: lastSeqFor(conversationId));
       final outcome = cursor.accept(message.seq);
       if (outcome == MergeOutcome.gap) {
         request = SyncRequestFrame(
@@ -180,28 +222,33 @@ class ClientShellController {
           afterSeq: cursor.lastSeq,
         );
       } else if (outcome == MergeOutcome.applied) {
-        final messages = _messages[message.conversationId] ??= [];
-        messages.add(message);
-        try {
-          await _persist();
-        } catch (_) {
-          messages.removeLast();
-          cursor.lastSeq--;
-          rethrow;
-        }
+        await _persist(
+          cursors: {..._cursors, conversationId: cursor},
+          pendingMessage: message,
+          checkActive: checkActive,
+        );
+        _cursors[conversationId] = cursor;
+        (_messages[conversationId] ??= []).add(message);
       }
       return outcome;
     });
     // Network adapters may apply a sync page by re-entering acceptMessage.
     // Release the state queue before awaiting that adapter.
     final pending = request;
-    if (pending != null) await requestSync(pending);
+    if (pending != null) {
+      checkActive?.call();
+      await requestSync(pending);
+    }
     return outcome;
   }
 
   Future<void> _persist({
     OutboxItem? pendingItem,
     Map<String, String>? drafts,
+    Map<String, SyncCursor>? cursors,
+    Map<String, List<MessageEventFrame>>? messages,
+    MessageEventFrame? pendingMessage,
+    void Function()? checkActive,
   }) => writeClientSection(persistence, 'shell', {
     'outbox': [
       for (final item in outbox.items) _encodeItem(item),
@@ -216,12 +263,15 @@ class ClientShellController {
         },
     ],
     'drafts': drafts ?? {..._drafts},
-    'cursors': {for (final e in _cursors.entries) e.key: e.value.lastSeq},
+    'cursors': {
+      for (final e in (cursors ?? _cursors).entries) e.key: e.value.lastSeq,
+    },
     'messages': [
-      for (final list in _messages.values)
+      for (final list in (messages ?? _messages).values)
         for (final m in list) m.toEnvelope(),
+      if (pendingMessage != null) pendingMessage.toEnvelope(),
     ],
-  });
+  }, checkActive: checkActive);
   static Map<String, Object?> _encodeItem(OutboxItem item) => {
     'conversationId': item.conversationId,
     'clientMsgId': item.clientMsgId,

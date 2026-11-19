@@ -542,15 +542,31 @@ void main() {
             },
           ),
         );
-        expect((await post('before-join')).status, 200);
-        Future<HostResponse> adminSync() => host.pipeline.handle(
+        expect((await post('before-join-1')).status, 200);
+        expect((await post('before-join-2')).status, 200);
+        Future<HostResponse> sync(
+          Map<String, String> headers, {
+          int afterSeq = 0,
+        }) => host.pipeline.handle(
           HostRequest(
             method: 'GET',
             path: path(Routes.sync, id),
-            headers: {'authorization': 'Bearer $adminToken'},
+            headers: headers,
+            query: {'afterSeq': '$afterSeq', 'limit': '1'},
           ),
         );
-        expect((await adminSync()).status, 404);
+        final adminHeaders = {'authorization': 'Bearer $adminToken'};
+        final denied = await sync(adminHeaders);
+        expect(denied.status, 404);
+        expect(denied.json, isNot(contains('firstVisibleSeq')));
+
+        final ownerPage = await sync(authed());
+        expect(ownerPage.status, 200);
+        final ownerData = ownerPage.json as Map;
+        expect(ownerData.keys, unorderedEquals(['messages', 'hasMore']));
+        expect((ownerData['messages'] as List).map((m) => (m as Map)['seq']), [
+          1,
+        ]);
         final joined = await host.pipeline.handle(
           HostRequest(
             method: 'POST',
@@ -563,13 +579,47 @@ void main() {
           ),
         );
         expect(joined.status, 200);
-        expect((await post('after-join')).status, 200);
-        final synced = await adminSync();
-        expect(synced.status, 200);
-        final visible = (synced.json as Map)['messages'] as List;
-        expect(visible.map((m) => ((m as Map)['body'] as Map)['text']), [
-          'after-join',
-        ]);
+
+        Future<void> expectJoinedPage({
+          int afterSeq = 0,
+          required List<int> sequences,
+          required List<String> texts,
+          required bool hasMore,
+        }) async {
+          final response = await sync(adminHeaders, afterSeq: afterSeq);
+          expect(response.status, 200);
+          final data = response.json as Map;
+          final messages = (data['messages'] as List)
+              .cast<Map<String, Object?>>();
+          expect(data['firstVisibleSeq'], 3, reason: 'afterSeq=$afterSeq');
+          expect(messages.map((message) => message['seq']), sequences);
+          expect(
+            messages.map((message) => (message['body'] as Map)['text']),
+            texts,
+          );
+          expect(data['hasMore'], hasMore);
+        }
+
+        await expectJoinedPage(sequences: [], texts: [], hasMore: false);
+        expect((await post('after-join-1')).status, 200);
+        expect((await post('after-join-2')).status, 200);
+        await expectJoinedPage(
+          sequences: [3],
+          texts: ['after-join-1'],
+          hasMore: true,
+        );
+        await expectJoinedPage(
+          afterSeq: 3,
+          sequences: [4],
+          texts: ['after-join-2'],
+          hasMore: false,
+        );
+        await expectJoinedPage(
+          afterSeq: 4,
+          sequences: [],
+          texts: [],
+          hasMore: false,
+        );
         final lists = await host.pipeline.handle(
           HostRequest(
             method: 'GET',

@@ -994,6 +994,7 @@ class MessagesModule extends HostModule {
       );
     }
     var visibleAfter = afterSeq;
+    int? firstVisibleSeq;
     final history = _services.maybeGet<HistoryMembershipCheck>();
     if (history != null) {
       final first = await history.firstVisibleSeq(
@@ -1006,6 +1007,7 @@ class MessagesModule extends HostModule {
         );
       }
       if (first - 1 > visibleAfter) visibleAfter = first - 1;
+      if (first > 1) firstVisibleSeq = first;
     }
     final page = await _store.since(
       conversationId: conversationId,
@@ -1017,6 +1019,7 @@ class MessagesModule extends HostModule {
       (p) => {
         'messages': [for (final m in p.messages) m.toPayload()],
         'hasMore': p.hasMore,
+        'firstVisibleSeq': ?firstVisibleSeq,
       },
     );
   }

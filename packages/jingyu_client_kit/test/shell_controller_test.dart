@@ -8,29 +8,268 @@ import 'package:test/test.dart';
 class MemoryPersistence implements ClientPersistence {
   Map<String, Object?>? data;
   bool fail = false;
+  int writeAttempts = 0;
+  Future<void> Function()? beforeWrite;
   @override
   Future<Map<String, Object?>?> read() async => data == null
       ? null
       : Map<String, Object?>.from(jsonDecode(jsonEncode(data)) as Map);
   @override
   Future<void> write(Map<String, Object?> snapshot) async {
+    writeAttempts++;
+    final gate = beforeWrite;
+    if (gate != null) await gate();
     if (fail) throw StateError('disk full');
     data = Map<String, Object?>.from(jsonDecode(jsonEncode(snapshot)) as Map);
   }
 }
 
-MessageEventFrame message(int seq) => MessageEventFrame(
-  id: 'e$seq',
-  at: DateTime.utc(2026),
-  conversationId: 'c',
-  seq: seq,
-  messageId: 'm$seq',
-  senderId: 'u',
-  kind: MessageKind.text,
-  body: {'text': '$seq'},
-  sentAt: DateTime.utc(2026),
+MessageEventFrame message(int seq, {String conversationId = 'c'}) =>
+    MessageEventFrame(
+      id: '$conversationId-e$seq',
+      at: DateTime.utc(2026),
+      conversationId: conversationId,
+      seq: seq,
+      messageId: '$conversationId-m$seq',
+      senderId: 'u',
+      kind: MessageKind.text,
+      body: {'text': '$seq'},
+      sentAt: DateTime.utc(2026),
+    );
+ClientShellController historyShell(
+  MemoryPersistence store, {
+  List<SyncRequestFrame>? requests,
+}) => ClientShellController(
+  persistence: store,
+  submit: (_) async => throw StateError('History floor must not submit'),
+  requestSync: (frame) async {
+    if (requests == null) throw StateError('Unexpected sync request');
+    requests.add(frame);
+  },
 );
+
 void main() {
+  test(
+    'a floor-only checkpoint restores before visible history arrives',
+    () async {
+      final store = MemoryPersistence();
+      final shell = historyShell(store);
+      await shell.initialize();
+
+      await shell.applySyncHistoryFloor('c', 3);
+      expect(shell.lastSeqFor('c'), 2);
+      expect(shell.messagesFor('c'), isEmpty);
+      expect(store.writeAttempts, 1);
+      expect(store.data, {
+        'shell': {
+          'outbox': [],
+          'dropped': [],
+          'drafts': {},
+          'cursors': {'c': 2},
+          'messages': [],
+        },
+      });
+
+      final requests = <SyncRequestFrame>[];
+      final reboot = historyShell(store, requests: requests);
+      await reboot.initialize();
+      expect(reboot.lastSeqFor('c'), 2);
+      expect(reboot.messagesFor('c'), isEmpty);
+      expect(await reboot.acceptMessage(message(4)), MergeOutcome.gap);
+      expect(requests.single.afterSeq, 2);
+      expect(await reboot.acceptMessage(message(3)), MergeOutcome.applied);
+      expect(requests, hasLength(1));
+      expect(reboot.messagesFor('c').map((m) => m.seq), [3]);
+    },
+  );
+
+  test('rejoin prunes only restricted messages without rewinding', () async {
+    final store = MemoryPersistence();
+    final shell = historyShell(store);
+    await shell.initialize();
+    for (final seq in [1, 2, 3, 4]) {
+      await shell.acceptMessage(message(seq));
+    }
+    await shell.acceptMessage(message(1, conversationId: 'other'));
+    await shell.saveDraft('c', 'keep draft');
+    final queuedId = await shell.enqueue('c', MessageKind.text, {
+      'text': 'keep queued',
+    });
+    final writes = store.writeAttempts;
+
+    await shell.applySyncHistoryFloor('c', 4);
+    expect(shell.messagesFor('c').map((m) => m.seq), [4]);
+    expect(shell.lastSeqFor('c'), 4);
+    expect(store.writeAttempts, writes + 1);
+    await shell.applySyncHistoryFloor('c', 4);
+    await shell.applySyncHistoryFloor('c', 2);
+    expect(store.writeAttempts, writes + 1);
+
+    final reboot = historyShell(store);
+    await reboot.initialize();
+    expect(reboot.messagesFor('c').map((m) => m.seq), [4]);
+    expect(reboot.lastSeqFor('c'), 4);
+    expect(reboot.messagesFor('other').map((m) => m.seq), [1]);
+    expect(reboot.lastSeqFor('other'), 1);
+    expect(reboot.draftFor('c'), 'keep draft');
+    expect(reboot.outbox.items.single.clientMsgId, queuedId);
+    expect(await reboot.acceptMessage(message(2)), MergeOutcome.duplicate);
+    expect(await reboot.acceptMessage(message(5)), MergeOutcome.applied);
+    expect(reboot.messagesFor('c').map((m) => m.seq), [4, 5]);
+  });
+
+  test(
+    'a failed floor write never publishes the staged cursor or cache',
+    () async {
+      final store = MemoryPersistence();
+      final shell = historyShell(store);
+      await shell.initialize();
+      await shell.acceptMessage(message(1));
+      await shell.acceptMessage(message(2));
+      final before = await store.read();
+      final started = Completer<void>(), release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      store.beforeWrite = () async {
+        started.complete();
+        await release.future;
+      };
+      store.fail = true;
+      final failed = expectLater(
+        shell.applySyncHistoryFloor('c', 4),
+        throwsStateError,
+      );
+
+      await started.future.timeout(const Duration(seconds: 1));
+      expect(shell.lastSeqFor('c'), 2);
+      expect(shell.messagesFor('c').map((m) => m.seq), [1, 2]);
+      release.complete();
+      await failed;
+      expect(shell.lastSeqFor('c'), 2);
+      expect(shell.messagesFor('c').map((m) => m.seq), [1, 2]);
+      expect(await store.read(), before);
+      final beforeRetry = historyShell(store);
+      await beforeRetry.initialize();
+      expect(beforeRetry.lastSeqFor('c'), 2);
+      expect(beforeRetry.messagesFor('c').map((m) => m.seq), [1, 2]);
+
+      store.beforeWrite = null;
+      store.fail = false;
+      final retry = shell.applySyncHistoryFloor('c', 4);
+      final visible = shell.acceptMessage(message(4));
+      await retry;
+      expect(await visible, MergeOutcome.applied);
+      final afterRetry = historyShell(store);
+      await afterRetry.initialize();
+      expect(afterRetry.lastSeqFor('c'), 4);
+      expect(afterRetry.messagesFor('c').map((m) => m.seq), [4]);
+    },
+  );
+
+  test(
+    'superseded sync work cannot mutate behind a pending draft write',
+    () async {
+      final store = MemoryPersistence();
+      final shell = historyShell(store);
+      await shell.initialize();
+      await shell.acceptMessage(message(1));
+      final started = Completer<void>(), release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      store.beforeWrite = () async {
+        if (!started.isCompleted) started.complete();
+        await release.future;
+      };
+      final draft = shell.saveDraft('other', 'keep');
+      await started.future.timeout(const Duration(seconds: 5));
+      var active = true;
+      void checkActive() {
+        if (!active) throw StateError('superseded');
+      }
+
+      final floor = expectLater(
+        shell.applySyncHistoryFloor('c', 3, checkActive: checkActive),
+        throwsStateError,
+      );
+      final row = expectLater(
+        shell.acceptMessage(message(2), checkActive: checkActive),
+        throwsStateError,
+      );
+      active = false;
+      release.complete();
+      await Future.wait([draft, floor, row]);
+      expect(store.writeAttempts, 2);
+      final reboot = historyShell(store);
+      await reboot.initialize();
+      expect(reboot.messagesFor('c').single.seq, 1);
+      expect(reboot.lastSeqFor('c'), 1);
+      expect(reboot.draftFor('other'), 'keep');
+    },
+  );
+
+  test(
+    'a floor waiting for another section cannot checkpoint after cancellation',
+    () async {
+      final store = MemoryPersistence();
+      final shell = historyShell(store);
+      await shell.initialize();
+      await shell.acceptMessage(message(1));
+      final writing = Completer<void>(), release = Completer<void>();
+      final checked = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      store.beforeWrite = () async {
+        if (!writing.isCompleted) writing.complete();
+        await release.future;
+      };
+      final other = writeClientSection(store, 'consent', {'approved': true});
+      await writing.future.timeout(const Duration(seconds: 5));
+      var active = true;
+      final floor = expectLater(
+        shell.applySyncHistoryFloor(
+          'c',
+          3,
+          checkActive: () {
+            if (!active) throw StateError('superseded');
+            if (!checked.isCompleted) checked.complete();
+          },
+        ),
+        throwsStateError,
+      );
+      await checked.future.timeout(const Duration(seconds: 5));
+      active = false;
+      release.complete();
+      await Future.wait([other, floor]);
+      expect(store.writeAttempts, 2);
+      final reboot = historyShell(store);
+      await reboot.initialize();
+      expect(reboot.messagesFor('c').single.seq, 1);
+      expect(reboot.lastSeqFor('c'), 1);
+      expect((await store.read())?['consent'], {'approved': true});
+    },
+  );
+
+  test('invalid floors and an unchanged floor never write', () async {
+    final store = MemoryPersistence();
+    final shell = historyShell(store);
+    await shell.initialize();
+
+    for (final floor in [0, -1]) {
+      await expectLater(
+        shell.applySyncHistoryFloor('c', floor),
+        throwsArgumentError,
+      );
+    }
+    store.fail = true;
+    await shell.applySyncHistoryFloor('c', 1);
+    expect(shell.lastSeqFor('c'), 0);
+    expect(shell.messagesFor('c'), isEmpty);
+    expect(store.writeAttempts, 0);
+  });
+
   for (final code in [FailureCode.unavailable, FailureCode.rateLimited]) {
     test(
       'overlapping shell flush shares transient flight without retry $code',

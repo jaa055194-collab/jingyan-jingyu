@@ -26,6 +26,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Future<void>? _refreshWork;
   // A completed refresh also supersedes visibility seen by an earlier shortcut.
   int _refreshGeneration = 0;
+  int _historySyncEpoch = 0;
   Future<bool>? _renewWork;
   Future<void> _secureTail = Future<void>.value();
   ClientCredentials? _credentials;
@@ -184,7 +185,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       appLock = _OwnAiEpochAppLock(
         persistence: _settingsStorage,
         auth: native,
-        invalidate: _invalidateOwnAiDirect,
+        invalidate: () {
+          _invalidateOwnAiDirect();
+          if (appLock.enabled) _historySyncEpoch++;
+        },
       );
       await appLock.initialize();
       final guest = await _prepareSnapshot(
@@ -426,10 +430,15 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         );
       },
       requestSync: (frame) async {
-        if (!_current(generation)) return;
-        await transport?.sync(frame, (message) async {
-          if (_current(generation)) await next.acceptMessage(message);
-        });
+        if (transport != null) {
+          await _syncConversation(
+            transport,
+            next,
+            frame,
+            generation,
+            _historySyncEpoch,
+          );
+        }
       },
     );
     final nextConsent = ConversationConsentController(snapshot);
@@ -548,17 +557,61 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     final active = _refreshWork;
     if (active != null) return active;
     _refreshGeneration++;
-    final work = _performRefresh(connection!, shell, _generation);
+    final work = _performRefresh(
+      connection!,
+      shell,
+      _generation,
+      _historySyncEpoch,
+    );
     _refreshWork = work;
     return work.whenComplete(() {
       if (identical(_refreshWork, work)) _refreshWork = null;
     });
   }
 
+  bool _canSync(int generation, int epoch) =>
+      _current(generation) &&
+      _historySyncEpoch == epoch &&
+      !locked &&
+      !_switching &&
+      !_sessionRejected;
+
+  Future<bool> _syncConversation(
+    HostConnection transport,
+    ClientShellController sessionShell,
+    SyncRequestFrame frame,
+    int generation,
+    int epoch,
+  ) async {
+    void checkActive() {
+      if (!_canSync(generation, epoch)) throw const _SyncInterrupted();
+    }
+
+    try {
+      await transport.sync(
+        frame,
+        (message) async {
+          await sessionShell.acceptMessage(message, checkActive: checkActive);
+        },
+        applyHistoryFloor: (firstVisibleSeq) => sessionShell.applySyncHistoryFloor(
+          frame.conversationId,
+          firstVisibleSeq,
+          checkActive: checkActive,
+        ),
+        checkActive: checkActive,
+      );
+      checkActive();
+      return true;
+    } on _SyncInterrupted {
+      return false;
+    }
+  }
+
   Future<void> _performRefresh(
     HostConnection sessionConnection,
     ClientShellController sessionShell,
     int generation,
+    int epoch,
   ) async {
     try {
       // `/host` is administrator-only on the current host. A friend client
@@ -574,7 +627,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           rethrow;
         }
       }
-      if (!_current(generation)) return;
+      if (!_canSync(generation, epoch)) return;
       plugins ??= PluginHost(
         environment: PluginEnvironment(
           platform: Platform.isWindows ? 'windows' : 'android',
@@ -587,11 +640,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         },
       );
       final list = await sessionConnection.request('GET', Routes.conversations);
+      if (!_canSync(generation, epoch)) return;
       final direct = await sessionConnection.request(
         'GET',
         Routes.directConversations,
       );
-      if (!_current(generation) || locked) return;
+      if (!_canSync(generation, epoch)) return;
       final conversations = mapConversations(
         groups: list['conversations'],
         directs: direct['conversations'],
@@ -600,24 +654,26 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _online = true;
       await sessionShell.flush();
       for (final conversation in conversations) {
-        if (!_current(generation) || locked) return;
-        await sessionConnection.sync(
+        if (!_canSync(generation, epoch)) return;
+        final completed = await _syncConversation(
+          sessionConnection,
+          sessionShell,
           SyncRequestFrame(
             id: 'refresh-${conversation.id}',
             at: DateTime.now().toUtc(),
             conversationId: conversation.id,
             afterSeq: sessionShell.lastSeqFor(conversation.id),
           ),
-          (message) async {
-            if (_current(generation)) await sessionShell.acceptMessage(message);
-          },
+          generation,
+          epoch,
         );
+        if (!completed) return;
       }
-      if (_current(generation) && Platform.isAndroid) {
+      if (_canSync(generation, epoch) && Platform.isAndroid) {
         await native.invoke<bool>('setForegroundService', {'enabled': true});
       }
     } catch (_) {
-      if (_current(generation)) _online = false;
+      if (_current(generation) && _historySyncEpoch == epoch) _online = false;
     }
     if (_current(generation)) notifyListeners();
   }
@@ -1443,7 +1499,17 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     if (!await appLock.unlockWithPin(pin)) {
       throw const FormatException('PIN 不正确');
     }
-    if (connection != null) unawaited(_refresh());
+    if (connection == null) return;
+    final generation = _generation;
+    final previous = _refreshWork;
+    if (previous == null) {
+      unawaited(_refresh());
+    } else {
+      // The superseded flight must stop before refresh takes a new cursor.
+      unawaited(previous.then((_) async {
+        if (_current(generation)) await _refresh();
+      }));
+    }
   });
   @override
   Future<void> setHideNotificationBody(bool value) => _run(() async {
@@ -1510,6 +1576,10 @@ class _OwnAiEpochAppLock extends AppLockController {
     super.lock();
     invalidate();
   }
+}
+
+class _SyncInterrupted implements Exception {
+  const _SyncInterrupted();
 }
 
 class _PreparedSnapshot {
