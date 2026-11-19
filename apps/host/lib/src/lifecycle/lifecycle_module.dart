@@ -96,6 +96,7 @@ class LifecycleModule extends HostModule {
   var _uploadSeq = 0;
 
   Timer? _cleanupTimer;
+  Future<void>? _cleanupInFlight;
   bool _running = false;
 
   @override
@@ -137,20 +138,29 @@ class LifecycleModule extends HostModule {
     _running = false;
     _cleanupTimer?.cancel();
     _cleanupTimer = null;
+    // 存储依赖在本模块停止后才关闭。
+    await _cleanupInFlight;
   }
 
   void _scheduleNextCleanup() {
     if (!_running) return;
     final now = clock.now();
     final delay = CleanupService.nextScheduledRun(now).difference(now);
-    _cleanupTimer = Timer(delay, () async {
-      try {
-        await cleanup.run();
-      } catch (_) {
-        // 单次清理失败不终止调度；次日继续。
-      }
-      _scheduleNextCleanup();
+    _cleanupTimer = Timer(delay, () {
+      _cleanupTimer = null;
+      _cleanupInFlight = _runScheduledCleanup();
     });
+  }
+
+  Future<void> _runScheduledCleanup() async {
+    try {
+      await cleanup.run();
+    } catch (_) {
+      // 单次清理失败不终止调度；次日继续。
+    } finally {
+      _cleanupInFlight = null;
+      _scheduleNextCleanup();
+    }
   }
 
   UploadKind? _uploadKind(String raw) {
