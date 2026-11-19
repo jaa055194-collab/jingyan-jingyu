@@ -93,6 +93,24 @@ class ClientShellController {
     return id;
   });
 
+  /// Queues an explicitly sent text and consumes its matching local draft in
+  /// the same checkpoint. A failed replacement leaves both unchanged.
+  Future<String> enqueueTextDraft(String conversationId, String text) =>
+      _serial.run(() async {
+        _requireInitialized();
+        final drafts = {..._drafts};
+        final consumed = drafts[conversationId] == text;
+        if (consumed) drafts.remove(conversationId);
+        final id = await outbox.enqueueWithCheckpoint(
+          conversationId,
+          MessageKind.text,
+          {'text': text},
+          (item) => _persist(pendingItem: item, drafts: drafts),
+        );
+        if (consumed) _drafts.remove(conversationId);
+        return id;
+      });
+
   /// Overlapping callers share this flight; a transient stop is not implicitly
   /// retried by a queued joiner. A later explicit call may start a fresh flight.
   Future<FlushReport> flush() {
@@ -181,8 +199,14 @@ class ClientShellController {
     return outcome;
   }
 
-  Future<void> _persist() => writeClientSection(persistence, 'shell', {
-    'outbox': [for (final item in outbox.items) _encodeItem(item)],
+  Future<void> _persist({
+    OutboxItem? pendingItem,
+    Map<String, String>? drafts,
+  }) => writeClientSection(persistence, 'shell', {
+    'outbox': [
+      for (final item in outbox.items) _encodeItem(item),
+      if (pendingItem != null) _encodeItem(pendingItem),
+    ],
     'dropped': [
       for (final d in _dropped)
         {
@@ -191,7 +215,7 @@ class ClientShellController {
           'message': d.failure.message,
         },
     ],
-    'drafts': {..._drafts},
+    'drafts': drafts ?? {..._drafts},
     'cursors': {for (final e in _cursors.entries) e.key: e.value.lastSeq},
     'messages': [
       for (final list in _messages.values)

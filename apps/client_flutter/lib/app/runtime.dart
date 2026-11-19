@@ -1231,23 +1231,25 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   void updateDraft(String value) {
-    if (_selected != null) {
+    _draft = value;
+    final selected = _selected;
+    if (selected != null) {
+      final generation = _generation;
       _draftRevisions.update(
-        _selected!,
+        selected,
         (revision) => revision + 1,
         ifAbsent: () => 1,
       );
-    }
-    _draft = value;
-    notifyListeners();
-    if (_selected != null) {
+      // Schedule the save before listeners can request a send of this draft.
       unawaited(
-        shell.saveDraft(_selected!, value).catchError((Object e) {
+        shell.saveDraft(selected, value).catchError((Object e) {
+          if (!_current(generation)) return;
           _error = '草稿保存失败';
           notifyListeners();
         }),
       );
     }
+    notifyListeners();
   }
 
   @override
@@ -1274,10 +1276,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     final sessionShell = shell;
     final selected = _selected!;
     final text = _draft;
-    await sessionShell.enqueue(selected, MessageKind.text, {'text': text});
-    await sessionShell.saveDraft(selected, '');
+    final draftRevision = _draftRevisions[selected] ?? 0;
+    await sessionShell.enqueueTextDraft(selected, text);
     if (!_current(generation)) return;
-    if (_selected == selected && _draft == text) _draft = '';
+    if (_selected == selected &&
+        _draft == text &&
+        (_draftRevisions[selected] ?? 0) == draftRevision) {
+      _draft = '';
+    }
     if (_online && !locked) await sessionShell.flush();
   });
   @override

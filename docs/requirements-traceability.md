@@ -185,3 +185,9 @@
 历史真实 `auto` 回复与 SQLite 回存证据见 [验收 §G.1](acceptance.md#g1-复跑方式与结果)：#102 的 `63f4c2e` 本地进程内集成测试显式启用 gzip，非本次复跑。M15 复跑基线 `0c23edd` 的模型子进程未显式启用 gzip；#126 仅为 `ModelRuntime.withProcess` 的模型调用显式启用 gzip，其他调用方默认行为不变。基线 `8e77c9d` 加本次测试及子进程环境隔离改动，后续实测经仓库 HTTP worker 得到真实 `auto` 回复、SQLite 重开读回及一致的用量结算，详见同节。默认宿主启动后的用户会话端到端仍未验证。
 
 M14 附件列表后续复核见 [验收 §F.3](acceptance.md#f3-汇总与限制)：宿主 #107 已合并且路由测试 4/4 通过，保留上表的历史基线记录。
+
+## R1 增量：普通文本离线发送检查点（#131 A，基线 e43cde7）
+
+| ID | 来源/范围 | 审批状态 | 可观察验收 | 实现 | 本次证据 | 状态/缺口 |
+|---|---|---|---|---|---|---|
+| REQ-R1-01 | v4.2 FR-10/13/14；AC-18/32 局部 | 已授权局部 | 普通文本入队与消费原草稿同一次提交；离线重开保留原发送 ID、不恢复已发送草稿；写入失败仍可编辑和重试、不自动发出；新草稿与其他会话不受影响 | `ClientRuntime.sendMessage` → `ClientShellController.enqueueTextDraft` → 现有账户快照和发件箱 | Windows，Flutter 3.50 / Dart 3.14：[runtime_text_send_test](../apps/client_flutter/test/runtime_text_send_test.dart) 4 个回归先见故障后通过，使用实际文件快照与隔离回环宿主 | 自动化验证通过（普通文字本地检查点）；不推断旧版快照内相同正文是否已发送，不计双端未读、真实模型/宿主联调或 Android 真机通过 |
