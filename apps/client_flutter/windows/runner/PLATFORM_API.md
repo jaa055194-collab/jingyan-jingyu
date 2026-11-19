@@ -6,6 +6,8 @@ Channel: `jingyu/platform` (Flutter StandardMethodCodec).
 |---|---|---|
 | initialize | none | `{platform: 'windows', aumid: 'com.jingyu.client', tray: bool, globalShortcut: bool, notifications: true}` |
 | getDataDirectory | none | current user's LocalAppData/JingyuClient path |
+| getLive2DPreviewDirectory | none | existing current-user LocalAppData/JingyuClient/live2d-preview cache directory path |
+| pickLive2DZip | none | null on cancel, or `{path: String, temporary: false}` for an existing `.zip` file |
 | configurePin | `{pin: String}` | null; 4–12 ASCII digits |
 | hasPin | none | bool |
 | unlockPin | `{pin: String}` | bool |
@@ -27,6 +29,8 @@ Dart owns authentication routing, account identity, call state, notification pol
 Initialization creates an IShellLink Start Menu shortcut with IPropertyStore/PKEY_AppUserModel_ID `com.jingyu.client`, sets process AUMID, installs notification-area icon and attempts Ctrl+Alt+J. A conflicting shortcut is reported as `globalShortcut: false`. Notification capability means the native toast path exists; Windows/user notification policy can suppress delivery. No third-party dependency is used. Notification activation routing is not implemented.
 
 PIN storage uses BCrypt random 32-byte salt, PBKDF2 using SHA-256 (600000 iterations), constant-time verifier comparison, user DPAPI encryption and Windows Credential Manager. Session JSON is also DPAPI-encrypted in Credential Manager. The app data directory uses the current user's inherited LocalAppData ACL. PIN changes and removal must be gated by Dart's unlocked settings screen.
+
+The Live2D preview directory is created on demand under the current user's LocalAppData and uses inherited permissions. The ZIP picker selects a single existing filesystem file, does not read or copy it, and does not add it to Recent Documents. Dart owns capped stream reading and archive validation; `temporary: false` means the source file is not a disposable staging copy. Native errors do not include paths.
 
 The pet is a static transparent topmost native shape, not an avatar renderer. Its only label is an unread count. It repaints on state/Windows paint events, with a 1Hz visibility check for fullscreen apps. Dragging snaps to the nearest screen edge; doubleclick hides pet/main window to tray. The tray context menu can toggle click-through so an otherwise noninteractive pet can be recovered.
 

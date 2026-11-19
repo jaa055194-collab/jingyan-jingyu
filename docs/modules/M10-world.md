@@ -19,14 +19,17 @@ apps/host/lib/src/world/
 - 3D 页面是独立模块，不嵌进聊天页面（FR-12）：Android 用 WebView，Windows 用 WebView2，加载 feiyu-room-template 的 Three.js 房间。
 - 内置插件 `jingyu.room.generator` 由 client kit 的 `FeiyuRoomGenerator` 实现 `RoomGenerator`，按 `02-assets.md` §2 做"按提示词/对话建屋"：五个风格预设 + `RoomBrief`→`RoomLayout`，只产出布局数据，不下载或执行代码；`briefFromConversation` 把对话文本映射为 brief。
 - 本地 profile 元数据校验位于 `packages/jingyu_client_kit/lib/src/live2d_profile.dart`，只在设备本地校验配置，不检查数据库或参数名是否真实存在。
-- 本地模型包安全校验位于 `packages/jingyu_client_kit/lib/src/live2d_package.dart`（纯 Dart，不落盘、不联网）：`validateLive2DPackage(bytes)` 校验 Zip Slip/白名单/条目与体积/压缩比/JSON 深度、`FileReferences` 引用完整性、MOC3 魔数与版本、PNG 纹理魔数与像素预算，并返回 `model3Path/mocPath/textures/totalPixels/sha256`。它不渲染，也不证明模型视觉正确。
+- `validateLive2DPackage` 是本地字节预检，不是解包器。它拒绝常见不安全的 ZIP 路径与可执行扩展名；检查识别到的 model3 引用是否使用规范相对路径及对应后缀（例如 `avatar.physics3.json`，不接受 `./` 路径别名）。清单、MOC3 和纹理的选定条目按声明长度限制解压输出，并检查 ZIP 校验和；PNG 检查首块 IHDR 与累计像素数。预检不覆盖完整 ZIP/DEFLATE 语法、所有可选载荷或图片解码，也不能作为安全落盘或渲染的依据。
+- 静态预览准备与暂存接口：从通过检查的 ZIP 仅选取 MOC3 与引用的 PNG，以固定文件名重建清单，写入设备私有临时目录。暂存失败时清理本次文件，清理失败可重试。
+- 客户端的“世界与形象”页已接入本机选包入口：Android 用系统文档选择器、Windows 用系统打开对话框选取 `.zip`，随后在后台 isolate 里按 160 MiB 上限流式读取、预检并暂存；界面只声明“已准备临时预览文件”，可手工清理。Android 会把所选内容流式复制进应用私有缓存（同样 160 MiB 上限，超出即拒绝并删除半成品），Windows 只读取用户自己的文件、不复制。应用锁开启时该入口禁用，避免切走系统选择器触发上锁后结果被丢弃。
+- 上述链路的验证边界：Flutter 侧单测与控件测试覆盖取消、重复点击占用、准备失败与清理路径；原生选择器仅做过 Windows 原生通道契约与 Android Kotlin 编译/流式拷贝检查，**未在真机或真实桌面会话上人工点选**。它不证明 PNG 可完整解码、模型可绘制或设备能承受纹理开销；应用内渲染预览、持久化、热切换和回退尚未接入。
 - Live2D 选择/导入由每位用户在自己的设备执行；不使用 `hostOnly` 插件门控。各设备独立保存模型文件与 profile，**不做跨端同步、不广播单一 model_id/profile_rev**；同一账号的手机与电脑可各自使用不同模型（如手机 B、电脑 C）。设备缺少本地模型或有效映射时回退 VRM，不下载他端模型。
 
 ## 规则
 
 1. 每个设备独立选取用户自行取得的 Live2D 模型；默认目录/模型包不由应用提供。VRM 保持默认 fallback。形象选择按设备隔离，不做双端一致；同账号各设备互不影响。
 2. profile 只保存相对 model3 manifest 路径、稳定 model_id、profile_rev 与语义 param_map，不保存模型字节、绝对路径、URL、API key 或 Cubism/Core 文件；模型字节不得进入服务端附件、同步、导出或共享备份。
-3. 导入安全由两层组成：`validateLive2DPackage` 在设备本地校验压缩包（Zip Slip、拒绝脚本/可执行扩展名、条目数/单条/总量/压缩比、model3 JSON 深度、被引用文件是否存在、MOC3 魔数与版本、PNG 魔数与纹理像素预算），`Live2DProfile` 再校验显式映射。缺口型/左右眨眼/表情/动作映射禁止启用，不许猜参数。两层都只是元数据/字节校验，不证明参数名存在于模型、也不证明渲染正确。
+3. 模型包与档案分别做预检；应用接入前仍须实现受限解包和资源隔离，不能把预检结果当作安全落盘许可。缺口型、左右眨眼、表情或动作映射禁止启用，不许猜参数；档案检查不证明映射目标存在于模型。
 4. 热切换须离屏预载 → 句边界/口型≈0 的一帧原子替换 → 新模型首帧成功后销毁旧实例；不中断音频；失败回滚。当前仅定义 profile metadata，runtime 与热切换尚未实现。
 5. 拜访：好友可进小院；室内需邀请；单户访客 ≤4；被拉黑方无法拜访（口径 C-5）。
 6. 宿主离线时位置冻结，恢复后继续，不补造路上经历（FR-36）。

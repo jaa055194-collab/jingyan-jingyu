@@ -18,6 +18,10 @@ The repository's pure-Dart `validateLive2DPackage` was also run against the supp
 
 The supplied model notice separately asks for attribution and prohibits redistribution; some commercial product-inclusion cases ask users to contact the author. Do not bundle or redistribute this model. PurismCore's MIT runtime license does not establish model rights, Cubism SDK rights or trademark/format legal conclusions. Retain creator attribution when the user's local model is used. No Cubism SDK/Core binary was downloaded or bundled.
 
+## Browser renderer diagnostic (not an app preview)
+
+On the Windows development machine, a private loopback-only diagnostic staged the supplied model's MOC3 and five textures under generated names, with a minimal manifest. It reused the pinned upstream `Samples/Viewer/viewer.js` and `viewer.wasm` rather than the upstream ZIP picker or a new renderer. In headless Edge with SwiftShader, the upstream viewer updated its title to the loaded manifest and WebGL2 readback found 266,392 pixels differing from the background on an 866 × 623 canvas; the sampled GL error was 0 and `MAX_TEXTURE_SIZE` was 8192. The server was stopped after checking. Private inputs and captures are not included. This shows nonblank browser rendering for that sample; it does not establish visual fidelity, WebView security, native-device performance, motion, or correct fallback.
+
 ## Candidate integration, not implemented
 
 A next prototype may adapt the upstream local WebGL2 viewer in a controlled WebView, subject to a separate safe importer, bounded JSON/archive parsing, texture dimension/pixel budget, no remote model URLs, local-only profile persistence, explicit mapping for mouth/blink/expressions/motions, and a narrow Flutter-JS bridge. The existing profile parser validates metadata only. The current repository has no model extraction, device persistence/UI, renderer, bridge, hot-switch, or verified VRM fallback.
