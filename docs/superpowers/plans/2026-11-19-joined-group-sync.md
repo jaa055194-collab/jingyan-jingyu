@@ -49,4 +49,4 @@
 
 - [x] With a synthetic loopback host and actual `ClientRuntime`, assert the joined group pages from request 0 to seq 3 then 4, stays online, fetches the ordinary group, restores from seq 4, and never sends. Test an empty first page, true gaps, cross-group rows and unpersistable pages; gate lock/unlock around a late response.
 - [x] Reproduce the unsupported joined-history page and review findings, then run targeted host, client-kit and Flutter checks against the changes. Record the specific REQ-008A / AC-18 evidence; do not claim complete group ACL or device acceptance.
-- [ ] Finish full checks and matched actual app Before/After on the reviewed revision.
+- [x] Run whole-repository check and recheck the final changes with full client-kit and Flutter suites. Record the matched [actual app Before/After](../../../apps/client_flutter/evidence/joined-history-sync.md) against the reviewed production revision.
