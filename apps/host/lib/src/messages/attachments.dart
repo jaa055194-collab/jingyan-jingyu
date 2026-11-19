@@ -4,6 +4,7 @@
 /// 上传中写 `.part`，完成后校验声明大小与 sha256 再改名落库。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -104,6 +105,64 @@ class AttachmentService {
   }
 
   String _ownerDir(String ownerAccountId) => '$_mediaDir/$ownerAccountId';
+
+  // The default host shares this service across HTTP handlers. SQLite serializes
+  // its own calls, not the part-file I/O between a ledger read and commit.
+  final _uploadTails = <(String, String), Future<void>>{};
+
+  Future<T> _serializeUpload<T>(
+    String ownerAccountId,
+    String uploadId,
+    Future<T> Function() action,
+  ) async {
+    final key = (ownerAccountId, uploadId);
+    final previous = _uploadTails[key];
+    final done = Completer<void>();
+    _uploadTails[key] = done.future;
+    try {
+      if (previous != null) await previous;
+      return await action();
+    } finally {
+      done.complete();
+      if (_uploadTails[key] == done.future) _uploadTails.remove(key);
+    }
+  }
+
+  // The committed ledger is authoritative. Never recreate or pad a missing
+  // committed prefix; only a suffix beyond that boundary can be discarded.
+  // A duplicate only checks the prefix; a write or completion can trim it.
+  Future<Failure?> _preparePart(
+    File part,
+    int received, {
+    List<int>? bytes,
+    bool verifyOnly = false,
+  }) async {
+    final exists = await part.exists();
+    if (!exists && received != 0) {
+      return const Failure(FailureCode.internal, 'upload part missing');
+    }
+    final length = exists ? await part.length() : 0;
+    if (length < received) {
+      return const Failure(FailureCode.invalidArgument, 'stored size mismatch');
+    }
+    if (verifyOnly || (bytes == null && exists && length == received)) {
+      return null;
+    }
+    if (!exists) await part.parent.create(recursive: true);
+    final handle = await part.open(mode: FileMode.append);
+    try {
+      if (length > received) await handle.truncate(received);
+      if (bytes != null) {
+        await handle.setPosition(received);
+        await handle.writeFrom(bytes);
+      }
+      // Persist the new file state before the caller can commit the ledger.
+      await handle.flush();
+    } finally {
+      await handle.close();
+    }
+    return null;
+  }
 
   /// 初始化一次上传会话。返回 uploadId 与建议分片大小。
   Future<Result<Map<String, Object?>>> initiateUpload({
@@ -206,6 +265,19 @@ class AttachmentService {
     if (index < 0) {
       return err(FailureCode.invalidArgument, 'invalid chunk index');
     }
+    return _serializeUpload(
+      ownerAccountId,
+      uploadId,
+      () => _uploadChunk(ownerAccountId, uploadId, index, bytes),
+    );
+  }
+
+  Future<Result<Map<String, Object?>>> _uploadChunk(
+    String ownerAccountId,
+    String uploadId,
+    int index,
+    List<int> bytes,
+  ) async {
     final rows = await _database.query(
       'SELECT * FROM attachment_uploads WHERE id = ? AND owner_account_id = ?',
       [uploadId, ownerAccountId],
@@ -218,6 +290,7 @@ class AttachmentService {
     final declared = row['declared_size'] as int;
     final received = row['received_bytes'] as int;
     final nextChunk = row['next_chunk'] as int;
+    final part = File('${_ownerDir(ownerAccountId)}/$uploadId.part');
 
     // 幂等重发：允许重发上一条已接收的分片（大小一致时）。
     if (index == nextChunk - 1 && nextChunk > 0) {
@@ -228,6 +301,8 @@ class AttachmentService {
       );
       if (existing.isNotEmpty &&
           (existing.single['size'] as int) == bytes.length) {
+        final failure = await _preparePart(part, received, verifyOnly: true);
+        if (failure != null) return Err(failure);
         return Ok(<String, Object?>{
           'received': received,
           'nextChunk': nextChunk,
@@ -242,15 +317,8 @@ class AttachmentService {
       return err(FailureCode.invalidArgument, 'chunk exceeds declared size');
     }
 
-    final ownerDir = Directory(_ownerDir(ownerAccountId));
-    await ownerDir.create(recursive: true);
-    final part = File('${ownerDir.path}/$uploadId.part');
-    final handle = await part.open(mode: FileMode.append);
-    try {
-      await handle.writeFrom(bytes);
-    } finally {
-      await handle.close();
-    }
+    final failure = await _preparePart(part, received, bytes: bytes);
+    if (failure != null) return Err(failure);
 
     final newReceived = received + bytes.length;
     final newNext = index + 1;
@@ -281,6 +349,18 @@ class AttachmentService {
     } on FormatException {
       return err(FailureCode.invalidArgument, 'invalid id');
     }
+    return _serializeUpload(
+      ownerAccountId,
+      uploadId,
+      () => _completeUpload(ownerAccountId, uploadId, expectedSha256),
+    );
+  }
+
+  Future<Result<Map<String, Object?>>> _completeUpload(
+    String ownerAccountId,
+    String uploadId,
+    String? expectedSha256,
+  ) async {
     final rows = await _database.query(
       'SELECT * FROM attachment_uploads WHERE id = ? AND owner_account_id = ?',
       [uploadId, ownerAccountId],
@@ -297,15 +377,8 @@ class AttachmentService {
     }
 
     final part = File('${_ownerDir(ownerAccountId)}/$uploadId.part');
-    if (!await part.exists()) {
-      if (declared != 0) {
-        return err(FailureCode.internal, 'upload part missing');
-      }
-      await part.writeAsBytes(const <int>[], flush: true);
-    }
-    if (await part.length() != declared) {
-      return err(FailureCode.invalidArgument, 'stored size mismatch');
-    }
+    final failure = await _preparePart(part, received);
+    if (failure != null) return Err(failure);
     // Stream-hash the blob instead of loading it fully into memory.
     final digest = (await sha256.bind(part.openRead()).single).toString();
     if (expectedSha256 != null && expectedSha256 != digest) {
