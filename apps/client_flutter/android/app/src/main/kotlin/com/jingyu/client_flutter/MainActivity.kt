@@ -8,14 +8,24 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.CancellationSignal
 import android.net.Uri
+import android.provider.OpenableColumns
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
+import java.util.UUID
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
+    companion object {
+        private const val REQUEST_PICK_ATTACHMENT = 1201
+    }
+
     private lateinit var channel: MethodChannel
     private lateinit var pinStore: PinStore
     private var pendingShare: Map<String, Any?>? = null
+    private var pendingFileResult: MethodChannel.Result? = null
+    private val filePickerExecutor = Executors.newSingleThreadExecutor()
     private var authenticated = false
     private var biometricResult: MethodChannel.Result? = null
     private var biometricCancellation: CancellationSignal? = null
@@ -100,6 +110,28 @@ class MainActivity : FlutterActivity() {
                         )
                         result.success(true)
                     }
+                    "pickAttachment" -> {
+                        if (pendingFileResult != null) {
+                            result.error("busy", "A file picker is already open", null)
+                        } else {
+                            val kind = call.argument<String>("kind")
+                            if (kind != "image" && kind != "file") {
+                                result.error("invalid_arguments", "Unsupported attachment kind", null)
+                            } else {
+                                pendingFileResult = result
+                                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    type = if (kind == "image") "image/*" else "*/*"
+                                }
+                                try {
+                                    startActivityForResult(intent, REQUEST_PICK_ATTACHMENT)
+                                } catch (error: Exception) {
+                                    pendingFileResult = null
+                                    result.error("pick_failed", "Cannot open file picker", null)
+                                }
+                            }
+                        }
+                    }
                     "showShare" -> {
                         val text = call.argument<String>("text") ?: ""
                         require(text.isNotBlank()) { "Share text is required" }
@@ -116,6 +148,75 @@ class MainActivity : FlutterActivity() {
                 result.error("platform_error", error.message, null)
             }
         }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_PICK_ATTACHMENT) return
+        val result = pendingFileResult ?: return
+        pendingFileResult = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            result.success(null)
+            return
+        }
+        if (uri.scheme != "content") {
+            result.error("pick_failed", "Selected file is unavailable", null)
+            return
+        }
+        filePickerExecutor.execute {
+            try {
+                val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                val mime = contentResolver.getType(uri)
+                val picked = copyPickedFile(uri)
+                runOnUiThread {
+                    if (isDestroyed) {
+                        picked.delete()
+                    } else {
+                        result.success(mapOf(
+                            "path" to picked.absolutePath,
+                            "name" to (name ?: "附件"),
+                            "mime" to mime,
+                            "temporary" to true
+                        ))
+                    }
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    if (!isDestroyed) result.error("pick_failed", "Selected file is unavailable", null)
+                }
+            }
+        }
+    }
+
+    private fun copyPickedFile(uri: Uri): File {
+        val folder = File(cacheDir, "picked-attachments")
+        require(folder.isDirectory || folder.mkdirs()) { "Cannot create attachment cache" }
+        val destination = File(folder, UUID.randomUUID().toString())
+        val input = contentResolver.openInputStream(uri) ?: error("Cannot read selected file")
+        var total = 0L
+        try {
+            input.use { source ->
+                destination.outputStream().use { target ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                        val count = source.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        if (total > 128L * 1024 * 1024) {
+                            throw IllegalArgumentException("Selected file is too large")
+                        }
+                        target.write(buffer, 0, count)
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            destination.delete()
+            throw error
+        }
+        return destination
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -143,6 +244,9 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         cancelBiometric()
+        pendingFileResult?.success(null)
+        pendingFileResult = null
+        filePickerExecutor.shutdownNow()
         super.onDestroy()
     }
 

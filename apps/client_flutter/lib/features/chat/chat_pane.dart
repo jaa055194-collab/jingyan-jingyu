@@ -334,6 +334,22 @@ class _ChatPaneState extends State<ChatPane> {
 
   Future<void> attach(String kind) async {
     final model = widget.model;
+    final account = model.connectedAccountId;
+    final conversation = model.selectedConversationId;
+    final session = model.ownAiSessionContext;
+    bool current() =>
+        mounted &&
+        identical(widget.model, model) &&
+        account != null &&
+        conversation != null &&
+        model.connectedAccountId == account &&
+        model.selectedConversationId == conversation &&
+        model.ownAiSessionContext == session &&
+        model.authenticated &&
+        !model.busy &&
+        !model.locked;
+
+    if (!current()) return;
     if (!model.aiConsentGranted) {
       final granted = await showDialog<bool>(
         context: context,
@@ -354,9 +370,9 @@ class _ChatPaneState extends State<ChatPane> {
           ],
         ),
       );
-      if (granted != true || !mounted) return;
+      if (granted != true || !current()) return;
       await model.setAiConsent(true);
-      if (!model.aiConsentGranted || model.error != null || !mounted) return;
+      if (!current() || !model.aiConsentGranted || model.error != null) return;
     }
     await model.attachFile(kind);
   }
@@ -377,6 +393,10 @@ class _ChatPaneState extends State<ChatPane> {
       (c) => c.id == model.selectedConversationId,
     );
     final title = selected.isEmpty ? '聊天' : selected.first.title;
+    final attachmentName = model.selectedAttachmentName;
+    final canManageAttachment =
+        model.authenticated && !model.busy && !model.locked;
+    final canSendAttachment = canManageAttachment && model.online;
     return Column(
       children: [
         ListTile(
@@ -484,6 +504,36 @@ class _ChatPaneState extends State<ChatPane> {
               label: const Text('提及 AI 并发送'),
             ),
           ),
+        if (attachmentName != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Tooltip(
+                    message: attachmentName,
+                    child: Text(
+                      attachmentName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: canManageAttachment
+                      ? model.discardSelectedAttachment
+                      : null,
+                  child: const Text('取消附件'),
+                ),
+                FilledButton(
+                  onPressed: canSendAttachment
+                      ? model.sendSelectedAttachment
+                      : null,
+                  child: const Text('发送附件'),
+                ),
+              ],
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.all(8),
           child: Row(
@@ -491,12 +541,12 @@ class _ChatPaneState extends State<ChatPane> {
             children: [
               IconButton(
                 tooltip: '添加图片',
-                onPressed: model.busy ? null : () => attach('image'),
+                onPressed: canManageAttachment ? () => attach('image') : null,
                 icon: const Icon(Icons.image_outlined),
               ),
               IconButton(
                 tooltip: '添加文件',
-                onPressed: model.busy ? null : () => attach('file'),
+                onPressed: canManageAttachment ? () => attach('file') : null,
                 icon: const Icon(Icons.attach_file),
               ),
               Expanded(

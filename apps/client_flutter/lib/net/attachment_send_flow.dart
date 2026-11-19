@@ -38,8 +38,8 @@ class InjectedBytesContent implements AttachmentContentSource {
     required this.mime,
     required this.sha256,
     required List<int> bytes,
-  })  : _bytes = Uint8List.fromList(bytes),
-        size = bytes.length;
+  }) : _bytes = Uint8List.fromList(bytes),
+       size = bytes.length;
 
   @override
   final String kind;
@@ -133,10 +133,10 @@ class AttachmentSendResult {
 
   /// The exact payload the Outbox submit path sends: clientMsgId + kind + body.
   Map<String, Object?> outboxPayload(String clientMsgId) => {
-        'clientMsgId': clientMsgId,
-        'kind': kind.wire,
-        'body': body,
-      };
+    'clientMsgId': clientMsgId,
+    'kind': kind.wire,
+    'body': body,
+  };
 
   /// Convenience envelope for the existing host submission transport.
   OutboxSubmission submission(String clientMsgId) =>
@@ -157,9 +157,13 @@ class AttachmentSendResult {
 /// * Declared size is cross-checked against the streamed byte count before the
 ///   complete stage, and against the host's completed size afterwards.
 class AttachmentSendFlow {
-  AttachmentSendFlow(this.api);
+  AttachmentSendFlow(this.api, {this.abortOnFailure = false});
 
   final AttachmentUploadApi api;
+
+  /// Best-effort abort of a pending session after a known local failure. The
+  /// host does not thereby undo an already successful completion.
+  final bool abortOnFailure;
 
   /// Maps a host attachment kind to the message kind used for sending. Video
   /// and Live2D have no dedicated message kind in the current contract, so
@@ -178,61 +182,80 @@ class AttachmentSendFlow {
     required String conversationId,
     AttachmentSendCancellation? cancellation,
     MessageKind? messageKind,
+    void Function()? checkActive,
   }) async {
     final cancel = cancellation ?? AttachmentSendCancellation();
+    void checkBeforeStage() {
+      cancel._throwIfCancelled();
+      checkActive?.call();
+    }
+
     final kind = messageKind ?? messageKindFor(source.kind);
     if (kind == null) {
       throw FormatException('附件种类 ${source.kind} 无法映射到消息种类');
     }
 
-    cancel._throwIfCancelled();
+    checkBeforeStage();
     final session = await api.initiate(
       mime: source.mime,
       size: source.size,
       kind: source.kind,
       conversationId: conversationId,
     );
-    cancel._throwIfCancelled();
+    try {
+      checkBeforeStage();
 
-    var index = 0;
-    var uploaded = 0;
-    await for (final chunk in _chunked(source.openRead(), session.chunkSize)) {
-      cancel._throwIfCancelled();
-      if (chunk.isEmpty) continue;
-      await api.putChunk(
+      var index = 0;
+      var uploaded = 0;
+      await for (final chunk in _chunked(
+        source.openRead(),
+        session.chunkSize,
+      )) {
+        checkBeforeStage();
+        if (chunk.isEmpty) continue;
+        final progress = await api.putChunk(
+          uploadId: session.uploadId,
+          index: index,
+          bytes: chunk,
+        );
+        uploaded += chunk.length;
+        if (progress.received != uploaded) {
+          throw const FormatException('附件分片进度与已发送字节数不一致');
+        }
+        index += 1;
+        checkBeforeStage();
+      }
+
+      checkBeforeStage();
+      if (uploaded != source.size) {
+        throw const FormatException('附件字节数与声明大小不一致');
+      }
+
+      final completed = await api.complete(
         uploadId: session.uploadId,
-        index: index,
-        bytes: chunk,
+        expectedSha256: source.sha256,
       );
-      uploaded += chunk.length;
-      index += 1;
+      if (completed.size != source.size) {
+        throw const FormatException('附件完成大小与声明大小不一致');
+      }
       cancel._throwIfCancelled();
-    }
 
-    cancel._throwIfCancelled();
-    if (uploaded != source.size) {
-      throw const FormatException('附件字节数与声明大小不一致');
+      return AttachmentSendResult(
+        attachmentId: completed.attachmentId,
+        conversationId: conversationId,
+        kind: kind,
+        size: completed.size,
+        sha256: completed.sha256,
+        body: {'attachmentId': completed.attachmentId},
+      );
+    } catch (_) {
+      if (abortOnFailure) {
+        try {
+          await api.abort(session.uploadId);
+        } catch (_) {}
+      }
+      rethrow;
     }
-
-    final completed = await api.complete(
-      uploadId: session.uploadId,
-      expectedSha256: source.sha256,
-    );
-    if (completed.size != source.size) {
-      throw const FormatException('附件完成大小与声明大小不一致');
-    }
-    cancel._throwIfCancelled();
-
-    return AttachmentSendResult(
-      attachmentId: completed.attachmentId,
-      conversationId: conversationId,
-      kind: kind,
-      size: completed.size,
-      sha256: completed.sha256,
-      body: {
-        'attachmentId': completed.attachmentId,
-      },
-    );
   }
 
   /// Splits [input] into chunks of exactly [chunkSize] bytes, with a final short

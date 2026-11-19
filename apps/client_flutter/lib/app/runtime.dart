@@ -9,7 +9,11 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../data/file_persistence.dart';
 import '../data/account_snapshots.dart';
+import '../attachments/attachment_content.dart';
 import '../net/account_auth.dart';
+import '../net/attachment_api.dart';
+import '../net/attachment_send_flow.dart';
+import '../net/attachment_upload_api.dart';
 import '../net/host_connection.dart';
 import '../net/group_api.dart';
 import '../net/own_ai_api.dart';
@@ -27,6 +31,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   // A completed refresh also supersedes visibility seen by an earlier shortcut.
   int _refreshGeneration = 0;
   int _historySyncEpoch = 0;
+  int _attachmentSelectionRevision = 0;
+  _AttachmentDraft? _attachmentDraft;
   Future<bool>? _renewWork;
   Future<void> _secureTail = Future<void>.value();
   ClientCredentials? _credentials;
@@ -118,15 +124,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           for (final message in shell.messagesFor(_selected!))
             ShellMessage(
               id: message.messageId,
-              text:
-                  message.body['text']?.toString() ?? '[${message.kind.wire}]',
+              text: _messageLabel(message.kind, message.body),
             ),
           for (final item in shell.outbox.items.where(
             (e) => e.conversationId == _selected,
           ))
             ShellMessage(
               id: item.clientMsgId,
-              text: item.body['text']?.toString() ?? '[${item.kind.wire}]',
+              text: _messageLabel(item.kind, item.body),
               outgoing: true,
               status: '等待补传',
             ),
@@ -135,11 +140,27 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           ))
             ShellMessage(
               id: drop.item.clientMsgId,
-              text: drop.item.body['text']?.toString() ?? '',
+              text: _messageLabel(drop.item.kind, drop.item.body, fallback: ''),
               outgoing: true,
               status: '发送失败',
             ),
         ];
+  static String _messageLabel(
+    MessageKind kind,
+    Map<String, Object?> body, {
+    String? fallback,
+  }) {
+    final text = body['text'];
+    if (text != null) return text.toString();
+    final name = body['name'];
+    if ((kind == MessageKind.image || kind == MessageKind.file) &&
+        body['attachmentId'] is String &&
+        name is String) {
+      return FileAttachmentContent.safeDisplayName(name);
+    }
+    return fallback ?? '[${kind.wire}]';
+  }
+
   @override
   int get queuedCount => _controllersReady ? shell.outbox.items.length : 0;
   @override
@@ -491,12 +512,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _ownAiAccounts = [];
     _ownAiNotice = null;
     _ownAiLoaded = false;
+    final clearingAttachment = _clearAttachmentSelection();
     _selected = null;
     _draft = '';
     appLock.lock();
     notifyListeners();
     final clear = _secureOperation(() => native.invoke<void>('clearSession'));
     await Future.wait<void>([
+      clearingAttachment,
       if (previous != null) previous.close(),
       if (submission != null) submission.close(),
       if (oldPlugins != null) oldPlugins.unloadAll(),
@@ -593,11 +616,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         (message) async {
           await sessionShell.acceptMessage(message, checkActive: checkActive);
         },
-        applyHistoryFloor: (firstVisibleSeq) => sessionShell.applySyncHistoryFloor(
-          frame.conversationId,
-          firstVisibleSeq,
-          checkActive: checkActive,
-        ),
+        applyHistoryFloor: (firstVisibleSeq) =>
+            sessionShell.applySyncHistoryFloor(
+              frame.conversationId,
+              firstVisibleSeq,
+              checkActive: checkActive,
+            ),
         checkActive: checkActive,
       );
       checkActive();
@@ -740,6 +764,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       plugins = null;
       _online = false;
       _onboarded = false;
+      final clearingAttachment = _clearAttachmentSelection();
       _selected = null;
       _draft = '';
       _conversations = [];
@@ -747,6 +772,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _ownAiNotice = null;
       _ownAiLoaded = false;
       await Future.wait<void>([
+        clearingAttachment,
         if (previous != null) previous.close(),
         if (submission != null) submission.close(),
         if (oldPlugins != null) oldPlugins.unloadAll(),
@@ -1256,6 +1282,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         ownerAccountId: group.ownerAccountId,
       ),
     ]..sort((left, right) => left.title.compareTo(right.title));
+    unawaited(_clearAttachmentSelection());
     _selected = group.id;
     _draft = sessionShell.draftFor(group.id);
   });
@@ -1280,6 +1307,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   Future<void> selectConversation(String id) async {
+    if (_selected != id) unawaited(_clearAttachmentSelection());
     _selected = id;
     _draft = shell.draftFor(id);
     notifyListeners();
@@ -1483,9 +1511,175 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   });
 
   @override
+  String? get selectedAttachmentName {
+    final draft = _attachmentDraft;
+    return draft != null && !locked && _isAttachmentDraftCurrent(draft)
+        ? draft.name
+        : null;
+  }
+
+  @override
   Future<void> attachFile(String kind) => _run(() async {
-    throw const FileSystemException('附件上传接口尚未提供，内容未发送');
+    if (kind != 'image' && kind != 'file') {
+      throw const FormatException('不支持的附件类型');
+    }
+    final generation = _generation;
+    final sessionConnection = connection;
+    final selected = _selected;
+    if (sessionConnection == null ||
+        selected == null ||
+        locked ||
+        !_attachmentContext(generation, sessionConnection, selected) ||
+        !aiConsentGranted) {
+      throw const FormatException('请先解锁并确认当前会话的附件设置');
+    }
+    final revision = _attachmentSelectionRevision;
+    final PickedAttachment? picked;
+    try {
+      picked = await native.pickAttachment(kind);
+    } catch (_) {
+      throw const FormatException('无法选择附件，未发送内容');
+    }
+    if (picked == null) return;
+
+    // Android's system picker can pause and lock the app. Its result is only
+    // staged in memory for the same chat, hidden until unlock, never uploaded.
+    if (revision != _attachmentSelectionRevision ||
+        !_attachmentContext(generation, sessionConnection, selected)) {
+      await _releasePickedAttachment(picked);
+      return;
+    }
+    final name = FileAttachmentContent.safeDisplayName(picked.name);
+    final previous = _attachmentDraft;
+    _attachmentDraft = _AttachmentDraft(
+      picked: picked,
+      name: name,
+      kind: kind,
+      generation: generation,
+      connection: sessionConnection,
+      conversationId: selected,
+    );
+    if (previous != null) await _releasePickedAttachment(previous.picked);
   });
+
+  @override
+  Future<void> discardSelectedAttachment() => _run(_clearAttachmentSelection);
+
+  @override
+  Future<void> sendSelectedAttachment() {
+    final draft = _attachmentDraft;
+    final lockEpoch = _historySyncEpoch;
+    return _run(() async {
+      if (draft == null || !_isAttachmentDraftCurrent(draft) || locked) return;
+      if (!_online || !aiConsentGranted) {
+        throw const FormatException('请联网并确认当前会话的附件设置后再发送');
+      }
+      final sessionShell = shell;
+      void checkActive() {
+        if (!_isAttachmentDraftCurrent(draft) ||
+            !identical(shell, sessionShell) ||
+            _historySyncEpoch != lockEpoch ||
+            locked ||
+            !_online ||
+            !aiConsentGranted) {
+          throw const AttachmentSendCancelled();
+        }
+      }
+
+      final FileAttachmentContent content;
+      try {
+        content = await FileAttachmentContent.load(
+          draft.picked.path,
+          kind: draft.kind,
+          displayName: draft.name,
+          declaredMime: draft.picked.mime,
+        );
+      } on FormatException {
+        rethrow;
+      } catch (_) {
+        throw const FormatException('所选文件不可用，未发送内容');
+      }
+
+      final AttachmentSendResult uploaded;
+      try {
+        uploaded =
+            await AttachmentSendFlow(
+              AttachmentUploadApi(draft.connection),
+              abortOnFailure: true,
+            ).upload(
+              source: content,
+              conversationId: draft.conversationId,
+              checkActive: checkActive,
+            );
+      } on AttachmentSendCancelled {
+        return;
+      } catch (_) {
+        throw const FormatException('附件上传失败，未发送内容');
+      }
+
+      try {
+        checkActive();
+        await sessionShell.enqueueDurable(draft.conversationId, uploaded.kind, {
+          'attachmentId': uploaded.attachmentId,
+          'name': content.displayName,
+        }, checkActive: checkActive);
+      } catch (error) {
+        await _deleteUnsentAttachment(draft.connection, uploaded.attachmentId);
+        if (error is AttachmentSendCancelled) return;
+        throw const FormatException('附件消息保存失败，请重试发送');
+      }
+      if (identical(_attachmentDraft, draft)) await _clearAttachmentSelection();
+      if (_current(draft.generation) && _online && !locked) {
+        await sessionShell.flush();
+      }
+    });
+  }
+
+  bool _isAttachmentDraftCurrent(_AttachmentDraft draft) =>
+      identical(_attachmentDraft, draft) &&
+      _attachmentContext(
+        draft.generation,
+        draft.connection,
+        draft.conversationId,
+      );
+
+  bool _attachmentContext(
+    int generation,
+    HostConnection sessionConnection,
+    String conversationId,
+  ) =>
+      _current(generation) &&
+      authenticated &&
+      !_sessionRejected &&
+      !_switching &&
+      identical(connection, sessionConnection) &&
+      _selected == conversationId &&
+      _conversations.any((entry) => entry.id == conversationId);
+
+  Future<void> _clearAttachmentSelection() async {
+    _attachmentSelectionRevision++;
+    final previous = _attachmentDraft;
+    _attachmentDraft = null;
+    if (previous != null) await _releasePickedAttachment(previous.picked);
+  }
+
+  Future<void> _releasePickedAttachment(PickedAttachment picked) async {
+    if (!picked.temporary) return;
+    try {
+      await File(picked.path).delete();
+    } catch (_) {}
+  }
+
+  Future<void> _deleteUnsentAttachment(
+    HostConnection sessionConnection,
+    String attachmentId,
+  ) async {
+    try {
+      await AttachmentApi(sessionConnection)
+          .deleteAttachment(attachmentId, retryAuthentication: false);
+    } catch (_) {}
+  }
+
   @override
   Future<void> setAppLock(bool enabled, String pin) => _run(() async {
     if (enabled) {
@@ -1506,9 +1700,11 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       unawaited(_refresh());
     } else {
       // The superseded flight must stop before refresh takes a new cursor.
-      unawaited(previous.then((_) async {
-        if (_current(generation)) await _refresh();
-      }));
+      unawaited(
+        previous.then((_) async {
+          if (_current(generation)) await _refresh();
+        }),
+      );
     }
   });
   @override
@@ -1549,6 +1745,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     ++_generation;
     _invalidateOwnAiDirect();
     _pendingMention = null;
+    unawaited(_clearAttachmentSelection());
     _credentials = null;
     _pendingRenewal = null;
     reconnect?.cancel();
@@ -1576,6 +1773,23 @@ class _OwnAiEpochAppLock extends AppLockController {
     super.lock();
     invalidate();
   }
+}
+
+class _AttachmentDraft {
+  const _AttachmentDraft({
+    required this.picked,
+    required this.name,
+    required this.kind,
+    required this.generation,
+    required this.connection,
+    required this.conversationId,
+  });
+  final PickedAttachment picked;
+  final String name;
+  final String kind;
+  final int generation;
+  final HostConnection connection;
+  final String conversationId;
 }
 
 class _SyncInterrupted implements Exception {

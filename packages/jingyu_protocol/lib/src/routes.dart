@@ -160,6 +160,10 @@ abstract final class Routes {
   /// 分片上传：初始化一次上传会话。
   static const String attachmentUploads = '$prefix/attachments/uploads';
 
+  /// Abort one pending upload owned by the caller.
+  static const String attachmentUpload =
+      '$prefix/attachments/uploads/{uploadId}';
+
   /// 上传一个分片；[index] 从 0 起按序递增，支持断点续传。
   static const String attachmentUploadChunk =
       '$prefix/attachments/uploads/{uploadId}/chunks/{index}';

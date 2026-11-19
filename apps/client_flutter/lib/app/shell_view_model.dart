@@ -80,7 +80,14 @@ abstract class ShellViewModel extends ChangeNotifier {
     required String aiAccountId,
   });
   Future<void> setAiConsent(bool allowed);
+
+  /// Open the picker and stage a selection without uploading it.
   Future<void> attachFile(String kind);
+
+  /// Basename of the attachment staged for the current conversation, if any.
+  String? get selectedAttachmentName => null;
+  Future<void> sendSelectedAttachment() async {}
+  Future<void> discardSelectedAttachment() async {}
   Future<void> setAppLock(bool enabled, String pin);
   Future<void> unlock(String pin);
   Future<void> setHideNotificationBody(bool value);
