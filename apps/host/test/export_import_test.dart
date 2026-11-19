@@ -223,6 +223,48 @@ void main() {
       );
       expect(result.isErr, isTrue);
     });
+
+    for (final (name, path, mode) in [
+      (
+        '缺少会话文件校验项时拒绝完整导入且不写入',
+        'conversations/c2.jsonl',
+        ImportMode.personaAndConversations,
+      ),
+      (
+        '缺少人格校验项时拒绝仅人格导入且不写入',
+        ExportService.personaFile,
+        ImportMode.personaOnly,
+      ),
+    ]) {
+      test(name, () async {
+        final bundle = (await exportService.export('u1')).value;
+        final rows = bundle.sha256Sums().split('\n');
+        final remaining = rows
+            .where((row) => !row.endsWith('  $path'))
+            .toList();
+        expect(remaining, hasLength(rows.length - 1));
+        final incomplete = ExportBundle(
+          ownerAccountId: bundle.ownerAccountId,
+          files: {
+            ...bundle.files,
+            ExportService.checksumsFile: remaining.join('\n'),
+          },
+        );
+        final sink = InMemoryImportSink();
+        final result = await ImportService().import(
+          bundle: incomplete,
+          mode: mode,
+          ownerAccountId: 'u1',
+          sink: sink,
+        );
+        expect(result.failureOrNull?.code, FailureCode.invalidArgument);
+        expect(await sink.hasPersona('u1'), isFalse);
+        expect(sink.conversationCount('u1'), 0);
+        expect(sink.messageCount('u1'), 0);
+        expect(sink.memoriesFor('u1'), isEmpty);
+        expect(sink.attachmentsFor('u1'), isEmpty);
+      });
+    }
   });
 
   group('A-12 拒绝校验和正确但损坏的导入数据且不写入', () {
