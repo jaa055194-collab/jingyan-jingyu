@@ -8,6 +8,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:jingyu_core/jingyu_core.dart';
@@ -20,9 +21,9 @@ import 'attachment_extraction.dart';
 /// 磁盘剩余/总容量探测。注入假实现即可在测试里控制配额分支。
 typedef DiskSpaceProbe = Future<({int freeBytes, int totalBytes})> Function();
 
-/// 一条消息可预览的图片字节（不含路径或抽取正文）。
-class AttachmentImageContent {
-  const AttachmentImageContent({
+/// Bounded message attachment bytes, without paths or extracted text.
+class AttachmentContent {
+  const AttachmentContent({
     required this.mime,
     required this.size,
     required this.sha256,
@@ -33,6 +34,16 @@ class AttachmentImageContent {
   final int size;
   final String sha256;
   final List<int> bytes;
+}
+
+/// Image bytes with the existing image preview API.
+class AttachmentImageContent extends AttachmentContent {
+  const AttachmentImageContent({
+    required super.mime,
+    required super.size,
+    required super.sha256,
+    required super.bytes,
+  });
 }
 
 /// 附件服务。调用方负责 database/cipher 生命周期与 mediaDir 可写性。
@@ -77,7 +88,7 @@ class AttachmentService {
   static const int _maxPendingUploadsPerAccount = 3;
 
   /// 预览路由的绝对字节上限：base64 JSON 单次传输，不做通用下载通道。
-  static const int _maxImageBytes = 8 * 1024 * 1024;
+  static const int _maxPreviewBytes = 8 * 1024 * 1024;
 
   /// 只允许光栅图片；SVG 等可执行/可外链格式不在预览范围。
   static const Set<String> _imageMimeTypes = {
@@ -607,7 +618,46 @@ class AttachmentService {
     required String attachmentId,
     required String conversationId,
     required String senderId,
-    int maxBytes = _maxImageBytes,
+    int maxBytes = _maxPreviewBytes,
+  }) async {
+    final result = await _readMessageContent(
+      attachmentId: attachmentId,
+      conversationId: conversationId,
+      senderId: senderId,
+      maxBytes: maxBytes,
+      voice: false,
+    );
+    return result.map(
+      (content) => AttachmentImageContent(
+        mime: content.mime,
+        size: content.size,
+        sha256: content.sha256,
+        bytes: content.bytes,
+      ),
+    );
+  }
+
+  /// A completed audio/mp4 voice attachment belonging to the message sender.
+  /// Accepts bounded, non-fragmented containers with one sound track. Does not
+  /// certify the codec, sample rate, channels, or that the media can play.
+  Future<Result<AttachmentContent>> readVoiceContent({
+    required String attachmentId,
+    required String conversationId,
+    required String senderId,
+  }) => _readMessageContent(
+    attachmentId: attachmentId,
+    conversationId: conversationId,
+    senderId: senderId,
+    maxBytes: _maxPreviewBytes,
+    voice: true,
+  );
+
+  Future<Result<AttachmentContent>> _readMessageContent({
+    required String attachmentId,
+    required String conversationId,
+    required String senderId,
+    required int maxBytes,
+    required bool voice,
   }) async {
     try {
       validateId(attachmentId, kind: 'attachment');
@@ -616,47 +666,157 @@ class AttachmentService {
     } on FormatException {
       return err(FailureCode.notFound, 'attachment not found');
     }
-    if (maxBytes < 1 || maxBytes > _maxImageBytes) {
+    if (maxBytes < 1 || maxBytes > _maxPreviewBytes) {
       return err(FailureCode.invalidArgument, 'invalid image byte limit');
     }
     final rows = await _database.query(
-      'SELECT * FROM attachments WHERE id = ?',
+      'SELECT conversation_id, owner_account_id, kind, mime, size, sha256, rel_path '
+      'FROM attachments WHERE id = ?',
       [attachmentId],
     );
     if (rows.isEmpty) return err(FailureCode.notFound, 'attachment not found');
     final row = rows.single;
-    final mime = row['mime'] as String;
-    final declared = row['size'] as int;
+    final mime = row['mime'];
+    final declared = row['size'];
+    final digest = row['sha256'];
+    final path = row['rel_path'];
     if (row['conversation_id'] != conversationId ||
         row['owner_account_id'] != senderId ||
-        !_imageMimeTypes.contains(mime) ||
+        mime is! String ||
+        digest is! String ||
+        path is! String ||
+        declared is! int ||
+        declared < 0 ||
         declared > maxBytes) {
       return err(FailureCode.notFound, 'attachment not found');
     }
-    final file = File('$_mediaDir/${row['rel_path']}');
-    final List<int> bytes;
-    try {
-      if (!await file.exists()) {
+    if (voice) {
+      if (row['kind'] != 'voice' ||
+          mime != 'audio/mp4' ||
+          path != '$senderId/$attachmentId') {
         return err(FailureCode.notFound, 'attachment not found');
       }
-      if (await file.length() != declared) {
-        return err(FailureCode.notFound, 'attachment not found');
-      }
-      bytes = await file.readAsBytes();
-    } catch (_) {
+    } else if (!_imageMimeTypes.contains(mime)) {
       return err(FailureCode.notFound, 'attachment not found');
     }
-    if (bytes.length != declared) {
+    final bytes = await _readBoundedBlob(File('$_mediaDir/$path'), declared);
+    if (bytes == null ||
+        (voice &&
+            (!_isVoiceMp4Container(bytes) ||
+                sha256.convert(bytes).toString() != digest))) {
       return err(FailureCode.notFound, 'attachment not found');
     }
     return Ok(
-      AttachmentImageContent(
+      AttachmentContent(
         mime: mime,
         size: declared,
-        sha256: row['sha256'] as String,
+        sha256: digest,
         bytes: bytes,
       ),
     );
+  }
+
+  static Future<Uint8List?> _readBoundedBlob(File file, int size) async {
+    try {
+      if (!await file.exists()) return null;
+      final handle = await file.open();
+      try {
+        if (await handle.length() != size) return null;
+        // Read at most one extra byte to detect growth without an unbounded read.
+        final bytes = await handle.read(size + 1);
+        return bytes.length == size ? bytes : null;
+      } finally {
+        await handle.close();
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static bool _isVoiceMp4Container(Uint8List bytes) {
+    final view = ByteData.sublistView(bytes);
+    const ftyp = 0x66747970, moov = 0x6d6f6f76, mdat = 0x6d646174;
+    const trak = 0x7472616b, mdia = 0x6d646961, hdlr = 0x68646c72;
+    const soun = 0x736f756e, moof = 0x6d6f6f66, mvex = 0x6d766578;
+
+    // Walk only bounded box headers at known levels, not sample tables or
+    // nested structures of arbitrary depth. Reject sizes that run to EOF.
+    var boxesLeft = 1024;
+    bool walk(
+      int offset,
+      int end,
+      bool Function(int type, int payload, int boxEnd) visit,
+    ) {
+      while (offset < end) {
+        if (--boxesLeft < 0 || end - offset < 8) return false;
+        var size = view.getUint32(offset);
+        var header = 8;
+        if (size == 1) {
+          if (end - offset < 16 || view.getUint32(offset + 8) != 0) {
+            return false;
+          }
+          size = view.getUint32(offset + 12);
+          header = 16;
+        }
+        if (size < header || size > end - offset) return false;
+        final boxEnd = offset + size;
+        if (!visit(view.getUint32(offset + 4), offset + header, boxEnd)) {
+          return false;
+        }
+        offset = boxEnd;
+      }
+      return true;
+    }
+
+    bool soundTrack(int start, int end) {
+      var sawMedia = false;
+      return walk(start, end, (type, payload, boxEnd) {
+            if (type != mdia) return true;
+            if (sawMedia) return false;
+            sawMedia = true;
+            var sawHandler = false;
+            return walk(payload, boxEnd, (type, payload, boxEnd) {
+                  if (type != hdlr) return true;
+                  if (sawHandler || boxEnd - payload < 24) return false;
+                  sawHandler = true;
+                  return view.getUint32(payload + 8) == soun;
+                }) &&
+                sawHandler;
+          }) &&
+          sawMedia;
+    }
+
+    var sawFileType = false, sawMovie = false, sawData = false;
+    return walk(0, bytes.length, (type, payload, boxEnd) {
+          if (!sawFileType) {
+            if (type != ftyp ||
+                boxEnd - payload < 8 ||
+                (boxEnd - payload) % 4 != 0) {
+              return false;
+            }
+            sawFileType = true;
+          } else if (type == moov) {
+            if (sawMovie) return false;
+            sawMovie = true;
+            var sawTrack = false;
+            return walk(payload, boxEnd, (type, payload, boxEnd) {
+                  if (type == mvex) return false;
+                  if (type != trak) return true;
+                  if (sawTrack) return false;
+                  sawTrack = true;
+                  return soundTrack(payload, boxEnd);
+                }) &&
+                sawTrack;
+          } else if (type == mdat && boxEnd > payload) {
+            sawData = true;
+          } else if (type == ftyp || type == moof) {
+            return false;
+          }
+          return true;
+        }) &&
+        sawFileType &&
+        sawMovie &&
+        sawData;
   }
 
   /// 删除附件（仅 owner）：删行并尽力删除 blob 文件。
