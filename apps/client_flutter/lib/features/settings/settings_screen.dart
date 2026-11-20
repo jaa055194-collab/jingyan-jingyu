@@ -8,6 +8,7 @@ import '../../platform/native_platform.dart';
 import '../../net/ai_config_write_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
+import '../../net/search_api.dart';
 import '../../net/voice_api.dart';
 import '../../net/voice_call_api.dart';
 import '../../net/world_api.dart';
@@ -18,6 +19,7 @@ import '../attachments/attachments_screen.dart';
 import '../diagnostics/module_test_panel.dart';
 import '../lifecycle/backup_files.dart';
 import '../lifecycle/backup_quota_screen.dart';
+import '../search/search_screen.dart';
 import '../voice/voice_call_list_screen.dart';
 import '../voice/voice_screen.dart';
 import '../world/world_status_screen.dart';
@@ -412,6 +414,34 @@ class SettingsScreen extends StatelessWidget {
                   ),
                 );
               },
+            ),
+            ListTile(
+              key: const Key('open-message-search'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.manage_search_outlined),
+              title: const Text('消息搜索'),
+              subtitle: const Text(
+                '按关键词显式搜索宿主已存消息（会话/发送者/类型/序号/摘要）；'
+                '不建立客户端索引、不排序不评分，也不保证覆盖全部历史',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) {
+                    final runtime = model;
+                    final connection = runtime is ClientRuntime &&
+                            runtime.authenticated && !runtime.locked
+                        ? runtime.connection
+                        : null;
+                    return SearchScreen(
+                      search: connection == null
+                          ? null
+                          : SearchApi(connection).searchMessages,
+                      session: connection == null ? null : model,
+                    );
+                  },
+                ),
+              ),
             ),
             const Divider(height: 24),
             Text('AI 运行配置编辑', style: Theme.of(context).textTheme.labelLarge),
