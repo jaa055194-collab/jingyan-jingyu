@@ -6,6 +6,7 @@ import '../../net/attachment_api.dart';
 import '../../net/lifecycle_api.dart';
 import '../../platform/native_platform.dart';
 import '../../net/ai_config_write_api.dart';
+import '../../net/model_diagnostics_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
 import '../../net/voice_api.dart';
@@ -13,6 +14,7 @@ import '../../net/voice_call_api.dart';
 import '../../net/world_api.dart';
 import '../ai_config/ai_config_editor.dart';
 import '../ai_config/ai_config_panel.dart';
+import '../ai_config/model_diagnostics_screen.dart';
 import '../attachments/attachments_list_screen.dart';
 import '../attachments/attachments_screen.dart';
 import '../diagnostics/module_test_panel.dart';
@@ -388,6 +390,40 @@ class SettingsScreen extends StatelessWidget {
                     builder: (_) => AiConfigPanel(
                       loadForAccount: loadForAccount,
                       ownedAiAccountIds: canLoad ? owned : const <String>[],
+                    ),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('open-model-diagnostics'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.insights_outlined),
+              title: const Text('模型能力与预算诊断'),
+              subtitle: const Text(
+                '只读查看已保存 provider 的模型目录、今日已记录用量（pending 标为未知）、'
+                '滚动 7 个记录日趋势与已配置上限；需主动请求，不自动重试，'
+                '不写绑定/预算、不代表模型可用或预算获批',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                ModelDiagnosticsApi? api;
+                if (connection != null) api = ModelDiagnosticsApi(connection);
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ModelDiagnosticsScreen(
+                      readCatalog: api?.readModelCatalog,
+                      readTodayUsage: api?.readTodayUsage,
+                      readRolling7Trend: api?.readRolling7Trend,
+                      readBudget: api?.readBudget,
+                      // AI profile id is not the AI account id, so no profile is
+                      // inferred from the owned account list; it is typed in.
+                      knownProviderIds: const <String>[],
+                      knownProfileIds: const <String>[],
                     ),
                   ),
                 );
