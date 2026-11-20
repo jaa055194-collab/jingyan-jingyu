@@ -248,19 +248,28 @@ class _ShellHomeState extends State<_ShellHome> {
   Widget world() =>
       WorldScreen(model: widget.model, onOpenSetup: openWorldSetup);
 
-  /// Host-backed read-only creative loaders only when the runtime exposes a live
-  /// connection; otherwise the screen keeps its honest unbound/unknown state.
-  /// The shell only wires loaders here — tab layout and settings are untouched.
+  /// Report data stays inside the authenticated session that opened 动态.
+  /// Expanding a row reuses the authorized list payload, not another request.
   Widget creative() {
     final model = widget.model;
-    final HostConnection? connection = model is ClientRuntime
-        ? model.connection
-        : null;
+    if (model is! ClientRuntime) return const CreativeScreen();
+    final connection = model.connection;
     if (connection == null) return const CreativeScreen();
     final api = CreativeApi(connection);
     return CreativeScreen(
       loadReports: api.listReports,
       loadRadio: api.listRadio,
+      sessionChanges: model,
+      sessionContext: () {
+        final epoch = model.ownAiSessionContext;
+        if (!model.authenticated ||
+            model.locked ||
+            epoch == null ||
+            !identical(model.connection, connection)) {
+          return null;
+        }
+        return (model.connectedAccountId, epoch, connection);
+      },
     );
   }
 
