@@ -7,7 +7,6 @@ import 'package:client_flutter/net/host_connection.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:jingyu_core/jingyu_core.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// One synthetic pending friend invitation from a synthetic sender. No live
