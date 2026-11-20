@@ -19,7 +19,7 @@ Paths are shared protocol `Routes` constants.
 - `POST /api/v1/auth/login`: `{accountId, password, deviceName}` -> `{deviceId, accessToken, refreshToken}`.
 - `POST /api/v1/auth/invites/redeem`: `{code, displayName, password}` -> `{accountId}`. Then log in normally.
 - `POST /api/v1/auth/refresh`: `{refreshToken}` -> replacement credentials; both old credentials stop working.
-- `GET /api/v1/auth/devices`: authenticated current-account device metadata list.
+- `GET /api/v1/auth/devices`: authenticated current-account device metadata array. Rows contain `id`, `deviceName`, and UTC `lastUsedAt`. Only the device matching the validated bearer and request principal receives `current: true`; other rows omit `current`. No token, credential digest, or account ID is returned.
 - `POST /api/v1/auth/devices/{deviceId}/revoke`: authenticated current-account device revocation.
 - `POST /api/v1/admin/invites`: administrator `{expiresAt: ISO8601, maxUses?: 1}` -> one-time `{code}`.
 - `GET /api/v1/admin/invites`: administrator metadata list with exactly `id`, `expiresAt`, `maxUses`, `usedCount`, `revokedAt`. Timestamps are UTC epoch milliseconds (`revokedAt` nullable); expired/exhausted/revoked records remain listed. Plaintext codes and digests are never returned here.

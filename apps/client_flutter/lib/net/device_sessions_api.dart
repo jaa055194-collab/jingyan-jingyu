@@ -31,8 +31,8 @@ class DeviceSummary {
 
   /// True only when the host explicitly marks this row as the current device.
   ///
-  /// The host's device list currently omits any current-device marker, so this
-  /// stays false and the UI must not guess.
+  /// With an older host that omits this marker, every row stays false and the
+  /// UI must not guess.
   final bool current;
 
   @override
