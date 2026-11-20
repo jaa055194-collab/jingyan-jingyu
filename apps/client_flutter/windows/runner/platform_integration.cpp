@@ -11,6 +11,7 @@
 #include <winrt/Windows.Data.Xml.Dom.h>
 #include <winrt/Windows.UI.Notifications.h>
 #include <algorithm>
+#include <cwctype>
 #include <stdexcept>
 #include <vector>
 #include "resource.h"
@@ -114,6 +115,103 @@ flutter::EncodableValue ReadSession() {
 void ClearSession() {
   if (!CredDeleteW(kSession, CRED_TYPE_GENERIC, 0) && GetLastError() != ERROR_NOT_FOUND)
     throw std::runtime_error("Cannot remove session credential");
+}
+std::optional<int64_t> Integer(const flutter::EncodableMap& args, const char* name) {
+  auto* value = Field(args, name);
+  if (!value) return std::nullopt;
+  if (std::holds_alternative<int32_t>(*value)) return std::get<int32_t>(*value);
+  if (std::holds_alternative<int64_t>(*value)) return std::get<int64_t>(*value);
+  return std::nullopt;
+}
+// A user-chosen backup file holds the exact bytes the Dart side produced. The
+// bridge enforces the caller's 4 MiB bound before any OS dialog is shown.
+constexpr size_t kMaxBackupBytes = 4 * 1024 * 1024;
+constexpr size_t kMaxBackupFileName = 250;
+constexpr wchar_t kBackupFilter[] = L"JSON files\0*.json\0All files\0*.*\0";
+wchar_t Lower(wchar_t character) {
+  return static_cast<wchar_t>(towlower(character));
+}
+bool EndsWithJson(const std::wstring& name) {
+  if (name.size() < 5u) return false;
+  const wchar_t* tail = name.c_str() + name.size() - 5;
+  return Lower(tail[0]) == L'.' && Lower(tail[1]) == L'j' &&
+         Lower(tail[2]) == L's' && Lower(tail[3]) == L'o' &&
+         Lower(tail[4]) == L'n';
+}
+std::wstring BackupFileName(const std::wstring& suggested) {
+  std::wstring name = suggested;
+  const auto separator = name.find_last_of(L"\\/");
+  if (separator != std::wstring::npos) name = name.substr(separator + 1);
+  static const std::wstring kInvalid = L"<>:\"/\\|?*";
+  std::wstring cleaned;
+  for (const wchar_t character : name) {
+    if (character >= L' ' && kInvalid.find(character) == std::wstring::npos)
+      cleaned.push_back(character);
+  }
+  while (!cleaned.empty() && (cleaned.back() == L' ' || cleaned.back() == L'.'))
+    cleaned.pop_back();
+  const auto first = cleaned.find_first_not_of(L' ');
+  if (first == std::wstring::npos) cleaned.clear(); else cleaned.erase(0, first);
+  if (cleaned.size() > kMaxBackupFileName) cleaned.resize(kMaxBackupFileName);
+  if (!EndsWithJson(cleaned)) cleaned += L".json";
+  return cleaned.empty() ? L"jingyu-backup.json" : cleaned;
+}
+std::optional<std::wstring> PromptBackupPath(HWND window, const std::wstring& suggested) {
+  std::wstring path(32768, L'\0');
+  const std::wstring name = BackupFileName(suggested);
+  wcsncpy_s(path.data(), path.size(), name.c_str(), _TRUNCATE);
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = window;
+  dialog.lpstrFilter = kBackupFilter;
+  dialog.lpstrFile = path.data();
+  dialog.nMaxFile = static_cast<DWORD>(path.size());
+  dialog.lpstrDefExt = L"json";
+  dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
+  if (GetSaveFileNameW(&dialog)) {
+    path.resize(wcslen(path.c_str()));
+    return path;
+  }
+  if (CommDlgExtendedError() == 0) return std::nullopt;
+  throw std::runtime_error("Cannot open backup save dialog");
+}
+// Write next to the destination, flush, then replace so a crash or full disk
+// never leaves a truncated backup that looks like a successful save. The unique
+// sibling name means a pre-existing file is never truncated before the OS
+// overwrite prompt has been accepted.
+void WriteBackupFile(const std::wstring& path, const std::vector<uint8_t>& bytes) {
+  // GetTempFileNameW needs a directory, not the chosen file path.
+  const auto separator = path.find_last_of(L"\\/");
+  if (separator == std::wstring::npos) throw std::runtime_error("Cannot create backup file");
+  const std::wstring directory = path.substr(0, separator + 1);
+  wchar_t tempName[MAX_PATH]{};
+  if (!GetTempFileNameW(directory.c_str(), L"jyb", 0, tempName))
+    throw std::runtime_error("Cannot create backup file");
+  const std::wstring temporary = tempName;
+  HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_TEMPORARY, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    DeleteFileW(temporary.c_str());
+    throw std::runtime_error("Cannot create backup file");
+  }
+  bool writtenAll = true;
+  size_t offset = 0;
+  while (writtenAll && offset < bytes.size()) {
+    const DWORD chunk = static_cast<DWORD>(std::min<size_t>(bytes.size() - offset, static_cast<size_t>(1) << 20));
+    DWORD written = 0;
+    writtenAll = WriteFile(file, bytes.data() + offset, chunk, &written, nullptr) && written == chunk;
+    offset += chunk;
+  }
+  writtenAll = writtenAll && FlushFileBuffers(file);
+  CloseHandle(file);
+  if (!writtenAll) {
+    DeleteFileW(temporary.c_str());
+    throw std::runtime_error("Cannot write backup file");
+  }
+  if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    DeleteFileW(temporary.c_str());
+    throw std::runtime_error("Cannot finalize backup file");
+  }
 }
 }
 
@@ -279,6 +377,27 @@ void PlatformIntegration::Handle(const flutter::MethodCall<Value>& call, std::un
       } else {
         throw std::runtime_error("Cannot open attachment picker");
       }
+      return;
+    }
+    else if (method == "saveBackupFile") {
+      const auto* bytesValue = Field(a, "bytes");
+      if (!bytesValue || !std::holds_alternative<std::vector<uint8_t>>(*bytesValue))
+        throw std::invalid_argument("Missing bytes: bytes");
+      const auto& bytes = std::get<std::vector<uint8_t>>(*bytesValue);
+      const auto requested = Integer(a, "maxBytes");
+      if (!requested || *requested < 1 || *requested > static_cast<int64_t>(kMaxBackupBytes))
+        throw std::invalid_argument("Invalid backup byte limit");
+      if (bytes.empty()) throw std::invalid_argument("Backup content is empty");
+      if (bytes.size() > static_cast<size_t>(*requested))
+        throw std::invalid_argument("Backup content exceeds the requested limit");
+      const std::wstring suggested = Wide(Text(a, "suggestedName"));
+      const auto path = PromptBackupPath(window_, suggested);
+      if (!path) { result->Success(Value()); return; }
+      WriteBackupFile(*path, bytes);
+      const auto separator = path->find_last_of(L"\\/");
+      const std::wstring name = separator == std::wstring::npos ? *path : path->substr(separator + 1);
+      result->Success(Value(Map{{Value("name"), Value(Utf8(name))},
+                               {Value("bytes"), Value(static_cast<int64_t>(bytes.size()))}}));
       return;
     }
     else if (method == "notify") Toast(Text(a, "title"), Text(a, "body"), Flag(a, "hideBody"));
