@@ -155,6 +155,10 @@ abstract final class Routes {
   static const String messageAttachment =
       '$prefix/conversations/{conversationId}/messages/{messageId}/attachment';
 
+  /// Bounded M4A bytes for one visible audio message's own attachment (GET).
+  static const String messageVoiceAttachment =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/voice-attachment';
+
   /// 单会话差集同步：`/conversations/{conversationId}/sync`。
   static const String sync = '$prefix/conversations/{conversationId}/sync';
 
