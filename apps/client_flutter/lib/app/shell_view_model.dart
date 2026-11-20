@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../net/attachment_api.dart';
+import '../net/favorites_api.dart' show FavoriteSaveOutcome;
 
 /// UI-only contract. The runtime owns persistence, network and platform access.
 abstract class ShellViewModel extends ChangeNotifier {
@@ -112,6 +113,20 @@ abstract class ShellViewModel extends ChangeNotifier {
   /// null when the request is stale, refused or unavailable; never throws.
   Future<MessageImage?> openImageAttachment(String messageId) async => null;
 
+  /// A pin for one authenticated, unlocked chat selection. Old controls must
+  /// present the context originally rendered, not capture a new one on tap.
+  Object? get messageFavoriteContext => null;
+
+  /// An in-memory duplicate guard, not a claim that the host saved the row.
+  bool hasSubmittedMessageFavorite(String messageId) => false;
+
+  Future<FavoriteSaveOutcome> saveMessageFavorite({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async => FavoriteSaveOutcome.cancelled;
+
   bool get supportsVoicePlayback => false;
   ShellVoicePlayback? get voicePlayback => null;
 
@@ -218,6 +233,7 @@ class ShellMessage {
     this.attachmentName,
     this.imageAttachment = false,
     this.voiceAttachment = false,
+    this.favoriteEligible = false,
   });
   final String id;
   final String text;
@@ -229,4 +245,7 @@ class ShellMessage {
   final String? attachmentName;
   final bool imageAttachment;
   final bool voiceAttachment;
+
+  /// Set only for a canonical synced row without a recall marker.
+  final bool favoriteEligible;
 }

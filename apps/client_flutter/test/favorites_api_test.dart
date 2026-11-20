@@ -15,6 +15,7 @@ void main() {
   Object? payload;
   int status = 200;
   final requests = <(String, String, String, String?)>[];
+  final postBodies = <Object?>[];
 
   setUp(() async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -27,8 +28,13 @@ void main() {
     payload = null;
     status = 200;
     requests.clear();
+    postBodies.clear();
     subscription = server.listen((request) async {
-      await request.drain<void>();
+      if (request.method == 'POST') {
+        postBodies.add(jsonDecode(await utf8.decoder.bind(request).join()));
+      } else {
+        await request.drain<void>();
+      }
       requests.add((
         request.method,
         request.uri.path,
@@ -69,6 +75,89 @@ void main() {
     'note': note,
     'createdAt': createdAt,
   };
+
+  test('saves only the canonical message reference fields', () async {
+    payload = const {'id': 'favorite-1', 'kind': 'message', 'title': null};
+    final result = await api.saveMessage(
+      conversationId: 'conv-1',
+      messageId: 'msg-2',
+    );
+    expect(result, FavoriteSaveOutcome.saved);
+    expect(requests.single, (
+      'POST',
+      Routes.favorites,
+      '',
+      'Bearer fixture-owner-token',
+    ));
+    expect(postBodies.single, {
+      'kind': 'message',
+      'conversationId': 'conv-1',
+      'messageId': 'msg-2',
+    });
+  });
+
+  test('invalid message and conversation ids never reach transport', () async {
+    for (final (conversation, message) in [
+      ('bad/id', 'm1'),
+      ('c1', '../bad'),
+    ]) {
+      expect(
+        await api.saveMessage(conversationId: conversation, messageId: message),
+        FavoriteSaveOutcome.rejected,
+      );
+    }
+    expect(requests, isEmpty);
+  });
+
+  test('definitive host refusals do not replay a favorite write', () async {
+    for (final (code, label) in [
+      (401, 'unauthenticated'),
+      (403, 'forbidden'),
+      (404, 'not_found'),
+    ]) {
+      status = code;
+      payload = {'error': label, 'detail': 'fixture private detail'};
+      expect(
+        await api.saveMessage(conversationId: 'c1', messageId: 'm1'),
+        FavoriteSaveOutcome.rejected,
+      );
+    }
+    expect(requests.map((request) => request.$1), ['POST', 'POST', 'POST']);
+  });
+
+  test(
+    'an ambiguous failure or malformed success is not a confirmed save',
+    () async {
+      for (final (code, body) in <(int, Object?)>[
+        (503, {'error': 'unavailable'}),
+        (200, {'id': 'favorite-1', 'kind': 'file', 'title': null}),
+        (200, {'id': 123, 'kind': 'message', 'title': null}),
+        (200, {'id': '../bad', 'kind': 'message', 'title': null}),
+        (
+          200,
+          {'id': 'favorite-1', 'kind': 'message', 'title': 'guessed title'},
+        ),
+        (
+          200,
+          {
+            'id': 'favorite-1',
+            'kind': 'message',
+            'title': null,
+            'extra': 'private',
+          },
+        ),
+        (200, null),
+      ]) {
+        status = code;
+        payload = body;
+        expect(
+          await api.saveMessage(conversationId: 'c1', messageId: 'm1'),
+          FavoriteSaveOutcome.unknown,
+        );
+      }
+      expect(requests, hasLength(7));
+    },
+  );
 
   test('reads only GET /favorites and projects safe text fields', () async {
     payload = {
