@@ -1,8 +1,10 @@
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../app/shell_view_model.dart';
 import '../../net/ai_config_write_api.dart';
 import '../../net/host_connection.dart';
+import '../../net/model_diagnostics_api.dart';
 
 /// Read-write "AI 运行配置" hub for one owned AI.
 ///
@@ -15,11 +17,17 @@ class AiConfigEditor extends StatefulWidget {
     super.key,
     this.writer,
     this.resolveProfileId,
+    this.readCatalog,
+    this.session,
     this.ownedAiAccountIds = const <String>[],
   });
 
   final AiConfigWriter? writer;
   final Future<String> Function(String aiAccountId)? resolveProfileId;
+  final Future<DiagnosticsRead<ModelCatalog>> Function(String)? readCatalog;
+
+  /// The Settings route captures the original account, epoch and connection.
+  final ({ShellViewModel model, bool Function() isCurrent})? session;
   final List<String> ownedAiAccountIds;
 
   @override
@@ -33,6 +41,14 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
   bool _busy = false;
   String? _status;
   bool _statusError = false;
+  late final ({ShellViewModel model, bool Function() isCurrent})? _session;
+  bool _sessionLost = false;
+  int _profileGeneration = 0;
+  int _catalogGeneration = 0;
+  bool _catalogLoading = false;
+  String? _catalogNotice;
+  List<String> _catalogModels = const [];
+  String? _copiedModel;
 
   final _p0 = TextEditingController();
   final _p1 = TextEditingController();
@@ -51,43 +67,103 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
   final _budgetLayers = TextEditingController();
   final _budgetCaps = TextEditingController();
 
+  Iterable<TextEditingController> get _controllers => [
+    _p0,
+    _p1,
+    _p2,
+    _personaVersion,
+    _personaReason,
+    _provName,
+    _provBaseUrl,
+    _provApiKey,
+    _provCaps,
+    _provId,
+    _bindProvider,
+    _bindModel,
+    _budgetDaily,
+    _budgetOffset,
+    _budgetLayers,
+    _budgetCaps,
+  ];
+
   @override
   void initState() {
     super.initState();
+    _session = widget.session;
+    _session?.model.addListener(_onSessionChanged);
     if (widget.ownedAiAccountIds.isNotEmpty) {
       _selected = widget.ownedAiAccountIds.first;
+    }
+    if (!_sessionMatches) {
+      _invalidateSession();
+    } else if (_selected != null) {
       _resolve();
     }
   }
 
   @override
+  void didUpdateWidget(covariant AiConfigEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_sessionLost && !_sessionMatches) _invalidateSession();
+  }
+
+  @override
   void dispose() {
-    for (final controller in [
-      _p0,
-      _p1,
-      _p2,
-      _personaVersion,
-      _personaReason,
-      _provName,
-      _provBaseUrl,
-      _provApiKey,
-      _provCaps,
-      _provId,
-      _bindProvider,
-      _bindModel,
-      _budgetDaily,
-      _budgetOffset,
-      _budgetLayers,
-      _budgetCaps,
-    ]) {
+    _session?.model.removeListener(_onSessionChanged);
+    for (final controller in _controllers) {
       controller.dispose();
     }
     super.dispose();
   }
 
-  bool get _ready => widget.writer != null && _profileId != null && !_busy;
+  bool get _sessionMatches {
+    final session = _session;
+    final ai = _selected;
+    return widget.session == session &&
+        (session == null ||
+            session.isCurrent() &&
+                (ai == null ||
+                    session.model.ownAiAccounts.any(
+                      (row) => row.accountId == ai && !row.disabled,
+                    )));
+  }
+
+  void _invalidateSession() {
+    _sessionLost = true;
+    _selected = null;
+    _profileId = null;
+    _status = null;
+    _copiedModel = null;
+    _resetCatalog();
+    for (final controller in _controllers) {
+      controller.clear();
+    }
+  }
+
+  void _onSessionChanged() {
+    // Stop the old route even if the app unlocks again before the next frame.
+    if (mounted && !_sessionLost && !_sessionMatches) {
+      setState(_invalidateSession);
+    }
+  }
+
+  bool _checkSession() {
+    _onSessionChanged();
+    return mounted && !_sessionLost;
+  }
+
+  bool get _ready =>
+      !_sessionLost &&
+      _sessionMatches &&
+      widget.writer != null &&
+      _selected != null &&
+      _profileId != null &&
+      !_resolving &&
+      !_busy;
 
   Future<void> _resolve() async {
+    if (!_checkSession()) return;
+    final generation = ++_profileGeneration;
     final account = _selected;
     final resolve = widget.resolveProfileId;
     if (account == null || resolve == null) {
@@ -103,13 +179,13 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     });
     try {
       final profile = await resolve(account);
-      if (!mounted) return;
+      if (!_checkSession() || generation != _profileGeneration) return;
       setState(() {
         _profileId = profile;
         _resolving = false;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!_checkSession() || generation != _profileGeneration) return;
       setState(() {
         _profileId = null;
         _resolving = false;
@@ -120,13 +196,98 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
   }
 
   void _select(String? account) {
-    if (account == null || account == _selected) return;
+    if (!_checkSession() || _busy || account == null || account == _selected) {
+      return;
+    }
     setState(() {
       _selected = account;
       _status = null;
       _profileId = null;
+      _resetCatalog();
+      _clearCopiedModel();
     });
     _resolve();
+  }
+
+  void _resetCatalog() {
+    _catalogGeneration++;
+    _catalogLoading = false;
+    _catalogNotice = null;
+    _catalogModels = const [];
+  }
+
+  void _clearCopiedModel() {
+    if (_copiedModel == _bindModel.text) _bindModel.clear();
+    _copiedModel = null;
+  }
+
+  void _changeBindingProvider(String _) {
+    if (!_checkSession()) return;
+    setState(() {
+      _resetCatalog();
+      _clearCopiedModel();
+    });
+  }
+
+  void _changeBindingModel(String _) {
+    if (!_checkSession()) return;
+    setState(() => _copiedModel = null);
+  }
+
+  Future<void> _loadCatalog(int generation) async {
+    final read = widget.readCatalog;
+    final provider = _bindProvider.text.trim();
+    if (!_checkSession() ||
+        !_ready ||
+        read == null ||
+        provider.isEmpty ||
+        _catalogLoading ||
+        generation != _catalogGeneration) {
+      return;
+    }
+    final request = ++_catalogGeneration;
+    setState(() {
+      _catalogLoading = true;
+      _catalogNotice = null;
+      _catalogModels = const [];
+    });
+    DiagnosticsRead<ModelCatalog> result;
+    try {
+      result = await read(provider);
+    } catch (_) {
+      result = const DiagnosticsRead.unknown();
+    }
+    if (!_checkSession() ||
+        request != _catalogGeneration ||
+        provider != _bindProvider.text.trim()) {
+      return;
+    }
+    setState(() {
+      _catalogLoading = false;
+      _catalogModels = result.value?.models ?? const [];
+      _catalogNotice = switch (result.status) {
+        DiagnosticsReadStatus.loaded =>
+          _catalogModels.isEmpty ? '目录为空' : '目录 · ${_catalogModels.length} 个模型',
+        DiagnosticsReadStatus.notFound => '未找到已保存的 Provider',
+        DiagnosticsReadStatus.denied => '无权限读取目录',
+        DiagnosticsReadStatus.unavailable => '目录暂不可读',
+        DiagnosticsReadStatus.unconfigured => '目录未配置',
+        DiagnosticsReadStatus.unknown => '无法验证目录',
+      };
+    });
+  }
+
+  void _copyCatalogModel(String model, int generation) {
+    if (!_checkSession() ||
+        !_ready ||
+        generation != _catalogGeneration ||
+        !_catalogModels.contains(model)) {
+      return;
+    }
+    setState(() {
+      _copiedModel = model;
+      _bindModel.text = model;
+    });
   }
 
   String _failureText(HostRequestException error) =>
@@ -139,43 +300,39 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
         _ => '操作失败或结果未知；不会自动重试',
       };
 
-  Future<void> _run(
-    Future<void> Function(AiConfigWriter writer) action,
-    String success,
-  ) async {
-    final writer = widget.writer;
-    if (writer == null || _profileId == null) return;
+  Future<void> _run<T>(
+    Future<T> Function(AiConfigWriter writer) action,
+    String success, {
+    required int profileGeneration,
+    void Function(T result)? onSuccess,
+  }) async {
+    bool isCurrent() =>
+        _checkSession() && profileGeneration == _profileGeneration;
+    if (!isCurrent() || !_ready) return;
     setState(() {
       _busy = true;
       _status = null;
     });
     try {
-      await action(writer);
-      if (!mounted) return;
+      final result = await action(widget.writer!);
+      if (!isCurrent()) return;
       setState(() {
         _status = success;
         _statusError = false;
+        onSuccess?.call(result);
       });
-    } on HostRequestException catch (error) {
-      if (!mounted) return;
+    } catch (error) {
+      if (!isCurrent()) return;
       setState(() {
-        _status = _failureText(error);
-        _statusError = true;
-      });
-    } on FormatException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _status = error.message;
-        _statusError = true;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _status = '操作失败或结果未知；不会自动重试';
+        _status = switch (error) {
+          HostRequestException() => _failureText(error),
+          FormatException() => error.message,
+          _ => '操作失败或结果未知；不会自动重试',
+        };
         _statusError = true;
       });
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && !_sessionLost) setState(() => _busy = false);
     }
   }
 
@@ -230,7 +387,20 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
 
   @override
   Widget build(BuildContext context) {
+    if (_sessionLost) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('AI 运行配置')),
+        body: const Padding(
+          key: Key('ai-config-session-invalid'),
+          padding: EdgeInsets.all(16),
+          child: Text('登录状态或 AI 账户已变更。请返回设置后重新打开编辑。'),
+        ),
+      );
+    }
     final canUse = widget.writer != null;
+    final profileGeneration = _profileGeneration;
+    final catalogGeneration = _catalogGeneration;
+    final catalogModels = _catalogModels;
     return Scaffold(
       appBar: AppBar(title: const Text('AI 运行配置')),
       body: ListView(
@@ -328,22 +498,26 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
                     key: const Key('persona-initialize'),
                     onPressed: !_ready
                         ? null
-                        : () => _run((writer) {
-                            final p0 = _pairs(_p0.text);
-                            final p1 = _pairs(_p1.text);
-                            final p2 = _pairs(_p2.text);
-                            if (p0.isEmpty || p1.isEmpty || p2.isEmpty) {
-                              throw const FormatException(
-                                '人格三层 p0/p1/p2 都必须非空',
+                        : () => _run(
+                            (writer) {
+                              final p0 = _pairs(_p0.text);
+                              final p1 = _pairs(_p1.text);
+                              final p2 = _pairs(_p2.text);
+                              if (p0.isEmpty || p1.isEmpty || p2.isEmpty) {
+                                throw const FormatException(
+                                  '人格三层 p0/p1/p2 都必须非空',
+                                );
+                              }
+                              return writer.initializePersona(
+                                _profileId!,
+                                p0: p0,
+                                p1: p1,
+                                p2: p2,
                               );
-                            }
-                            return writer.initializePersona(
-                              _profileId!,
-                              p0: p0,
-                              p1: p1,
-                              p2: p2,
-                            );
-                          }, '人格已初始化'),
+                            },
+                            '人格已初始化',
+                            profileGeneration: profileGeneration,
+                          ),
                     child: const Text('初始化人格'),
                   ),
                   OutlinedButton(
@@ -363,6 +537,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
                               p2: {..._pairs(_p2.text)},
                             ),
                             '人格已保存为新版本',
+                            profileGeneration: profileGeneration,
                           ),
                     child: const Text('保存人格修改'),
                   ),
@@ -392,12 +567,16 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
                 children: [
                   FilledButton(
                     key: const Key('provider-create'),
-                    onPressed: !_ready ? null : _createProvider,
+                    onPressed: !_ready
+                        ? null
+                        : () => _createProvider(profileGeneration),
                     child: const Text('新建 Provider'),
                   ),
                   OutlinedButton(
                     key: const Key('provider-update'),
-                    onPressed: !_ready ? null : _updateProvider,
+                    onPressed: !_ready
+                        ? null
+                        : () => _updateProvider(profileGeneration),
                     child: const Text('更新 Provider'),
                   ),
                 ],
@@ -411,20 +590,88 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
           _section(
             '聊天绑定',
             [
-              _field('binding-provider', _bindProvider, 'Provider ID'),
-              _field('binding-model', _bindModel, '模型 ID'),
+              _field(
+                'binding-provider',
+                _bindProvider,
+                'Provider ID',
+                onChanged: _changeBindingProvider,
+              ),
+              _field(
+                'binding-model',
+                _bindModel,
+                '模型 ID',
+                onChanged: _changeBindingModel,
+              ),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: OutlinedButton.icon(
+                  key: const Key('binding-catalog-read'),
+                  onPressed:
+                      !_ready ||
+                          widget.readCatalog == null ||
+                          _bindProvider.text.trim().isEmpty ||
+                          _catalogLoading
+                      ? null
+                      : () => _loadCatalog(catalogGeneration),
+                  icon: const Icon(Icons.list_alt_outlined),
+                  label: Text(
+                    _catalogLoading ? '读取模型目录中…' : '读取已保存 Provider 模型',
+                  ),
+                ),
+              ),
+              if (_catalogNotice != null)
+                Text(
+                  _catalogNotice!,
+                  key: const Key('binding-catalog-status'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              if (_catalogModels.isNotEmpty)
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 176),
+                  child: ListView.builder(
+                    primary: false,
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: catalogModels.length,
+                    itemBuilder: (context, index) {
+                      final model = catalogModels[index];
+                      return ListTile(
+                        key: Key('binding-catalog-model-$model'),
+                        title: Text(
+                          model,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        selected: _copiedModel == model,
+                        onTap: !_ready
+                            ? null
+                            : () => _copyCatalogModel(model, catalogGeneration),
+                      );
+                    },
+                  ),
+                ),
+              if (_copiedModel != null)
+                Text(
+                  '已填入模型 ID',
+                  key: const Key('binding-catalog-selection-status'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
               FilledButton(
                 key: const Key('binding-save'),
                 onPressed: !_ready
                     ? null
-                    : () => _run(
-                        (writer) => writer.setChatBinding(
-                          _profileId!,
-                          providerId: _bindProvider.text.trim(),
-                          model: _bindModel.text.trim(),
-                        ),
-                        '聊天绑定已保存',
-                      ),
+                    : () {
+                        if (catalogGeneration != _catalogGeneration) return;
+                        _run(
+                          (writer) => writer.setChatBinding(
+                            _profileId!,
+                            providerId: _bindProvider.text.trim(),
+                            model: _bindModel.text.trim(),
+                          ),
+                          '聊天绑定已保存',
+                          profileGeneration: profileGeneration,
+                        );
+                      },
                 child: const Text('保存聊天绑定'),
               ),
             ],
@@ -456,7 +703,9 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
               _field('budget-caps', _budgetCaps, '能力上限（chat=0 等，七行）', lines: 7),
               FilledButton(
                 key: const Key('budget-save'),
-                onPressed: !_ready ? null : _saveBudget,
+                onPressed: !_ready
+                    ? null
+                    : () => _saveBudget(profileGeneration),
                 child: const Text('保存预算'),
               ),
             ],
@@ -504,6 +753,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     String label, {
     bool obscure = false,
     int lines = 1,
+    ValueChanged<String>? onChanged,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 8),
     child: TextField(
@@ -513,69 +763,44 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
       minLines: 1,
       maxLines: obscure ? 1 : lines,
       decoration: InputDecoration(labelText: label),
+      onChanged: onChanged,
     ),
   );
 
-  Future<void> _createProvider() async {
-    try {
-      final writer = widget.writer!;
-      final result = await writer.createProvider(
-        name: _provName.text.trim(),
-        baseUrl: _provBaseUrl.text.trim(),
-        apiKey: _provApiKey.text,
-        capabilities: _caps(_provCaps.text),
-      );
-      if (!mounted) return;
-      setState(() {
-        _status = 'Provider 已保存：${result.name} · 掩码 ${result.keyMask}（不是密钥）';
-        _statusError = false;
-        _provApiKey.clear();
-      });
-    } on HostRequestException catch (error) {
-      if (mounted) {
-        setState(() {
-          _status = _failureText(error);
-          _statusError = true;
-        });
-      }
-    } on FormatException catch (error) {
-      if (mounted) {
-        setState(() {
-          _status = error.message;
-          _statusError = true;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _status = '操作失败或结果未知；不会自动重试';
-          _statusError = true;
-        });
-      }
-    }
-  }
+  Future<void> _createProvider(int profileGeneration) => _run(
+    (writer) => writer.createProvider(
+      name: _provName.text.trim(),
+      baseUrl: _provBaseUrl.text.trim(),
+      apiKey: _provApiKey.text,
+      capabilities: _caps(_provCaps.text),
+    ),
+    'Provider 已保存',
+    profileGeneration: profileGeneration,
+    onSuccess: (result) {
+      _status = 'Provider 已保存：${result.name} · 掩码 ${result.keyMask}（不是密钥）';
+      _provApiKey.clear();
+    },
+  );
 
-  Future<void> _updateProvider() async {
-    final providerId = _provId.text.trim();
-    await _run(
-      (writer) => writer.updateProvider(
-        providerId,
-        name: _provName.text.trim().isEmpty ? null : _provName.text.trim(),
-        baseUrl: _provBaseUrl.text.trim().isEmpty
-            ? null
-            : _provBaseUrl.text.trim(),
-        apiKey: _provApiKey.text.isEmpty ? null : _provApiKey.text,
-        capabilities: _provCaps.text.trim().isEmpty
-            ? null
-            : _caps(_provCaps.text),
-      ),
-      'Provider 已更新（只显示掩码，不回显密钥）',
-    );
-    if (!_statusError && mounted) _provApiKey.clear();
-  }
+  Future<void> _updateProvider(int profileGeneration) => _run(
+    (writer) => writer.updateProvider(
+      _provId.text.trim(),
+      name: _provName.text.trim().isEmpty ? null : _provName.text.trim(),
+      baseUrl: _provBaseUrl.text.trim().isEmpty
+          ? null
+          : _provBaseUrl.text.trim(),
+      apiKey: _provApiKey.text.isEmpty ? null : _provApiKey.text,
+      capabilities: _provCaps.text.trim().isEmpty
+          ? null
+          : _caps(_provCaps.text),
+    ),
+    'Provider 已更新（只显示掩码，不回显密钥）',
+    profileGeneration: profileGeneration,
+    onSuccess: (_) => _provApiKey.clear(),
+  );
 
-  Future<void> _saveBudget() async {
-    await _run((writer) {
+  Future<void> _saveBudget(int profileGeneration) => _run(
+    (writer) {
       final layers = _intPairs(_budgetLayers.text);
       final caps = _intPairs(_budgetCaps.text);
       return writer.configureBudget(
@@ -585,6 +810,8 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
         capabilityLimits: caps,
         offsetMinutes: _requireInt(_budgetOffset, '时区偏移'),
       );
-    }, '预算已保存');
-  }
+    },
+    '预算已保存',
+    profileGeneration: profileGeneration,
+  );
 }

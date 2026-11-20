@@ -523,18 +523,33 @@ class SettingsScreen extends StatelessWidget {
               ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
-                final runtime = model;
-                final connection = runtime is ClientRuntime
-                    ? runtime.connection
+                final shell = model;
+                final runtime = shell is ClientRuntime ? shell : null;
+                final owner = shell.connectedAccountId;
+                final epoch = shell.ownAiSessionContext;
+                // Also catch a lock between the tap and the editor's first frame.
+                final lockEpoch = shell.ownAiDirectContext;
+                final connection =
+                    shell.authenticated &&
+                        !shell.locked &&
+                        owner != null &&
+                        epoch != null &&
+                        lockEpoch != null
+                    ? runtime?.connection
                     : null;
-                final owner = model.connectedAccountId;
-                final owned = <String>[
-                  for (final ai in model.ownAiAccounts)
-                    if (!ai.disabled) ai.accountId,
-                ];
-                final writer = connection == null
-                    ? null
-                    : AiConfigWriteApi(connection);
+                bool sessionCurrent() =>
+                    shell.authenticated &&
+                    !shell.locked &&
+                    shell.connectedAccountId == owner &&
+                    shell.ownAiSessionContext == epoch &&
+                    identical(shell.ownAiDirectContext, lockEpoch) &&
+                    identical(runtime?.connection, connection);
+                final owned = connection == null
+                    ? const <String>[]
+                    : [
+                        for (final ai in shell.ownAiAccounts)
+                          if (!ai.disabled) ai.accountId,
+                      ];
                 final resolve = (connection != null && owner != null)
                     ? (String accountId) => OwnerAiDirectApi(connection)
                           .registerOrResolve(
@@ -543,11 +558,26 @@ class SettingsScreen extends StatelessWidget {
                           )
                           .then((identity) => identity.profileId)
                     : null;
+                final writer = connection == null
+                    ? null
+                    : AiConfigWriteApi(connection, retryAuthentication: false);
+                final catalog = connection == null
+                    ? null
+                    : ModelDiagnosticsApi(connection);
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => AiConfigEditor(
                       writer: writer,
                       resolveProfileId: resolve,
+                      readCatalog: catalog == null
+                          ? null
+                          : (providerId) => catalog.readModelCatalog(
+                              providerId,
+                              retryAuthentication: false,
+                            ),
+                      session: connection == null
+                          ? null
+                          : (model: shell, isCurrent: sessionCurrent),
                       ownedAiAccountIds: owned,
                     ),
                   ),
