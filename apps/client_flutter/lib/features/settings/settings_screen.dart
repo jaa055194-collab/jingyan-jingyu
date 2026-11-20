@@ -140,6 +140,34 @@ class SettingsScreen extends StatelessWidget {
                   ? null
                   : model.setAiConsent,
             ),
+            ListTile(
+              key: const Key('open-device-sessions'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.devices_outlined),
+              title: const Text('设备会话'),
+              subtitle: const Text('查看已登录设备，或远程下线'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) {
+                    final runtime = model;
+                    final connection =
+                        runtime is ClientRuntime &&
+                            runtime.authenticated && !runtime.locked
+                        ? runtime.connection
+                        : null;
+                    final api = connection == null
+                        ? null
+                        : DeviceSessionsApi(connection);
+                    return DeviceSessionsScreen(
+                      listDevices: api?.listDevices,
+                      revokeDevice: api?.revokeDevice,
+                      session: api == null ? null : model,
+                    );
+                  },
+                ),
+              ),
+            ),
             const Divider(height: 32),
             Text('通用', style: Theme.of(context).textTheme.titleMedium),
             SwitchListTile(
@@ -260,35 +288,6 @@ class SettingsScreen extends StatelessWidget {
                   MaterialPageRoute<void>(
                     builder: (_) =>
                         AttachmentsListScreen(listAttachments: listAttachments),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              key: const Key('open-device-sessions'),
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.devices_outlined),
-              title: const Text('设备会话'),
-              subtitle: const Text(
-                '查看当前账号已登录的设备并显式远程下线；本机或无法确定本机时需输入设备名确认，'
-                '只在宿主确认后才算下线，不显示、不保存任何令牌',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                final runtime = model;
-                final connection = runtime is ClientRuntime
-                    ? runtime.connection
-                    : null;
-                final api = connection == null
-                    ? null
-                    : DeviceSessionsApi(connection);
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => DeviceSessionsScreen(
-                      listDevices: api?.listDevices,
-                      revokeDevice: api?.revokeDevice,
-                      session: model,
-                    ),
                   ),
                 );
               },

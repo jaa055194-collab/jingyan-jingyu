@@ -121,22 +121,23 @@ void main() {
       );
     }
 
-    // Anchor the same pre-existing tile at the same screen position on both
-    // revisions so the pair shows an identical viewport and UI state; only the
-    // newly added tile's region can differ.
-    final anchor = find.byKey(const Key('open-attachment-viewer'));
-    await tester.scrollUntilVisible(anchor, 200);
-    await tester.pumpAndSettle();
     final scrollable = find
         .descendant(of: find.byType(SettingsScreen), matching: find.byType(Scrollable))
         .first;
-    final position = tester.state<ScrollableState>(scrollable).position;
-    position.jumpTo(position.pixels + tester.getRect(anchor).top - 300);
-    await tester.pumpAndSettle();
-    expect(tester.getRect(anchor).top, closeTo(300, 1));
+    expect(tester.state<ScrollableState>(scrollable).position.pixels, 0);
+    final privacy = find.text('隐私与安全');
+    final general = find.text('通用');
+    expect(privacy, findsOneWidget);
+    expect(general, findsOneWidget);
     expect(connection.reads, 0, reason: 'no device read before the entry opens');
 
     final entry = find.byKey(const Key('open-device-sessions'));
+    if (expectEntry || stage == 'list') {
+      expect(entry, findsOneWidget);
+      // Remote sign-off is an account security action, not a read-only check.
+      expect(tester.getTopLeft(entry).dy, greaterThan(tester.getBottomLeft(privacy).dy));
+      expect(tester.getBottomLeft(entry).dy, lessThan(tester.getTopLeft(general).dy));
+    }
     if (stage == 'settings') {
       // Before: the entry is absent. After: it is present and on screen.
       expect(entry, expectEntry ? findsOneWidget : findsNothing);
