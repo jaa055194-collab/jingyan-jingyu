@@ -6,7 +6,7 @@ library;
 
 import 'plugin_package.dart';
 
-/// A validated mapping from shared avatar semantics to model-specific names.
+/// A structurally validated mapping from avatar semantics to model targets.
 class Live2DParamMap {
   Live2DParamMap._({
     required this.mouthOpen,
@@ -22,6 +22,52 @@ class Live2DParamMap {
   final String blinkRight;
   final Map<String, String> expressions;
   final Map<String, String> motions;
+
+  /// Checks the parsed targets before enabling this map on a loaded model.
+  ///
+  /// Supply the complete, finite ID sets from that same device-local model,
+  /// as enumerated by the runtime, not inferred from filenames or ID patterns.
+  /// Matching is exact and separate for each kind; extra IDs are allowed.
+  /// Throws [FormatException] for the first target missing from its kind.
+  /// This check does not load, activate, or modify the model or profile.
+  void validateTargets({
+    required Set<String> parameters,
+    required Set<String> expressions,
+    required Set<String> motions,
+  }) {
+    // Use exact String equality even if the caller's sets use custom equality.
+    final parameterIds = Set<String>.of(parameters);
+    final expressionIds = Set<String>.of(expressions);
+    final motionIds = Set<String>.of(motions);
+
+    void requireTarget(
+      String field,
+      String target,
+      Set<String> ids,
+      String kind,
+    ) {
+      if (!ids.contains(target)) {
+        throw FormatException(
+          'paramMap.$field: unknown $kind target "$target"',
+        );
+      }
+    }
+
+    requireTarget('mouthOpen', mouthOpen, parameterIds, 'parameter');
+    requireTarget('blinkLeft', blinkLeft, parameterIds, 'parameter');
+    requireTarget('blinkRight', blinkRight, parameterIds, 'parameter');
+    for (final entry in this.expressions.entries) {
+      requireTarget(
+        'expressions[${entry.key}]',
+        entry.value,
+        expressionIds,
+        'expression',
+      );
+    }
+    for (final entry in this.motions.entries) {
+      requireTarget('motions[${entry.key}]', entry.value, motionIds, 'motion');
+    }
+  }
 
   Map<String, Object?> toJson() => {
     'mouthOpen': mouthOpen,

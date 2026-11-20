@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 import 'package:test/test.dart';
 
@@ -153,5 +155,106 @@ void main() {
         throwsUnsupportedError,
       );
     });
+  });
+
+  group('Live2DParamMap.validateTargets', () {
+    const parameterIds = {
+      'ParamMouthOpenY',
+      'ParamEyeLOpen',
+      'ParamEyeROpen',
+      'CustomJaw',
+    };
+    const expressionIds = {'F01', 'F02', 'F03'};
+    const motionIds = {'Motion01', 'Motion02', 'Motion03'};
+
+    void validate(
+      Live2DParamMap mapping, {
+      Set<String> parameters = parameterIds,
+      Set<String> expressions = expressionIds,
+      Set<String> motions = motionIds,
+    }) => mapping.validateTargets(
+      parameters: parameters,
+      expressions: expressions,
+      motions: motions,
+    );
+
+    test('accepts exact targets in a larger model inventory', () {
+      final mapping = Live2DParamMap.fromJson(
+        _mapping()
+          ..['mouthOpen'] = 'CustomJaw'
+          ..['expressions'] = {'happy': 'F01', 'sad': 'F02'}
+          ..['motions'] = {'wave': 'Motion01', 'idle': 'Motion02'},
+      );
+
+      expect(() => validate(mapping), returnsNormally);
+    });
+
+    for (final field in ['mouthOpen', 'blinkLeft', 'blinkRight']) {
+      for (final (target, reason) in [
+        ('missing', 'missing'),
+        ('F01', 'wrong-kind'),
+      ]) {
+        test('rejects $field mapped to a $reason target', () {
+          final mapping = Live2DParamMap.fromJson(_mapping()..[field] = target);
+
+          expect(() => validate(mapping), throwsFormatException);
+        });
+      }
+    }
+
+    for (final (field, semantic, validTarget, wrongKindTarget) in [
+      ('expressions', 'happy', 'F01', 'Motion01'),
+      ('motions', 'wave', 'Motion01', 'F01'),
+    ]) {
+      for (final (target, reason) in [
+        ('missing', 'missing'),
+        (wrongKindTarget, 'wrong-kind'),
+      ]) {
+        test('rejects a $reason second target in $field', () {
+          final mapping = Live2DParamMap.fromJson(
+            _mapping()..[field] = {semantic: validTarget, 'another': target},
+          );
+
+          expect(() => validate(mapping), throwsFormatException);
+        });
+      }
+    }
+
+    test('rejects a case mismatch even in a case-insensitive input set', () {
+      final mapping = Live2DParamMap.fromJson(_mapping());
+      final expressions = SplayTreeSet<String>(
+        (left, right) => left.toLowerCase().compareTo(right.toLowerCase()),
+      )..add('f01');
+
+      expect(
+        () => validate(mapping, expressions: expressions),
+        throwsFormatException,
+      );
+    });
+
+    test('does not trim targets supplied by the runtime inventory', () {
+      final mapping = Live2DParamMap.fromJson(_mapping());
+
+      expect(
+        () => validate(mapping, motions: {' Motion01 '}),
+        throwsFormatException,
+      );
+    });
+
+    for (final kind in ['parameters', 'expressions', 'motions']) {
+      test('rejects an empty $kind inventory', () {
+        final mapping = Live2DParamMap.fromJson(_mapping());
+
+        expect(
+          () => validate(
+            mapping,
+            parameters: kind == 'parameters' ? const {} : parameterIds,
+            expressions: kind == 'expressions' ? const {} : expressionIds,
+            motions: kind == 'motions' ? const {} : motionIds,
+          ),
+          throwsFormatException,
+        );
+      });
+    }
   });
 }
