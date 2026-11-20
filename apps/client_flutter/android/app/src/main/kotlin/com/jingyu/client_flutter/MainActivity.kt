@@ -256,11 +256,14 @@ class MainActivity : FlutterActivity() {
                 // The user may have renamed the document or the provider may
                 // dedupe it; report what the destination actually says, and
                 // report the destination's real length rather than the input.
-                val actualName = contentResolver.query(
+                // Display-only: keep the provider's name when it is a safe
+                // basename, otherwise fall back to the sanitized suggestion.
+                val providedName = contentResolver.query(
                     uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
                 )?.use { cursor ->
                     if (cursor.moveToFirst()) cursor.getString(0) else null
-                }?.trim()?.takeIf { it.isNotEmpty() } ?: name
+                }
+                val actualName = safeDisplayName(providedName) ?: name
                 val writtenBytes = contentResolver.openFileDescriptor(uri, "r")
                     ?.use { descriptor -> descriptor.statSize }
                     ?.takeIf { it == bytes.size.toLong() }
@@ -289,6 +292,16 @@ class MainActivity : FlutterActivity() {
         pendingBackupResult = null
         pendingBackupBytes = null
         pendingBackupName = null
+    }
+
+    /// Display-only basename: no path separators or control characters, no
+    /// extension rewriting, so it matches what the provider actually stored.
+    private fun safeDisplayName(raw: String?): String? {
+        val base = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val basename = base.substringAfterLast('/').substringAfterLast('\\').trim()
+        val cleaned = basename.filter { it.code >= 32 && it.code != 127 }.trim()
+        if (cleaned.isEmpty() || cleaned.length > 200) return null
+        return cleaned
     }
 
     private fun sanitizeBackupName(raw: String?): String? {
