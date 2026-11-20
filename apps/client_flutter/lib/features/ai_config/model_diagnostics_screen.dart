@@ -62,11 +62,13 @@ enum _Phase { idle, loading, done }
 class _Section<T> {
   _Phase phase = _Phase.idle;
   DiagnosticsRead<T>? read;
+  int generation = 0;
 
   /// Set only when a loader threw instead of returning an honest state.
   bool threw = false;
 
   void reset() {
+    generation++;
     phase = _Phase.idle;
     read = null;
     threw = false;
@@ -212,6 +214,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     Future<DiagnosticsRead<T>> Function() read,
   ) async {
     if (!_canRead() || section.phase == _Phase.loading) return;
+    final generation = ++section.generation;
     setState(() {
       section.phase = _Phase.loading;
       section.read = null;
@@ -225,7 +228,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
       // Transport/parse details are never surfaced; a thrown loader is unknown.
       threw = true;
     }
-    if (!_canRead()) return;
+    if (!_canRead() || section.generation != generation) return;
     setState(() {
       section.threw = threw;
       section.read = result;
@@ -467,12 +470,11 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
             input: _profileInput,
             onSelected: (value) => setState(() {
               _profile = value;
-              _usage.reset();
+              _resetProfileReads();
             }),
             onTyped: () {
               if (!mounted) return;
-              _setNeedsProfile(_usage, false);
-              setState(() => _usage.reset());
+              setState(_resetProfileReads);
             },
           ),
           Align(
@@ -489,6 +491,13 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
         ],
       ),
     );
+  }
+
+  void _resetProfileReads() {
+    _usage.reset();
+    _trend.reset();
+    _budget.reset();
+    _needsProfile.clear();
   }
 
   void _requestProfile<T>(

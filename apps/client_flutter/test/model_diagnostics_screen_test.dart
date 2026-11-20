@@ -202,7 +202,164 @@ Future<void> _tap(WidgetTester tester, String key) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _chooseIdentity(
+  WidgetTester tester, {
+  required bool typed,
+  required bool catalog,
+  required String id,
+}) async {
+  tester.state<ScrollableState>(find.byType(Scrollable).first).position.jumpTo(0);
+  await tester.pumpAndSettle();
+  final key = catalog
+      ? 'diagnostics-catalog-provider'
+      : 'diagnostics-usage-profile';
+  if (typed) {
+    await _enter(tester, '$key-input', id);
+  } else {
+    await _tap(tester, key);
+    await tester.tap(find.text(id).last);
+    await tester.pumpAndSettle();
+  }
+}
+
 void main() {
+  group('identity change invalidation', () {
+    for (final typed in [true, false]) {
+      final source = typed ? 'typed' : 'selected';
+      testWidgets('$source provider discards an earlier catalog read', (
+        tester,
+      ) async {
+        final first = Completer<DiagnosticsRead<ModelCatalog>>();
+        final second = Completer<DiagnosticsRead<ModelCatalog>>();
+        final requested = <String>[];
+        await tester.pumpWidget(
+          _screen(
+            _Loaders(
+              catalog: (id) {
+                requested.add(id);
+                return id == 'provider-one' ? first.future : second.future;
+              },
+            ),
+            providers: typed ? const [] : const ['provider-one', 'provider-two'],
+          ),
+        );
+        await tester.pumpAndSettle();
+        await _chooseIdentity(
+          tester, typed: typed, catalog: true, id: 'provider-one',
+        );
+        await _tap(tester, 'diagnostics-catalog-load');
+        await _chooseIdentity(
+          tester, typed: typed, catalog: true, id: 'provider-two',
+        );
+        await _tap(tester, 'diagnostics-catalog-load');
+        second.complete(DiagnosticsRead.loaded(ModelCatalog(['model-current'])));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('model-current'), findsOneWidget);
+
+        // Returning to the original id must still invalidate its old request.
+        await _chooseIdentity(
+          tester, typed: typed, catalog: true, id: 'provider-one',
+        );
+        expect(find.byKey(const Key('diagnostics-catalog-loaded')), findsNothing);
+        first.complete(DiagnosticsRead.loaded(ModelCatalog(['model-stale'])));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('diagnostics-catalog-loaded')), findsNothing);
+        expect(find.byKey(const Key('diagnostics-catalog-not-requested')), findsOneWidget);
+        expect(requested, ['provider-one', 'provider-two']);
+      });
+
+      testWidgets('$source profile clears completed usage trend and budget', (
+        tester,
+      ) async {
+        var calls = 0;
+        await tester.pumpWidget(
+          _screen(
+            _Loaders(
+              usage: (_) async {
+                calls++;
+                return DiagnosticsRead.loaded(_usage());
+              },
+              trend: (_) async {
+                calls++;
+                return DiagnosticsRead.loaded(_trend());
+              },
+              budget: (_) async {
+                calls++;
+                return DiagnosticsRead.loaded(_budget());
+              },
+            ),
+            profiles: typed ? const [] : const ['profile-one', 'profile-two'],
+          ),
+        );
+        await tester.pumpAndSettle();
+        await _chooseIdentity(
+          tester, typed: typed, catalog: false, id: 'profile-one',
+        );
+        for (final section in ['usage', 'trend', 'budget']) {
+          await _tap(tester, 'diagnostics-$section-load');
+          expect(find.byKey(Key('diagnostics-$section-loaded')), findsOneWidget);
+        }
+        await _chooseIdentity(
+          tester, typed: typed, catalog: false, id: 'profile-two',
+        );
+        for (final section in ['usage', 'trend', 'budget']) {
+          await _reveal(tester, 'diagnostics-$section-load');
+          expect(find.byKey(Key('diagnostics-$section-loaded')), findsNothing);
+          expect(find.byKey(Key('diagnostics-$section-not-requested')), findsOneWidget);
+        }
+        expect(calls, 3);
+      });
+
+      testWidgets('$source profile discards pending usage trend and budget', (
+        tester,
+      ) async {
+        final usage = Completer<DiagnosticsRead<TodayUsage>>();
+        final trend = Completer<DiagnosticsRead<Rolling7Trend>>();
+        final budget = Completer<DiagnosticsRead<BudgetLimits>>();
+        var calls = 0;
+        await tester.pumpWidget(
+          _screen(
+            _Loaders(
+              usage: (_) {
+                calls++;
+                return usage.future;
+              },
+              trend: (_) {
+                calls++;
+                return trend.future;
+              },
+              budget: (_) {
+                calls++;
+                return budget.future;
+              },
+            ),
+            profiles: typed ? const [] : const ['profile-one', 'profile-two'],
+          ),
+        );
+        await tester.pumpAndSettle();
+        await _chooseIdentity(
+          tester, typed: typed, catalog: false, id: 'profile-one',
+        );
+        for (final section in ['usage', 'trend', 'budget']) {
+          await _tap(tester, 'diagnostics-$section-load');
+        }
+        await _chooseIdentity(
+          tester, typed: typed, catalog: false, id: 'profile-two',
+        );
+        usage.complete(DiagnosticsRead.loaded(_usage()));
+        trend.complete(DiagnosticsRead.loaded(_trend()));
+        budget.complete(DiagnosticsRead.loaded(_budget()));
+        await tester.pumpAndSettle();
+        for (final section in ['usage', 'trend', 'budget']) {
+          await _reveal(tester, 'diagnostics-$section-load');
+          expect(find.byKey(Key('diagnostics-$section-loaded')), findsNothing);
+          expect(find.byKey(Key('diagnostics-$section-not-requested')), findsOneWidget);
+        }
+        expect(calls, 3);
+      });
+    }
+  });
+
   group('route session invalidation', () {
     for (final change in ['lock', 'logout', 'account', 'epoch']) {
       testWidgets('$change clears loaded metadata and blocks saved callbacks', (
