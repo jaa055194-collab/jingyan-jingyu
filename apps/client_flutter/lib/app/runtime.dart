@@ -18,6 +18,7 @@ import '../net/host_connection.dart';
 import '../net/group_api.dart';
 import '../net/own_ai_api.dart';
 import '../net/owner_ai_direct_api.dart';
+import '../net/voice_message_api.dart';
 import '../platform/native_platform.dart';
 import 'conversation_mapping.dart';
 import 'shell_view_model.dart';
@@ -62,6 +63,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool _ownAiLoaded = false;
   final _ownAiDirect = <String, ShellOwnAiDirectState>{};
   Object _ownAiDirectEpoch = Object();
+  static int _nextVoiceRequestId = 0;
+  bool _androidVoicePlayback = false;
+  bool _voiceFlutterResumed = true;
+  bool _voiceNativeResumed = false;
+  int? _voiceForegroundEpoch;
+  _VoiceAttempt? _voiceAttempt;
 
   void _invalidateOwnAiDirect() {
     _ownAiDirectEpoch = Object();
@@ -196,6 +203,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         }
       } else if (call.method == 'shareReceived') {
         _acceptSharePayload(call.arguments);
+      } else if (call.arguments case final Map arguments) {
+        switch (call.method) {
+          case 'voicePlaybackForeground':
+            _setNativeVoiceForeground(arguments['epoch'], arguments['resumed']);
+          case 'voicePlaybackFinished':
+            _finishNativeVoice(arguments['requestId'], arguments['failed']);
+        }
       }
     });
   }
@@ -365,6 +379,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
                   message.kind == MessageKind.image &&
                   message.body['attachmentId'] is String &&
                   message.body['recalled'] != true,
+              voiceAttachment: _voiceAttachmentOf(message) != null,
             ),
           for (final item in shell.outbox.items.where(
             (e) => e.conversationId == _selected,
@@ -460,6 +475,202 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   }
 
   @override
+  bool get supportsVoicePlayback => _androidVoicePlayback;
+
+  bool get _voiceForeground =>
+      _androidVoicePlayback && _voiceNativeResumed && _voiceFlutterResumed;
+
+  bool get _canReadVoice =>
+      !_disposed &&
+      _controllersReady &&
+      authenticated &&
+      !locked &&
+      !_switching &&
+      _online &&
+      _voiceForeground;
+
+  @override
+  ShellVoicePlayback? get voicePlayback {
+    final attempt = _voiceAttempt;
+    return attempt == null || !_voiceIsCurrent(attempt)
+        ? null
+        : ShellVoicePlayback(attempt.messageId, attempt.phase);
+  }
+
+  static String? _voiceAttachmentOf(MessageEventFrame message) {
+    final id = message.body['attachmentId'];
+    return message.kind == MessageKind.audio &&
+            message.body['recalled'] != true &&
+            id is String &&
+            id.isNotEmpty
+        ? id
+        : null;
+  }
+
+  String? _visibleVoiceAttachment(String conversationId, String messageId) {
+    if (!_conversations.any((row) => row.id == conversationId)) return null;
+    for (final row in shell.messagesFor(conversationId)) {
+      if (row.messageId == messageId) return _voiceAttachmentOf(row);
+    }
+    return null;
+  }
+
+  bool _voiceIsCurrent(_VoiceAttempt attempt) =>
+      identical(_voiceAttempt, attempt) &&
+      _canReadVoice &&
+      _current(attempt.generation) &&
+      _voiceForegroundEpoch == attempt.epoch &&
+      identical(connection, attempt.connection) &&
+      identical(shell, attempt.shell) &&
+      _selected == attempt.conversationId &&
+      attempt.viewIsCurrent() &&
+      _visibleVoiceAttachment(attempt.conversationId, attempt.messageId) ==
+          attempt.attachmentId;
+
+  @override
+  Future<void> playVoiceMessage(
+    String messageId, {
+    required bool Function() viewIsCurrent,
+    Future<void> Function()? waitForView,
+  }) async {
+    final conversation = _selected;
+    final transport = connection;
+    final epoch = _voiceForegroundEpoch;
+    if (!_canReadVoice ||
+        _busy ||
+        (_voiceAttempt?.active ?? false) ||
+        conversation == null ||
+        transport == null ||
+        epoch == null ||
+        !viewIsCurrent()) {
+      return;
+    }
+    final attachment = _visibleVoiceAttachment(conversation, messageId);
+    if (attachment == null) return;
+    final attempt = _VoiceAttempt(
+      requestId: ++_nextVoiceRequestId,
+      epoch: epoch,
+      generation: _generation,
+      connection: transport,
+      shell: shell,
+      conversationId: conversation,
+      messageId: messageId,
+      attachmentId: attachment,
+      viewIsCurrent: viewIsCurrent,
+    );
+    _voiceAttempt = attempt;
+    notifyListeners();
+    if (!_voiceIsCurrent(attempt)) return;
+    try {
+      final voice = await VoiceMessageApi(transport).read(
+        conversationId: conversation,
+        messageId: messageId,
+        cancellation: attempt.read,
+      );
+      if (!_voiceIsCurrent(attempt)) return;
+      // A shell tab/back change may have scheduled a rebuild but not yet
+      // removed this pane. Wait for that frame before handing bytes to Android.
+      if (waitForView != null) {
+        await Future.any<void>([waitForView(), attempt.stopped.future]);
+      }
+      if (!_voiceIsCurrent(attempt)) return;
+      attempt.nativeStarted = true;
+      final started = await Future.any<bool>([
+        native.playVoiceMessage(
+          requestId: attempt.requestId,
+          epoch: attempt.epoch,
+          bytes: voice.bytes,
+        ).timeout(const Duration(seconds: 12)),
+        attempt.stopped.future.then((_) => false),
+      ]);
+      if (!_voiceIsCurrent(attempt) || !attempt.active) return;
+      if (!started) {
+        _setVoiceFailure(attempt, ShellVoicePhase.unavailable);
+      } else {
+        attempt.phase = ShellVoicePhase.playing;
+        notifyListeners();
+      }
+    } catch (error) {
+      if (!_voiceIsCurrent(attempt) || !attempt.active) return;
+      final denied = error is HostRequestException &&
+          const {
+            FailureCode.unauthenticated,
+            FailureCode.forbidden,
+            FailureCode.notFound,
+          }.contains(error.failure.code);
+      _setVoiceFailure(
+        attempt,
+        denied ? ShellVoicePhase.denied : ShellVoicePhase.unavailable,
+      );
+    } finally {
+      if (identical(_voiceAttempt, attempt) && !_voiceIsCurrent(attempt)) {
+        _discardVoice();
+        notifyListeners();
+      }
+    }
+  }
+
+  void _setVoiceFailure(_VoiceAttempt attempt, ShellVoicePhase phase) {
+    _stopNativeVoice(attempt);
+    attempt.phase = phase;
+    notifyListeners();
+  }
+
+  void _stopNativeVoice(_VoiceAttempt attempt) {
+    if (!attempt.nativeStarted) return;
+    attempt.nativeStarted = false;
+    native.stopVoiceMessage(attempt.requestId).ignore();
+  }
+
+  bool _discardVoice() {
+    final attempt = _voiceAttempt;
+    if (attempt == null) return false;
+    _voiceAttempt = null;
+    attempt.read.cancel();
+    attempt.stopped.complete();
+    _stopNativeVoice(attempt);
+    return true;
+  }
+
+  @override
+  void stopVoicePlayback({bool Function()? viewIsCurrent}) {
+    if (viewIsCurrent != null &&
+        !identical(viewIsCurrent, _voiceAttempt?.viewIsCurrent)) {
+      return;
+    }
+    if (_discardVoice()) {
+      // A pane can stop during Flutter's build/disposal pass.
+      scheduleMicrotask(notifyListeners);
+    }
+  }
+
+  void _setNativeVoiceForeground(Object? epoch, Object? resumed) {
+    if (epoch is! int || epoch < 0 || resumed is! bool) return;
+    final before = _voiceForegroundEpoch;
+    if (before != null && epoch <= before) return;
+    _voiceForegroundEpoch = epoch;
+    _voiceNativeResumed = resumed;
+    if (_discardVoice()) notifyListeners();
+  }
+
+  void _finishNativeVoice(Object? requestId, Object? failed) {
+    final attempt = _voiceAttempt;
+    if (attempt == null ||
+        !attempt.nativeStarted ||
+        requestId != attempt.requestId ||
+        failed is! bool) {
+      return;
+    }
+    attempt.nativeStarted = false;
+    if (failed && _voiceIsCurrent(attempt)) {
+      attempt.phase = ShellVoicePhase.unavailable;
+    } else {
+      _discardVoice();
+    }
+    notifyListeners();
+  }
+
+  @override
   int get queuedCount => _controllersReady ? shell.outbox.items.length : 0;
   @override
   String get draft => _draft;
@@ -486,14 +697,26 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   String? get roomPreview => _preview;
   Future<void> initialize() async {
     final generation = _generation;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _voiceFlutterResumed = lifecycle == null || lifecycle == AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
     _registerNativeHandler();
     try {
       final nativeState = await native.invoke<Object?>('initialize');
-      if (nativeState is Map && nativeState['pendingShare'] != null) {
-        _acceptSharePayload(nativeState['pendingShare']);
-      }
       if (!_current(generation)) return;
+      if (nativeState is Map) {
+        _androidVoicePlayback = nativeState['platform'] == 'android' &&
+            nativeState['voicePlaybackEpoch'] is int;
+        if (_androidVoicePlayback) {
+          _setNativeVoiceForeground(
+            nativeState['voicePlaybackEpoch'],
+            nativeState['voicePlaybackResumed'],
+          );
+        }
+        if (nativeState['pendingShare'] != null) {
+          _acceptSharePayload(nativeState['pendingShare']);
+        }
+      }
       final directory = await native.invoke<String>('getDataDirectory');
       if (directory == null) throw const FileSystemException('本地目录不可用');
       _dataRoot = Directory(directory);
@@ -510,6 +733,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         persistence: _settingsStorage,
         auth: native,
         invalidate: () {
+          _discardVoice();
           _invalidateOwnAiDirect();
           _invalidateSharedTextContext();
           if (appLock.enabled) _historySyncEpoch++;
@@ -582,7 +806,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   void notifyListeners() {
-    if (!_disposed) super.notifyListeners();
+    if (_disposed) return;
+    final voice = _voiceAttempt;
+    if (voice != null && !_voiceIsCurrent(voice)) _discardVoice();
+    super.notifyListeners();
   }
 
   Future<void> _migrateSettings() async {
@@ -787,6 +1014,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   HostConnection? _submissionTransport;
 
   Future<void> _logout() async {
+    _discardVoice();
     _invalidateSharedTextContext(discard: true);
     final generation = ++_generation;
     _invalidateOwnAiDirect();
@@ -842,10 +1070,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_controllersReady) return;
-    if (shouldLockForLifecycle(state)) {
+    if (_disposed) return;
+    _voiceFlutterResumed = state == AppLifecycleState.resumed;
+    final voiceStopped = !_voiceFlutterResumed && _discardVoice();
+    if (_controllersReady && shouldLockForLifecycle(state)) {
       appLock.lock();
       unawaited(native.invoke<void>('lock'));
+      notifyListeners();
+    } else if (voiceStopped) {
       notifyListeners();
     }
   }
@@ -1028,6 +1260,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     }
     if (!_current(generation)) return;
     _switching = true;
+    _discardVoice();
     _invalidateSharedTextContext(discard: true);
     _PreparedSnapshot? prepared;
     var published = false;
@@ -1606,6 +1839,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   @override
   Future<void> selectConversation(String id) async {
     if (_selected != id) {
+      _discardVoice();
       _invalidateSharedTextContext();
       unawaited(_clearAttachmentSelection());
     }
@@ -2126,6 +2360,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _discardVoice();
     _invalidateSharedTextContext(discard: true);
     ++_generation;
     _invalidateOwnAiDirect();
@@ -2142,6 +2377,33 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _submissionTransport = null;
     super.dispose();
   }
+}
+
+class _VoiceAttempt {
+  _VoiceAttempt({
+    required this.requestId,
+    required this.epoch,
+    required this.generation,
+    required this.connection,
+    required this.shell,
+    required this.conversationId,
+    required this.messageId,
+    required this.attachmentId,
+    required this.viewIsCurrent,
+  });
+
+  final int requestId, epoch, generation;
+  final HostConnection connection;
+  final ClientShellController shell;
+  final String conversationId, messageId, attachmentId;
+  final bool Function() viewIsCurrent;
+  final read = HostReadCancellation();
+  final stopped = Completer<void>();
+  ShellVoicePhase phase = ShellVoicePhase.loading;
+  bool nativeStarted = false;
+
+  bool get active =>
+      phase == ShellVoicePhase.loading || phase == ShellVoicePhase.playing;
 }
 
 class _SharedTextInterrupted implements Exception {

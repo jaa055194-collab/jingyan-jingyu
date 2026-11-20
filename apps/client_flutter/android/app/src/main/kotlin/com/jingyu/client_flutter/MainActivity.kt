@@ -34,6 +34,12 @@ class MainActivity : FlutterActivity() {
     private var authenticated = false
     private var biometricResult: MethodChannel.Result? = null
     private var biometricCancellation: CancellationSignal? = null
+    private var voiceActivityResumed = false
+    private val voicePlayback by lazy {
+        VoiceMessagePlayback(this) { method, payload ->
+            if (::channel.isInitialized) channel.invokeMethod(method, payload)
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -46,6 +52,8 @@ class MainActivity : FlutterActivity() {
                     "initialize" -> {
                         result.success(mapOf(
                             "platform" to "android",
+                            "voicePlaybackEpoch" to voicePlayback.epoch,
+                            "voicePlaybackResumed" to voicePlayback.resumed,
                             "notificationPermission" to ShellNotifications.allowed(this),
                             "biometricAvailable" to biometricAvailable(),
                             "pendingShare" to pendingShare
@@ -56,6 +64,22 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "getDataDirectory" -> result.success(filesDir.absolutePath)
+                    "playVoiceMessage" -> {
+                        val id = call.argument<Number>("requestId")?.toLong()
+                        val epoch = call.argument<Number>("epoch")?.toLong()
+                        val bytes = call.argument<ByteArray>("bytes")
+                        if (id == null || epoch == null || bytes == null ||
+                            (pinStore.hasPin() && !authenticated)
+                        ) {
+                            result.success(false)
+                        } else {
+                            voicePlayback.play(id, epoch, bytes, result)
+                        }
+                    }
+                    "stopVoiceMessage" -> {
+                        call.argument<Number>("requestId")?.toLong()?.let { voicePlayback.stop(it) }
+                        result.success(null)
+                    }
                     "storeSession" -> {
                         pinStore.storeSession(call.argument<String>("json") ?: error("Session JSON required"))
                         result.success(null)
@@ -63,6 +87,7 @@ class MainActivity : FlutterActivity() {
                     "readSession" -> result.success(pinStore.readSession())
                     "clearSession" -> {
                         authenticated = false
+                        voicePlayback.invalidate()
                         cancelBiometric()
                         pinStore.clearSession()
                         stopService(Intent(this, KeepAliveService::class.java))
@@ -94,6 +119,7 @@ class MainActivity : FlutterActivity() {
                     }
                     "lock", "logout" -> {
                         authenticated = false
+                        voicePlayback.invalidate()
                         cancelBiometric()
                         result.success(null)
                     }
@@ -351,10 +377,35 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        voiceActivityResumed = true
+        voicePlayback.setForeground(hasWindowFocus())
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        voicePlayback.setForeground(voiceActivityResumed && hasFocus)
+    }
+
+    override fun onPause() {
+        voiceActivityResumed = false
+        voicePlayback.setForeground(false)
+        super.onPause()
+    }
+
     override fun onStop() {
+        voicePlayback.setForeground(false)
         authenticated = false
         cancelBiometric()
         super.onStop()
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        voiceActivityResumed = false
+        voicePlayback.setForeground(false)
+        if (::channel.isInitialized) channel.setMethodCallHandler(null)
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun cancelBiometric() {
@@ -366,6 +417,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        voiceActivityResumed = false
+        voicePlayback.setForeground(false)
         cancelBiometric()
         pendingFileResult?.success(null)
         pendingFileResult = null
