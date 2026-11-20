@@ -74,12 +74,9 @@ class FriendContact {
 
 /// Typed access to the host friendship state routes.
 ///
-/// Exposes `GET /friends` (list), `GET /friends/{accountId}` (single state) and
-/// explicit writes for pending incoming invitations (`POST .../accept` and
-/// `POST .../deny`). Block/unblock/request writes remain unimplemented here.
-/// Reads retain the [HostConnection] authentication renewal behavior. Invite
-/// writes never renew or replay after a 401; submitting again requires a new
-/// explicit action.
+/// Exposes the list and single-state reads plus explicit request, accept and
+/// deny writes. Block/unblock remain outside this adapter. Reads retain the
+/// [HostConnection] renewal behavior; invite writes never replay after a 401.
 class FriendsApi {
   FriendsApi(this.connection);
 
@@ -108,15 +105,23 @@ class FriendsApi {
     }
   }
 
+  /// Submit an outgoing request; an acknowledgement is not recipient consent.
+  Future<void> requestFriend(String accountId) =>
+      _writeFriend(Routes.friendRequest, accountId, requireEmpty: true);
+
   /// Explicitly accept a pending incoming friend request without auto-replay.
   Future<void> acceptFriend(String accountId) =>
-      _respondFriend(Routes.friendAccept, accountId);
+      _writeFriend(Routes.friendAccept, accountId);
 
   /// Explicitly deny a pending incoming friend request.
   Future<void> denyFriend(String accountId) =>
-      _respondFriend(Routes.friendDeny, accountId);
+      _writeFriend(Routes.friendDeny, accountId);
 
-  Future<void> _respondFriend(String route, String accountId) async {
+  Future<void> _writeFriend(
+    String route,
+    String accountId, {
+    bool requireEmpty = false,
+  }) async {
     final AccountId id;
     try {
       id = AccountId.parse(accountId);
@@ -124,12 +129,13 @@ class FriendsApi {
       throw const FormatException('账号标识非法');
     }
     try {
-      await connection.request(
+      final response = await connection.request(
         'POST',
         route.replaceFirst('{accountId}', Uri.encodeComponent(id.value)),
         retryAuthentication: false,
         allowEmptySuccess: true,
       );
+      if (requireEmpty && response.isNotEmpty) throw const FormatException();
     } on FormatException {
       throw const FormatException('好友操作响应无效');
     } on SocketException {
