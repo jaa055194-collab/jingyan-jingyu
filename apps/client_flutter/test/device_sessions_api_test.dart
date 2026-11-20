@@ -65,6 +65,22 @@ void main() {
     expect(requests.single, ('GET', Routes.authDevices));
   });
 
+  test('accepts real leap days and sub-second precision', () async {
+    // The host serializes a real UTC instant, so valid leap days and up to six
+    // fractional digits must load rather than be rejected as malformed.
+    responseBody = [
+      row('device-a', used: '2024-02-29T23:59:59.999999Z'),
+      row('device-b', used: '2026-02-28T00:00:00.5Z'),
+    ];
+    final read = await api.listDevices();
+    expect(read.status, DeviceSessionsStatus.loaded);
+    expect(
+      read.devices.first.lastUsedAt,
+      DateTime.utc(2024, 2, 29, 23, 59, 59, 999, 999),
+    );
+    expect(read.devices.last.lastUsedAt, DateTime.utc(2026, 2, 28, 0, 0, 0, 500));
+  });
+
   test('marks only an explicit host current flag', () async {
     responseBody = [
       row('device-a'),
