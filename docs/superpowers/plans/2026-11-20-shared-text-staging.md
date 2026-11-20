@@ -24,7 +24,7 @@ Lead integrates, verifies source constraints/traceability, full Flutter/root, sh
 - [x] RED: warm share overwrote the selected draft and a failed checkpoint published a new kit memory draft.
 - [x] Typed cold+warm intake, draft preservation, pending-first policy, bounded/URI rejection, startup logout and lock invalidation; runtime focused 9/9.
 - [x] Guarded kit `saveDraft(checkActive)` keeps prior draft on failed/cancelled write; shell suite 19/19.
-- [x] Explicit target panel at 375/768/1280, occupied/empty/error/cancel/stale/lock/busy cases; UI focused 9/9 and analysis clean.
+- [x] Explicit target panel at 375/768/1280, occupied/empty/error/cancel/stale/lock/busy/target-removal cases; UI focused 10/10 and analysis clean.
 - [x] Full Flutter (643 passed, one existing skip) and analysis clean; focused runtime/auth/text, UI and kit suites pass in the short-path source; matched production captures and independent review.
 - [ ] Repository-wide checks and Windows/Android debug builds from the clean short path; publish focused PR and bind the ticket; final CI remains the review gate.
 
