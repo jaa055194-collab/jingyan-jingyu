@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:client_flutter/net/ai_config_write_api.dart';
 import 'package:client_flutter/net/host_connection.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 void main() {
@@ -268,6 +269,46 @@ void main() {
     );
     expect(requests, isEmpty);
   });
+
+  test(
+    'session-pinned chat binding sends one PUT and skips renewal on 401',
+    () async {
+      status = 401;
+      responseJson = {'error': 'unauthenticated'};
+      var renewals = 0;
+      final pinned = HostConnection(
+        connection.base,
+        'fixture',
+        onUnauthorized: () async {
+          renewals++;
+          return true;
+        },
+      );
+      addTearDown(pinned.close);
+      await expectLater(
+        AiConfigWriteApi(pinned, retryAuthentication: false).setChatBinding(
+          'profile',
+          providerId: 'prov-1',
+          model: 'fixture-model',
+        ),
+        throwsA(
+          isA<HostRequestException>().having(
+            (error) => error.failure.code,
+            'code',
+            FailureCode.unauthenticated,
+          ),
+        ),
+      );
+      expect(renewals, 0);
+      expect(requests, hasLength(1));
+      final (method, path, body) = requests.single;
+      expect(
+        (method, path),
+        ('PUT', '/api/v1/ai-profiles/profile/bindings/chat'),
+      );
+      expect(body, {'providerId': 'prov-1', 'model': 'fixture-model'});
+    },
+  );
 
   test('bounded inherited 401 replays at most once', () async {
     final renewServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

@@ -134,9 +134,13 @@ abstract interface class AiConfigWriter {
 
 /// Bound (authenticated) implementation over [HostConnection].
 class AiConfigWriteApi implements AiConfigWriter {
-  AiConfigWriteApi(this.connection);
+  AiConfigWriteApi(this.connection, {this.retryAuthentication = true});
 
   final HostConnection connection;
+
+  /// A session-pinned editor opts out so a 401 cannot replay a write after
+  /// the interaction that authorized it has been invalidated.
+  final bool retryAuthentication;
 
   static const Set<String> _layers = {
     'b0Life',
@@ -226,6 +230,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         'capabilities': caps.toList(),
         'enabled': enabled,
       },
+      retryAuthentication: retryAuthentication,
     );
     return ProviderConfigView.fromJson(json);
   });
@@ -262,6 +267,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         Uri.encodeComponent(providerId),
       ),
       body: body,
+      retryAuthentication: retryAuthentication,
     );
     return ProviderConfigView.fromJson(json);
   });
@@ -285,6 +291,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         'p1': _personaLayer(p1),
         'p2': _personaLayer(p2),
       },
+      retryAuthentication: retryAuthentication,
     );
     _validateCard(json, aiProfileId);
   });
@@ -318,6 +325,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         'reason': reason,
         'diff': {'p0': diff(p0), 'p1': diff(p1), 'p2': diff(p2)},
       },
+      retryAuthentication: retryAuthentication,
     );
     _validateCard(json, aiProfileId);
   });
@@ -350,6 +358,7 @@ class AiConfigWriteApi implements AiConfigWriter {
           .replaceFirst('{aiId}', Uri.encodeComponent(aiProfileId))
           .replaceFirst('{capability}', 'chat'),
       body: {'providerId': providerId, 'model': model},
+      retryAuthentication: retryAuthentication,
     );
     const fields = {
       'owner_id',
@@ -396,6 +405,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         'capabilityLimits': capabilityLimits,
         'offsetMinutes': offsetMinutes,
       },
+      retryAuthentication: retryAuthentication,
     );
     const fields = {
       'dailyTokens',
