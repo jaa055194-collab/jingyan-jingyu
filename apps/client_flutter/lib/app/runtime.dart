@@ -1618,41 +1618,43 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   Future<void> selectConversation(String id) async {
-    if (_selected != id) {
+    final reopened = _selected == id;
+    if (!reopened) {
       _invalidateSharedTextContext();
       unawaited(_clearAttachmentSelection());
     }
     _selected = id;
     _draft = shell.draftFor(id);
     notifyListeners();
-    // Opening must never wait on the read receipt: the caller publishes the chat
-    // immediately and the local mark plus its optional report run behind it.
-    unawaited(_markSelectedRead(id));
+    if (reopened) return;
+    // The local read position is awaited so callers observe the badge clear, and
+    // so no snapshot write outlives the caller's lifetime. Only the network
+    // receipt is fire-and-forget: opening must never wait on the host.
+    final marked = await _markRead(id);
+    if (marked != null) unawaited(_reportRead(id, marked));
   }
 
-  /// Marks an explicitly opened conversation read, then reports that position
-  /// once to the host ack route.
+  /// Advances the local read position for an explicitly opened conversation and
+  /// returns the durable position, or null when nothing needed reporting.
   ///
-  /// The local mark is the source of truth for the badge and always happens
-  /// first; it never needs the network. The report is best effort: only when the
-  /// session is authenticated, unlocked, online, still the same generation and
-  /// still the same selection. A failure is silent, never retried and never
-  /// blocks reading. Anything that invalidates the context while the request is
-  /// in flight discards the result instead of publishing a stale acknowledgement.
-  Future<void> _markSelectedRead(String conversationId) async {
+  /// The local mark is the source of truth for the badge and never needs the
+  /// network. It is cancelled when the session, lock, account or selection
+  /// changed before the checkpoint started.
+  Future<int?> _markRead(String conversationId) async {
     if (!_controllersReady ||
         _disposed ||
         _switching ||
         _sessionRejected ||
+        !authenticated ||
         locked) {
-      return;
+      return null;
     }
     final generation = _generation;
     final sessionShell = shell;
     final sessionConnection = connection;
     final epoch = _historySyncEpoch;
     final head = sessionShell.headSeqFor(conversationId);
-    if (head <= sessionShell.readSeqFor(conversationId)) return;
+    if (head <= sessionShell.readSeqFor(conversationId)) return null;
 
     bool current() =>
         _current(generation) &&
@@ -1665,25 +1667,47 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         !_switching &&
         !_sessionRejected;
 
-    final int marked;
     try {
-      marked = await sessionShell.markRead(
+      final marked = await sessionShell.markRead(
         conversationId,
         head,
         checkActive: () {
           if (!current()) throw const _ReadPositionInterrupted();
         },
       );
+      // The badge clears as soon as the position is durable, before any network.
+      if (_current(generation)) notifyListeners();
+      return marked > 0 ? marked : null;
     } on _ReadPositionInterrupted {
-      return;
+      return null;
     } catch (_) {
       // A failed local checkpoint keeps the previous position and the badge.
+      return null;
+    }
+  }
+
+  /// Reports one already-durable read position to the existing host ack route.
+  ///
+  /// Best effort by design: only sent when the session is authenticated,
+  /// unlocked, online and still the same generation, account and selection. A
+  /// failure is silent with no retry loop and never changes the local position.
+  Future<void> _reportRead(String conversationId, int seq) async {
+    final generation = _generation;
+    final sessionShell = shell;
+    final sessionConnection = connection;
+    final epoch = _historySyncEpoch;
+    if (sessionConnection == null ||
+        !identical(shell, sessionShell) ||
+        !_current(generation) ||
+        _historySyncEpoch != epoch ||
+        _selected != conversationId ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected ||
+        !_online) {
       return;
     }
-    // The badge clears as soon as the position is durable, before any network.
-    if (_current(generation)) notifyListeners();
-    if (!current() || marked <= 0) return;
-    if (sessionConnection == null || !_online) return;
     try {
       await sessionConnection.request(
         'POST',
@@ -1691,12 +1715,11 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           '{conversationId}',
           Uri.encodeComponent(conversationId),
         ),
-        body: {'seq': marked},
+        body: {'seq': seq},
         retryAuthentication: false,
       );
     } catch (_) {
-      // Silent by design: a read receipt must not surface an error, retry, or
-      // change the local position that already succeeded.
+      // Silent by design: a read receipt must not surface an error or retry.
     }
   }
 
