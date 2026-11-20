@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../../app/shell_view_model.dart';
 import '../../net/model_diagnostics_api.dart';
 
 /// Read-only "模型能力与预算诊断" screen.
@@ -15,6 +16,7 @@ import '../../net/model_diagnostics_api.dart';
 class ModelDiagnosticsScreen extends StatefulWidget {
   const ModelDiagnosticsScreen({
     super.key,
+    this.session,
     this.readCatalog,
     this.readTodayUsage,
     this.readRolling7Trend,
@@ -23,6 +25,10 @@ class ModelDiagnosticsScreen extends StatefulWidget {
     this.knownProfileIds = const <String>[],
     this.title = '模型能力与预算诊断',
   });
+
+  /// Pins this route to the account and session epoch present when it opens.
+  /// A lock or identity change permanently invalidates its captured read loaders.
+  final ShellViewModel? session;
 
   /// Loaders are GET-only adapters. A null loader means the section is unbound
   /// (no host connection) and must stay honestly unknown rather than guess.
@@ -77,6 +83,50 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
   final _profileInput = TextEditingController();
   String? _provider;
   String? _profile;
+  late final ShellViewModel? _session;
+  late final String? _accountId;
+  late final Object? _sessionContext;
+  bool _sessionInvalid = false;
+
+  bool get _sessionMatches {
+    final session = _session;
+    if (!identical(widget.session, session)) return false;
+    if (session == null) return true;
+    return session.authenticated &&
+        !session.locked &&
+        _accountId != null &&
+        _sessionContext != null &&
+        session.connectedAccountId == _accountId &&
+        session.ownAiSessionContext == _sessionContext;
+  }
+
+  void _invalidateSession() {
+    _sessionInvalid = true;
+    _catalog.reset();
+    _usage.reset();
+    _trend.reset();
+    _budget.reset();
+    _provider = null;
+    _profile = null;
+    _providerInput.clear();
+    _profileInput.clear();
+    _needsProvider.clear();
+    _needsProfile.clear();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _onSessionChanged() {
+    if (!mounted || _sessionInvalid || _sessionMatches) return;
+    // Latch the first invalidation, even if the shell unlocks before a frame.
+    setState(_invalidateSession);
+  }
+
+  bool _canRead() {
+    if (!mounted || _sessionInvalid) return false;
+    if (_sessionMatches) return true;
+    _onSessionChanged();
+    return false;
+  }
 
   /// True after an explicit request that had no usable identity: report the gap
   /// instead of quietly reading something else. Tracked per section so one
@@ -121,10 +171,22 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     _profile = widget.knownProfileIds.length == 1
         ? widget.knownProfileIds.single
         : null;
+    _session = widget.session;
+    _accountId = _session?.connectedAccountId;
+    _sessionContext = _session?.ownAiSessionContext;
+    if (!_sessionMatches) _invalidateSession();
+    _session?.addListener(_onSessionChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant ModelDiagnosticsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_sessionInvalid && !_sessionMatches) _invalidateSession();
   }
 
   @override
   void dispose() {
+    _session?.removeListener(_onSessionChanged);
     _providerInput.dispose();
     _profileInput.dispose();
     super.dispose();
@@ -149,7 +211,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     _Section<T> section,
     Future<DiagnosticsRead<T>> Function() read,
   ) async {
-    if (section.phase == _Phase.loading) return;
+    if (!_canRead() || section.phase == _Phase.loading) return;
     setState(() {
       section.phase = _Phase.loading;
       section.read = null;
@@ -163,7 +225,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
       // Transport/parse details are never surfaced; a thrown loader is unknown.
       threw = true;
     }
-    if (!mounted) return;
+    if (!_canRead()) return;
     setState(() {
       section.threw = threw;
       section.read = result;
@@ -174,36 +236,42 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: Text(widget.title)),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const Text(
-          '只读诊断：模型目录来自宿主已保存的 provider，用量与预算来自宿主已记录的数据。'
-          '每一项都需要你主动请求一次，不会自动加载、自动重试或轮询。'
-          '「未知」不等于 0，也不等于未配置；本页不写入绑定/预算、不发起模型调用、'
-          '不代表模型可用或预算获批。',
-          key: Key('model-diagnostics-intro'),
-        ),
-        const SizedBox(height: 12),
-        if (!_bound)
-          const Padding(
-            key: Key('model-diagnostics-unbound'),
-            padding: EdgeInsets.only(bottom: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('未连接宿主：无法读取模型目录、用量或预算。'),
-                SizedBox(height: 4),
-                Text('不会自动重试；未知不代表未配置，也不代表已配置。'),
-              ],
-            ),
+    body: _sessionInvalid
+        ? const Padding(
+            key: Key('model-diagnostics-session-invalid'),
+            padding: EdgeInsets.all(16),
+            child: Text('会话已变更。请返回设置后重新打开诊断页。'),
+          )
+        : ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              const Text(
+                '只读诊断：模型目录来自宿主已保存的 provider，用量与预算来自宿主已记录的数据。'
+                '每一项都需要你主动请求一次，不会自动加载、自动重试或轮询。'
+                '「未知」不等于 0，也不等于未配置；本页不写入绑定/预算、不发起模型调用、'
+                '不代表模型可用或预算获批。',
+                key: Key('model-diagnostics-intro'),
+              ),
+              const SizedBox(height: 12),
+              if (!_bound)
+                const Padding(
+                  key: Key('model-diagnostics-unbound'),
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('未连接宿主：无法读取模型目录、用量或预算。'),
+                      SizedBox(height: 4),
+                      Text('不会自动重试；未知不代表未配置，也不代表已配置。'),
+                    ],
+                  ),
+                ),
+              if (widget.readCatalog != null) _catalogSection(context),
+              if (widget.readTodayUsage != null) _usageSection(context),
+              if (widget.readRolling7Trend != null) _trendSection(context),
+              if (widget.readBudget != null) _budgetSection(context),
+            ],
           ),
-        if (widget.readCatalog != null) _catalogSection(context),
-        if (widget.readTodayUsage != null) _usageSection(context),
-        if (widget.readRolling7Trend != null) _trendSection(context),
-        if (widget.readBudget != null) _budgetSection(context),
-      ],
-    ),
   );
 
   // --- Identity pickers ---------------------------------------------------
@@ -300,6 +368,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
   void _requestCatalog(
     Future<DiagnosticsRead<ModelCatalog>> Function(String) loader,
   ) {
+    if (!_canRead()) return;
     final provider = _providerId;
     if (provider == null) {
       _setNeedsProvider(_catalog, true);
@@ -426,6 +495,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     _Section<T> section,
     Future<DiagnosticsRead<T>> Function(String) loader,
   ) {
+    if (!_canRead()) return;
     final profile = _profileId;
     if (profile == null) {
       _setNeedsProfile(section, true);

@@ -1,7 +1,71 @@
+import 'dart:async';
+
+import 'package:client_flutter/app/shell_view_model.dart';
 import 'package:client_flutter/features/ai_config/model_diagnostics_screen.dart';
 import 'package:client_flutter/net/model_diagnostics_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+
+import 'ui_test.dart' show TestShellModel;
+
+class _Session extends TestShellModel {
+  _Session() {
+    connectedAccountId = 'owner-one';
+  }
+
+  Object epoch = Object();
+  bool sessionAuthenticated = true;
+
+  @override
+  bool get authenticated => sessionAuthenticated;
+
+  @override
+  Object? get ownAiSessionContext => epoch;
+
+  void lock() {
+    locked = true;
+    notifyListeners();
+  }
+
+  void unlockForTest() {
+    locked = false;
+    notifyListeners();
+  }
+
+  void logout() {
+    sessionAuthenticated = false;
+    notifyListeners();
+  }
+
+  void switchAccount() {
+    connectedAccountId = 'owner-two';
+    notifyListeners();
+  }
+
+  void renewSession() {
+    epoch = Object();
+    notifyListeners();
+  }
+
+  void notifyUnchanged() => notifyListeners();
+}
+
+Widget _sessionScreen(
+  _Loaders loaders,
+  ShellViewModel session, {
+  List<String> providers = const ['provider-one'],
+  List<String> profiles = const ['profile-one'],
+}) => MaterialApp(
+  home: ModelDiagnosticsScreen(
+    session: session,
+    readCatalog: loaders.catalog,
+    readTodayUsage: loaders.usage,
+    readRolling7Trend: loaders.trend,
+    readBudget: loaders.budget,
+    knownProviderIds: providers,
+    knownProfileIds: profiles,
+  ),
+);
 
 ModelCatalog _catalog() => ModelCatalog(const ['model-a', 'model-b']);
 
@@ -139,6 +203,204 @@ Future<void> _tap(WidgetTester tester, String key) async {
 }
 
 void main() {
+  group('route session invalidation', () {
+    for (final change in ['lock', 'logout', 'account', 'epoch']) {
+      testWidgets('$change clears loaded metadata and blocks saved callbacks', (
+        tester,
+      ) async {
+        final session = _Session();
+        addTearDown(session.dispose);
+        var calls = 0;
+        await tester.pumpWidget(
+          _sessionScreen(
+            _Loaders(
+              catalog: (_) async {
+                calls++;
+                return DiagnosticsRead.loaded(_catalog());
+              },
+              usage: (_) async {
+                calls++;
+                return DiagnosticsRead.loaded(_usage());
+              },
+              trend: (_) async {
+                calls++;
+                return DiagnosticsRead.loaded(_trend());
+              },
+              budget: (_) async {
+                calls++;
+                return DiagnosticsRead.loaded(_budget());
+              },
+            ),
+            session,
+          ),
+        );
+        await tester.pumpAndSettle();
+        final callbacks = <VoidCallback>[];
+        for (final section in ['catalog', 'usage', 'trend', 'budget']) {
+          final key = 'diagnostics-$section-load';
+          await _tap(tester, key);
+          callbacks.add(
+            tester.widget<TextButton>(find.byKey(Key(key))).onPressed!,
+          );
+          expect(
+            find.byKey(Key('diagnostics-$section-loaded')),
+            findsOneWidget,
+          );
+        }
+        expect(calls, 4);
+
+        switch (change) {
+          case 'lock':
+            // Both notifications happen before a frame, so current-state-only
+            // checks would miss the lock and re-enable the captured connection.
+            session.lock();
+            session.unlockForTest();
+          case 'logout':
+            session.logout();
+          case 'account':
+            session.switchAccount();
+          case 'epoch':
+            session.renewSession();
+        }
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('model-diagnostics-session-invalid')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('model-a'), findsNothing);
+        expect(find.textContaining('provider-one'), findsNothing);
+        expect(find.textContaining('profile-one'), findsNothing);
+        for (final section in ['catalog', 'usage', 'trend', 'budget']) {
+          expect(find.byKey(Key('diagnostics-$section-loaded')), findsNothing);
+          expect(find.byKey(Key('diagnostics-$section-load')), findsNothing);
+        }
+
+        // A retained onPressed closure must also refuse the old route.
+        for (final callback in callbacks) {
+          callback();
+        }
+        await tester.pumpAndSettle();
+        expect(calls, 4);
+      });
+    }
+
+    testWidgets('late reads stay discarded after lock then unlock', (
+      tester,
+    ) async {
+      final session = _Session();
+      addTearDown(session.dispose);
+      final catalog = Completer<DiagnosticsRead<ModelCatalog>>();
+      final usage = Completer<DiagnosticsRead<TodayUsage>>();
+      final trend = Completer<DiagnosticsRead<Rolling7Trend>>();
+      final budget = Completer<DiagnosticsRead<BudgetLimits>>();
+      var calls = 0;
+      await tester.pumpWidget(
+        _sessionScreen(
+          _Loaders(
+            catalog: (_) {
+              calls++;
+              return catalog.future;
+            },
+            usage: (_) {
+              calls++;
+              return usage.future;
+            },
+            trend: (_) {
+              calls++;
+              return trend.future;
+            },
+            budget: (_) {
+              calls++;
+              return budget.future;
+            },
+          ),
+          session,
+        ),
+      );
+      await tester.pumpAndSettle();
+      for (final section in ['catalog', 'usage', 'trend', 'budget']) {
+        await _tap(tester, 'diagnostics-$section-load');
+        expect(find.byKey(Key('diagnostics-$section-loading')), findsOneWidget);
+      }
+      expect(calls, 4);
+      session.lock();
+      session.unlockForTest();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('model-diagnostics-session-invalid')),
+        findsOneWidget,
+      );
+
+      catalog.complete(DiagnosticsRead.loaded(_catalog()));
+      usage.complete(DiagnosticsRead.loaded(_usage()));
+      trend.complete(DiagnosticsRead.loaded(_trend()));
+      budget.complete(DiagnosticsRead.loaded(_budget()));
+      await tester.pumpAndSettle();
+      for (final section in ['catalog', 'usage', 'trend', 'budget']) {
+        expect(find.byKey(Key('diagnostics-$section-loaded')), findsNothing);
+      }
+      expect(find.textContaining('model-a'), findsNothing);
+      expect(calls, 4);
+    });
+
+    testWidgets(
+      'unrelated session notifications keep the unlocked route usable',
+      (tester) async {
+        final session = _Session();
+        addTearDown(session.dispose);
+        var calls = 0;
+        await tester.pumpWidget(
+          _sessionScreen(
+            _Loaders(
+              catalog: (_) async {
+                calls++;
+                return DiagnosticsRead.loaded(_catalog());
+              },
+            ),
+            session,
+          ),
+        );
+        await tester.pumpAndSettle();
+        session.notifyUnchanged();
+        await tester.pumpAndSettle();
+        await _tap(tester, 'diagnostics-catalog-load');
+        expect(calls, 1);
+        expect(find.textContaining('model-a'), findsOneWidget);
+        expect(
+          find.byKey(const Key('model-diagnostics-session-invalid')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets('replacing the session model invalidates the existing route', (
+      tester,
+    ) async {
+      final first = _Session();
+      final replacement = _Session()..epoch = first.epoch;
+      addTearDown(first.dispose);
+      addTearDown(replacement.dispose);
+      var calls = 0;
+      final loaders = _Loaders(
+        catalog: (_) async {
+          calls++;
+          return DiagnosticsRead.loaded(_catalog());
+        },
+      );
+      await tester.pumpWidget(_sessionScreen(loaders, first));
+      await tester.pumpAndSettle();
+      await _tap(tester, 'diagnostics-catalog-load');
+      await tester.pumpWidget(_sessionScreen(loaders, replacement));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('model-diagnostics-session-invalid')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('model-a'), findsNothing);
+      expect(calls, 1);
+    });
+  });
+
   testWidgets('no loader at all stays unbound and never fabricates numbers', (
     tester,
   ) async {
