@@ -260,6 +260,7 @@ void main() {
       final got = await service.getAttachment(
         accountId: owner,
         attachmentId: attachmentId,
+        includeExtractedText: true,
       );
       expect(got.isOk, isTrue);
       expect(got.value['extractedText'], utf8.decode(bytes));
@@ -831,6 +832,7 @@ void main() {
       final ownerView = await service.getAttachment(
         accountId: owner,
         attachmentId: attachmentId,
+        includeExtractedText: true,
       );
       expect(ownerView.value['extractedText'], 'secret note');
 
@@ -839,9 +841,11 @@ void main() {
         attachmentId: attachmentId,
         canReadConversation: (account, conversation) async =>
             account == 'acct-member' && conversation == 'conv-1',
+        includeExtractedText: true,
       );
       expect(memberView.isOk, isTrue);
-      expect(memberView.value['extractedText'], 'secret note');
+      expect(memberView.value.containsKey('extractedText'), isFalse);
+      expect(memberView.value['mime'], 'text/plain');
 
       final stranger = await service.getAttachment(
         accountId: 'acct-stranger',
@@ -1261,7 +1265,10 @@ void main() {
         ),
       );
       expect(memberGet.status, 200);
-      expect((memberGet.json! as Map)['extractedText'], 'http text');
+      final memberJson = memberGet.json! as Map;
+      expect(memberJson.containsKey('extractedText'), isFalse);
+      expect(memberJson['mime'], 'text/plain');
+      expect(memberGet.encodeBody(), isNot(contains('http text')));
 
       final strangerGet = await pipeline.handle(
         HostRequest(
