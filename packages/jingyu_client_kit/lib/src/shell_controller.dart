@@ -32,6 +32,7 @@ class ClientShellController {
   final _cursors = <String, SyncCursor>{};
   final _messages = <String, List<MessageEventFrame>>{};
   final _drafts = <String, String>{};
+  final _readSeq = <String, int>{};
   final _dropped = <DroppedMessage>[];
   bool _initialized = false;
   int _requestId = 0;
@@ -72,6 +73,16 @@ class ClientShellController {
       _drafts.addAll(Map<String, String>.from(data['drafts'] as Map));
       for (final entry in (data['cursors'] as Map).entries) {
         _cursors[entry.key as String] = SyncCursor(lastSeq: entry.value as int);
+      }
+      // Absent for snapshots written before read positions existed. Leaving the
+      // map empty means every cached message stays unread, which is the honest
+      // answer: defaulting to the sync cursor would hide real unread messages.
+      final readSeq = data['readSeq'];
+      if (readSeq is Map) {
+        for (final entry in readSeq.entries) {
+          final seq = entry.value;
+          if (seq is int && seq > 0) _readSeq[entry.key as String] = seq;
+        }
       }
       _dropped.addAll(failures);
     }
@@ -190,6 +201,53 @@ class ClientShellController {
   int lastSeqFor(String conversationId) =>
       _cursors[conversationId]?.lastSeq ?? 0;
 
+  /// Highest seq this conversation is known to have synced, including an
+  /// explicit host history floor that skipped past unseen messages.
+  int headSeqFor(String conversationId) {
+    var head = lastSeqFor(conversationId);
+    for (final message
+        in _messages[conversationId] ?? const <MessageEventFrame>[]) {
+      if (message.seq > head) head = message.seq;
+    }
+    return head;
+  }
+
+  /// The last seq the user is known to have read locally.
+  ///
+  /// An absent value is 0, not the sync cursor: treating an unknown position as
+  /// "everything read" would hide real unread messages. A conversation whose
+  /// whole visible suffix is above the stored position therefore still reports
+  /// unread until the user opens it.
+  int readSeqFor(String conversationId) => _readSeq[conversationId] ?? 0;
+
+  /// Advances this conversation's local read position, then reports [seq].
+  ///
+  /// Forward-only and clamped to [headSeqFor], so a stale caller cannot rewind a
+  /// newer position or claim to have read messages this device never synced.
+  /// The position is checkpointed through the shared snapshot writer before it
+  /// is published in memory, so a failed write keeps the previous value.
+  /// [checkActive] may throw to cancel before a write starts; a replacement that
+  /// has already started cannot be cancelled. Returns the position now stored.
+  Future<int> markRead(
+    String conversationId,
+    int seq, {
+    void Function()? checkActive,
+  }) => _serial.run(() async {
+    _requireInitialized();
+    checkActive?.call();
+    if (seq < 0) {
+      throw ArgumentError.value(seq, 'seq', 'must be nonnegative');
+    }
+    final head = headSeqFor(conversationId);
+    final target = seq > head ? head : seq;
+    final previous = readSeqFor(conversationId);
+    if (target <= previous) return previous;
+    await _persist(readSeq: {..._readSeq, conversationId: target},
+        checkActive: checkActive);
+    _readSeq[conversationId] = target;
+    return target;
+  });
+
   /// Checkpoints a host-confirmed visibility bound before applying its page.
   /// Only this conversation's canonical cache can be pruned; other gaps still
   /// need to be filled by [acceptMessage]. [checkActive] may throw to cancel
@@ -274,6 +332,7 @@ class ClientShellController {
     Map<String, String>? drafts,
     Map<String, SyncCursor>? cursors,
     Map<String, List<MessageEventFrame>>? messages,
+    Map<String, int>? readSeq,
     MessageEventFrame? pendingMessage,
     void Function()? checkActive,
   }) => writeClientSection(persistence, 'shell', {
@@ -293,6 +352,8 @@ class ClientShellController {
     'cursors': {
       for (final e in (cursors ?? _cursors).entries) e.key: e.value.lastSeq,
     },
+    // Another top-level key in the existing shell section; no schema bump.
+    'readSeq': {...(readSeq ?? _readSeq)},
     'messages': [
       for (final list in (messages ?? _messages).values)
         for (final m in list) m.toEnvelope(),

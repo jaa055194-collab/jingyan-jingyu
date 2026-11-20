@@ -132,6 +132,8 @@ void main() {
           'dropped': [],
           'drafts': {},
           'cursors': {'c': 2},
+          // An absent read position stays absent until the user opens a chat.
+          'readSeq': {},
           'messages': [],
         },
       });
