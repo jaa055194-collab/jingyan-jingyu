@@ -6,6 +6,7 @@ import 'package:client_flutter/app/runtime.dart';
 import 'package:client_flutter/app/shell_app.dart';
 import 'package:client_flutter/app/shell_view_model.dart';
 import 'package:client_flutter/features/chat/chat_pane.dart';
+import 'package:client_flutter/features/settings/settings_screen.dart';
 
 class TestShellModel extends ShellViewModel {
   @override
@@ -942,7 +943,17 @@ void main() {
     await tester.tap(find.text('隐藏通知正文'));
     await tester.pumpAndSettle();
     expect(model.hideNotificationBody, isFalse);
-    await tester.tap(find.text('深色'));
+    final darkTheme = find.text('深色');
+    await tester.scrollUntilVisible(
+      darkTheme,
+      160,
+      scrollable: find.descendant(
+        of: find.byType(SettingsScreen),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(darkTheme);
     await tester.pumpAndSettle();
     expect(model.themeMode, ThemeMode.dark);
   });
