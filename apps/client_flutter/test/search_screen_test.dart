@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:client_flutter/app/shell_app.dart';
 import 'package:client_flutter/features/search/search_screen.dart';
 import 'package:client_flutter/net/host_connection.dart';
 import 'package:client_flutter/net/search_api.dart';
@@ -5,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 import 'package:material_ui/material_ui.dart';
+
+import 'ui_test.dart' show TestShellModel;
 
 SearchHit _hit({
   String conversationId = 'conv-1',
@@ -31,6 +36,7 @@ SearchHit _hit({
 class _Recorder {
   final List<String> queries = <String>[];
   SearchOutcome outcome = const SearchLoaded(<SearchHit>[]);
+  Future<SearchOutcome>? pending;
   Object? throwThis;
 
   Future<SearchOutcome> call(
@@ -43,8 +49,49 @@ class _Recorder {
   }) async {
     queries.add(query);
     if (throwThis != null) throw throwThis!;
-    return outcome;
+    final response = pending;
+    return response == null ? outcome : await response;
   }
+}
+
+class _SearchSession extends TestShellModel {
+  _SearchSession() {
+    connectedAccountId = 'fixture-account';
+  }
+
+  Object? epoch = 1;
+
+  @override
+  Object? get ownAiSessionContext => epoch;
+
+  void changeLock(bool value) {
+    locked = value;
+    notifyListeners();
+  }
+
+  void changeSession(String? account, Object? context) {
+    connectedAccountId = account;
+    epoch = context;
+    notifyListeners();
+  }
+}
+
+Future<void> _openSearchRoute(
+  WidgetTester tester,
+  _Recorder recorder,
+  _SearchSession session,
+) async {
+  await tester.pumpWidget(WhaleChatApp(model: session));
+  final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+  navigator.push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) => SearchScreen(
+        search: recorder.call,
+        session: session,
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
 }
 
 Future<void> _pump(
@@ -155,6 +202,71 @@ void main() {
     expect(recorder.queries, hasLength(1));
     expect(find.byKey(const Key('search-hit-msg-1')), findsOneWidget);
   });
+
+  testWidgets('pushed search hides private data after rapid lock and unlock', (
+    tester,
+  ) async {
+    final session = _SearchSession();
+    final recorder = _Recorder()..outcome = SearchLoaded([_hit()]);
+    await _openSearchRoute(tester, recorder, session);
+    await _submit(tester, 'private query');
+    expect(find.text('项目代号鲸落'), findsOneWidget);
+    final field = find.byKey(const Key('search-query'));
+    final submit = find.byKey(const Key('search-submit'));
+    final controller = tester.widget<TextField>(field).controller!;
+    final staleSubmit = tester.widget<FilledButton>(submit).onPressed!;
+
+    // No frame separates the notifications: checking only during build misses
+    // this transition. The old callback is still present until the next frame.
+    session.changeLock(true);
+    session.changeLock(false);
+    staleSubmit();
+    await tester.pumpAndSettle();
+
+    expect(find.text('项目代号鲸落'), findsNothing);
+    expect(controller.text, isEmpty);
+    expect(field, findsNothing);
+    expect(submit, findsNothing);
+    expect(recorder.queries, ['private query']);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await _openSearchRoute(tester, recorder, session);
+    expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+    expect(find.text('项目代号鲸落'), findsNothing);
+    expect(recorder.queries, ['private query']);
+    await _submit(tester, 'new query');
+    expect(recorder.queries, ['private query', 'new query']);
+  });
+
+  for (final (label, account, epoch) in [
+    ('logout', null, null),
+    ('account switch', 'different-account', 1),
+    ('new session for the same account', 'fixture-account', 2),
+  ]) {
+    testWidgets('pushed search drops the in-flight result after $label', (
+      tester,
+    ) async {
+      final session = _SearchSession();
+      final pending = Completer<SearchOutcome>();
+      final recorder = _Recorder()..pending = pending.future;
+      await _openSearchRoute(tester, recorder, session);
+      final field = find.byKey(const Key('search-query'));
+      await tester.enterText(field, 'pending query');
+      await tester.tap(find.byKey(const Key('search-submit')));
+      await tester.pump();
+      expect(recorder.queries, ['pending query']);
+
+      session.changeSession(account, epoch);
+      pending.complete(SearchLoaded([_hit()]));
+      await tester.pumpAndSettle();
+
+      expect(find.text('项目代号鲸落'), findsNothing);
+      expect(field, findsNothing);
+      expect(find.byKey(const Key('search-submit')), findsNothing);
+      expect(recorder.queries, ['pending query']);
+    });
+  }
 
   testWidgets('zero hits is a distinct honest empty state', (tester) async {
     final recorder = _Recorder()
