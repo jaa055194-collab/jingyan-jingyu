@@ -99,8 +99,8 @@ void main() {
               case 'hasPin':
                 return false;
               case 'storeSession':
-                session = (call.arguments as Map<Object?, Object?>)['json']
-                    as String;
+                session =
+                    (call.arguments as Map<Object?, Object?>)['json'] as String;
                 return null;
               default:
                 return null;
@@ -118,7 +118,10 @@ void main() {
       };
 
       server.listen((request) async {
-        Future<void> reply(Map<String, Object?> body, {int status = 200}) async {
+        Future<void> reply(
+          Map<String, Object?> body, {
+          int status = 200,
+        }) async {
           request.response.statusCode = status;
           request.response.headers.contentType = ContentType.json;
           request.response.write(jsonEncode(body));
@@ -131,9 +134,7 @@ void main() {
           final body = jsonDecode(await utf8.decoder.bind(request).join());
           acks.add((path, body));
           final requested = (body as Map)['seq'];
-          return reply({
-            'acknowledgedSeq': requested is int ? requested : 0,
-          });
+          return reply({'acknowledgedSeq': requested is int ? requested : 0});
         }
         await request.drain<void>();
         if (path == Routes.hostInfo) {
@@ -203,7 +204,10 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final boundary = GlobalKey();
     await tester.pumpWidget(
-      RepaintBoundary(key: boundary, child: WhaleChatApp(model: runtime)),
+      RepaintBoundary(
+        key: boundary,
+        child: WhaleChatApp(model: runtime),
+      ),
     );
     // Bounded pumps: the shell must not rely on an indefinitely animating
     // placeholder to settle before a capture.
@@ -254,7 +258,11 @@ void main() {
         await tester.pump(const Duration(milliseconds: 20));
         marked = _readSeqFor(runtime, 'team-project') > 0;
       }
-      expect(marked, isTrue, reason: 'the local read position was checkpointed');
+      expect(
+        marked,
+        isTrue,
+        reason: 'the local read position was checkpointed',
+      );
       for (var i = 0; i < 8; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
@@ -296,8 +304,15 @@ void main() {
     }
 
     await tester.pumpWidget(const SizedBox.shrink());
-    // Cancel the runtime's periodic refresh timer before teardown: the harness
-    // asserts no timer outlives the disposed widget tree.
+    // The receipt's HTTP request arms short real-time timeout timers. Let them
+    // resolve inside the harness so no timer outlives the disposed tree, then
+    // cancel the periodic refresh timer before teardown.
+    for (var i = 0; i < 40; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+    }
     runtime.reconnect?.cancel();
     runtime.dispose();
   });

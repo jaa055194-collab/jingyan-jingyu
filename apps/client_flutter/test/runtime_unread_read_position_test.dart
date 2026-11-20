@@ -84,8 +84,9 @@ class _UnreadHost {
       final gate = ackGate;
       if (gate != null) await gate.future;
       if (ackStatus != 200) {
-        return fixture.reply(request, {'error': 'unavailable'},
-            status: ackStatus);
+        return fixture.reply(request, {
+          'error': 'unavailable',
+        }, status: ackStatus);
       }
       final seq = (jsonDecode(body) as Map)['seq'] as int;
       acks.add((path.split('/')[4], seq));
@@ -97,7 +98,9 @@ class _UnreadHost {
     if (request.method == 'GET' && path == Routes.conversations) {
       return fixture.reply(request, {
         'conversations': [
-          for (final id in [...{_read, _other, ...history.keys}])
+          for (final id in [
+            ...{_read, _other, ...history.keys},
+          ])
             {
               'id': id,
               'name': id,
@@ -203,37 +206,43 @@ void main() {
     expect(unreadOf(runtime, _other), 0);
   });
 
-  test('a conversation with no cached messages reports 0 without a guess', () async {
-    final host = await _UnreadHost.start();
-    host.seed(_read, 3);
-    final runtime = await host.open();
-    expect(unreadOf(runtime, _other), 0);
-    expect(unreadOf(runtime, _read), 3);
-    expect(
-      runtime.conversations.map((entry) => entry.unread).toList()..sort(),
-      [0, 3],
-    );
-  });
+  test(
+    'a conversation with no cached messages reports 0 without a guess',
+    () async {
+      final host = await _UnreadHost.start();
+      host.seed(_read, 3);
+      final runtime = await host.open();
+      expect(unreadOf(runtime, _other), 0);
+      expect(unreadOf(runtime, _read), 3);
+      expect(
+        runtime.conversations.map((entry) => entry.unread).toList()..sort(),
+        [0, 3],
+      );
+    },
+  );
 
-  test('opening a conversation sends exactly one ack for its visible head', () async {
-    final host = await _UnreadHost.start();
-    host.seed(_read, 3);
-    final runtime = await host.open();
-    expect(host.ackCalls, 0);
+  test(
+    'opening a conversation sends exactly one ack for its visible head',
+    () async {
+      final host = await _UnreadHost.start();
+      host.seed(_read, 3);
+      final runtime = await host.open();
+      expect(host.ackCalls, 0);
 
-    await runtime.selectConversation(_read);
-    await _settle();
-    expect(host.ackCalls, 1);
-    expect(host.acks, [(_read, 3)]);
-    expect(host.ackPaths.single, '/api/v1/conversations/$_read/ack');
-    expect(runtime.shell.readSeqFor(_read), 3);
-    expect(runtime.error, isNull);
+      await runtime.selectConversation(_read);
+      await _settle();
+      expect(host.ackCalls, 1);
+      expect(host.acks, [(_read, 3)]);
+      expect(host.ackPaths.single, '/api/v1/conversations/$_read/ack');
+      expect(runtime.shell.readSeqFor(_read), 3);
+      expect(runtime.error, isNull);
 
-    // Re-opening the same conversation has nothing new to report.
-    await runtime.selectConversation(_read);
-    await _settle();
-    expect(host.ackCalls, 1);
-  });
+      // Re-opening the same conversation has nothing new to report.
+      await runtime.selectConversation(_read);
+      await _settle();
+      expect(host.ackCalls, 1);
+    },
+  );
 
   test('the ack never reports past the head this device has synced', () async {
     final host = await _UnreadHost.start();
@@ -315,25 +324,28 @@ void main() {
     expect(host.ackCalls, 1, reason: 'a locked report is not retried');
   });
 
-  test('a conversation switch before the ack completes discards the report', () async {
-    final host = await _UnreadHost.start();
-    host.seed(_read, 3);
-    host.seed(_other, 1);
-    final runtime = await host.open();
-    host.ackGate = Completer<void>();
+  test(
+    'a conversation switch before the ack completes discards the report',
+    () async {
+      final host = await _UnreadHost.start();
+      host.seed(_read, 3);
+      host.seed(_other, 1);
+      final runtime = await host.open();
+      host.ackGate = Completer<void>();
 
-    await runtime.selectConversation(_read);
-    await _waitFor(() => host.ackCalls == 1);
-    await runtime.selectConversation(_other);
-    host.ackGate!.complete();
-    await _settle();
-    expect(runtime.error, isNull);
-    // The switch reported its own head; the first report is neither replayed nor
-    // rewritten to the newer conversation.
-    expect(host.acks, [(_read, 3), (_other, 1)]);
-    expect(runtime.shell.readSeqFor(_read), 3);
-    expect(runtime.shell.readSeqFor(_other), 1);
-  });
+      await runtime.selectConversation(_read);
+      await _waitFor(() => host.ackCalls == 1);
+      await runtime.selectConversation(_other);
+      host.ackGate!.complete();
+      await _settle();
+      expect(runtime.error, isNull);
+      // The switch reported its own head; the first report is neither replayed nor
+      // rewritten to the newer conversation.
+      expect(host.acks, [(_read, 3), (_other, 1)]);
+      expect(runtime.shell.readSeqFor(_read), 3);
+      expect(runtime.shell.readSeqFor(_other), 1);
+    },
+  );
 
   test('offline selection marks locally but sends no ack', () async {
     final host = await _UnreadHost.start();
@@ -353,22 +365,25 @@ void main() {
     expect(unreadOf(runtime, _read), 0);
   });
 
-  test('the read position survives a restart and suppresses a repeat ack', () async {
-    final host = await _UnreadHost.start();
-    host.seed(_read, 2);
-    final first = await host.open();
-    await first.selectConversation(_read);
-    await _settle();
-    expect(host.ackCalls, 1);
-    first.dispose();
+  test(
+    'the read position survives a restart and suppresses a repeat ack',
+    () async {
+      final host = await _UnreadHost.start();
+      host.seed(_read, 2);
+      final first = await host.open();
+      await first.selectConversation(_read);
+      await _settle();
+      expect(host.ackCalls, 1);
+      first.dispose();
 
-    final restored = await host.open();
-    expect(restored.shell.readSeqFor(_read), 2);
-    expect(unreadOf(restored, _read), 0);
-    await restored.selectConversation(_read);
-    await _settle();
-    expect(host.ackCalls, 1, reason: 'nothing new to report after restart');
-  });
+      final restored = await host.open();
+      expect(restored.shell.readSeqFor(_read), 2);
+      expect(unreadOf(restored, _read), 0);
+      await restored.selectConversation(_read);
+      await _settle();
+      expect(host.ackCalls, 1, reason: 'nothing new to report after restart');
+    },
+  );
 
   test('a failed local mark sends no ack and keeps the badge', () async {
     final host = await _UnreadHost.start();
@@ -379,7 +394,8 @@ void main() {
     final store = _TogglePersistence();
     final guarded = ClientShellController(
       persistence: store,
-      submit: (_) async => const Err(Failure(FailureCode.unavailable, 'offline')),
+      submit: (_) async =>
+          const Err(Failure(FailureCode.unavailable, 'offline')),
       requestSync: (_) async {},
     );
     await guarded.initialize();

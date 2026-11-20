@@ -242,8 +242,10 @@ class ClientShellController {
     final target = seq > head ? head : seq;
     final previous = readSeqFor(conversationId);
     if (target <= previous) return previous;
-    await _persist(readSeq: {..._readSeq, conversationId: target},
-        checkActive: checkActive);
+    await _persist(
+      readSeq: {..._readSeq, conversationId: target},
+      checkActive: checkActive,
+    );
     _readSeq[conversationId] = target;
     return target;
   });

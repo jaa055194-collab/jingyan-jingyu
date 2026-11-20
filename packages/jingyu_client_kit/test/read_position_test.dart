@@ -148,26 +148,29 @@ void main() {
     expect(reboot.readSeqFor('absent'), 0);
   });
 
-  test('a snapshot written before read positions existed still restores', () async {
-    final store = MemoryPersistence();
-    store.data = {
-      'shell': {
-        'outbox': <Object?>[],
-        'dropped': <Object?>[],
-        'drafts': <String, Object?>{},
-        'cursors': {'c': 7},
-        'messages': <Object?>[],
-      },
-    };
+  test(
+    'a snapshot written before read positions existed still restores',
+    () async {
+      final store = MemoryPersistence();
+      store.data = {
+        'shell': {
+          'outbox': <Object?>[],
+          'dropped': <Object?>[],
+          'drafts': <String, Object?>{},
+          'cursors': {'c': 7},
+          'messages': <Object?>[],
+        },
+      };
 
-    final shell = build(store);
-    await shell.initialize();
-    expect(shell.lastSeqFor('c'), 7);
-    // No stored position is not "everything read".
-    expect(shell.readSeqFor('c'), 0);
-    await shell.markRead('c', 7);
-    expect(shell.readSeqFor('c'), 7);
-  });
+      final shell = build(store);
+      await shell.initialize();
+      expect(shell.lastSeqFor('c'), 7);
+      // No stored position is not "everything read".
+      expect(shell.readSeqFor('c'), 0);
+      await shell.markRead('c', 7);
+      expect(shell.readSeqFor('c'), 7);
+    },
+  );
 
   test('a failed checkpoint keeps the previous read position', () async {
     final store = MemoryPersistence();
@@ -188,72 +191,78 @@ void main() {
     expect(reboot.readSeqFor('c'), 5);
   });
 
-  test('a rejected mark publishes nothing even after the write starts', () async {
-    final store = MemoryPersistence();
-    final shell = await seeded(store);
-    await shell.markRead('c', 1);
-    final started = Completer<void>(), release = Completer<void>();
-    addTearDown(() {
-      if (!release.isCompleted) release.complete();
-    });
-    store.beforeRead = () async {
-      if (!started.isCompleted) started.complete();
-      await release.future;
-    };
-    var active = true;
-    final failed = expectLater(
-      shell.markRead(
-        'c',
-        4,
-        checkActive: () {
-          if (!active) throw StateError('expired');
-        },
-      ),
-      throwsStateError,
-    );
-    await started.future.timeout(const Duration(seconds: 5));
-    active = false;
-    release.complete();
-    await failed;
-    expect(shell.readSeqFor('c'), 1);
-    expect(((store.data!['shell'] as Map)['readSeq'] as Map)['c'], 1);
-  });
+  test(
+    'a rejected mark publishes nothing even after the write starts',
+    () async {
+      final store = MemoryPersistence();
+      final shell = await seeded(store);
+      await shell.markRead('c', 1);
+      final started = Completer<void>(), release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      store.beforeRead = () async {
+        if (!started.isCompleted) started.complete();
+        await release.future;
+      };
+      var active = true;
+      final failed = expectLater(
+        shell.markRead(
+          'c',
+          4,
+          checkActive: () {
+            if (!active) throw StateError('expired');
+          },
+        ),
+        throwsStateError,
+      );
+      await started.future.timeout(const Duration(seconds: 5));
+      active = false;
+      release.complete();
+      await failed;
+      expect(shell.readSeqFor('c'), 1);
+      expect(((store.data!['shell'] as Map)['readSeq'] as Map)['c'], 1);
+    },
+  );
 
-  test('a mark queued behind another write cannot checkpoint once cancelled', () async {
-    final store = MemoryPersistence();
-    final shell = await seeded(store);
-    final writing = Completer<void>(), release = Completer<void>();
-    final checked = Completer<void>();
-    addTearDown(() {
-      if (!release.isCompleted) release.complete();
-    });
-    store.beforeWrite = () async {
-      if (!writing.isCompleted) writing.complete();
-      await release.future;
-    };
-    final other = writeClientSection(store, 'consent', {'approved': true});
-    await writing.future.timeout(const Duration(seconds: 5));
-    var active = true;
-    final mark = expectLater(
-      shell.markRead(
-        'c',
-        3,
-        checkActive: () {
-          if (!active) throw StateError('superseded');
-          if (!checked.isCompleted) checked.complete();
-        },
-      ),
-      throwsStateError,
-    );
-    await checked.future.timeout(const Duration(seconds: 5));
-    active = false;
-    release.complete();
-    await Future.wait([other, mark]);
-    expect(shell.readSeqFor('c'), 0);
-    final snapshot = await store.read();
-    expect((snapshot!['shell'] as Map)['readSeq'], isEmpty);
-    expect(snapshot['consent'], {'approved': true});
-  });
+  test(
+    'a mark queued behind another write cannot checkpoint once cancelled',
+    () async {
+      final store = MemoryPersistence();
+      final shell = await seeded(store);
+      final writing = Completer<void>(), release = Completer<void>();
+      final checked = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      store.beforeWrite = () async {
+        if (!writing.isCompleted) writing.complete();
+        await release.future;
+      };
+      final other = writeClientSection(store, 'consent', {'approved': true});
+      await writing.future.timeout(const Duration(seconds: 5));
+      var active = true;
+      final mark = expectLater(
+        shell.markRead(
+          'c',
+          3,
+          checkActive: () {
+            if (!active) throw StateError('superseded');
+            if (!checked.isCompleted) checked.complete();
+          },
+        ),
+        throwsStateError,
+      );
+      await checked.future.timeout(const Duration(seconds: 5));
+      active = false;
+      release.complete();
+      await Future.wait([other, mark]);
+      expect(shell.readSeqFor('c'), 0);
+      final snapshot = await store.read();
+      expect((snapshot!['shell'] as Map)['readSeq'], isEmpty);
+      expect(snapshot['consent'], {'approved': true});
+    },
+  );
 
   test('a negative read position is rejected without writing', () async {
     final store = MemoryPersistence();

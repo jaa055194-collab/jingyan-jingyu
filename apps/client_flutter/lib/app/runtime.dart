@@ -1723,7 +1723,6 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     }
   }
 
-
   @override
   void updateDraft(String value) {
     _draft = value;
