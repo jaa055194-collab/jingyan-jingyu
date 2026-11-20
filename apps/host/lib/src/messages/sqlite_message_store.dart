@@ -253,6 +253,21 @@ SELECT seq FROM message_acks WHERE conversation_id = ? AND device_id = ?
       _database.transaction((tx) => headSeqInTransaction(tx, conversationId));
 
   @override
+  Future<Result<StoredMessage>> read({
+    required String conversationId,
+    required String messageId,
+  }) async {
+    final rows = await _database.query(
+      '''
+SELECT * FROM messages WHERE conversation_id = ? AND message_id = ?
+''',
+      [conversationId, messageId],
+    );
+    if (rows.isEmpty) return err(FailureCode.notFound, 'message not found');
+    return _read(rows.single);
+  }
+
+  @override
   Future<Result<void>> recall({
     required String conversationId,
     required String messageId,

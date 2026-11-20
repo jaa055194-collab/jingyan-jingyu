@@ -20,6 +20,21 @@ import 'attachment_extraction.dart';
 /// 磁盘剩余/总容量探测。注入假实现即可在测试里控制配额分支。
 typedef DiskSpaceProbe = Future<({int freeBytes, int totalBytes})> Function();
 
+/// 一条消息可预览的图片字节（不含路径或抽取正文）。
+class AttachmentImageContent {
+  const AttachmentImageContent({
+    required this.mime,
+    required this.size,
+    required this.sha256,
+    required this.bytes,
+  });
+
+  final String mime;
+  final int size;
+  final String sha256;
+  final List<int> bytes;
+}
+
 /// 附件服务。调用方负责 database/cipher 生命周期与 mediaDir 可写性。
 class AttachmentService {
   AttachmentService({
@@ -60,6 +75,18 @@ class AttachmentService {
 
   /// 每账号最多同时存在的 pending 上传会话数（并发上传闸门，DB 计数，不会泄漏）。
   static const int _maxPendingUploadsPerAccount = 3;
+
+  /// 预览路由的绝对字节上限：base64 JSON 单次传输，不做通用下载通道。
+  static const int _maxImageBytes = 8 * 1024 * 1024;
+
+  /// 只允许光栅图片；SVG 等可执行/可外链格式不在预览范围。
+  static const Set<String> _imageMimeTypes = {
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+    'image/webp',
+    'image/bmp',
+  };
 
   static const Set<String> _kinds = {
     'file',
@@ -562,6 +589,67 @@ class AttachmentService {
       metadata['extractedText'] = decoded.value;
     }
     return Ok(metadata);
+  }
+
+  /// 读取一条消息所引用的图片字节（消息作用域、有界）。
+  ///
+  /// 只接受光栅图片 MIME、声明大小不超过 [maxBytes] 且与 blob 实际长度一致，
+  /// 且附件的会话与 owner 必须与消息一致。任何不满足一律 notFound，绝不返回
+  /// 路径或抽取正文。
+  Future<Result<AttachmentImageContent>> readImageContent({
+    required String attachmentId,
+    required String conversationId,
+    required String senderId,
+    int maxBytes = _maxImageBytes,
+  }) async {
+    try {
+      validateId(attachmentId, kind: 'attachment');
+      validateId(conversationId, kind: 'conversation');
+      validateId(senderId, kind: 'account');
+    } on FormatException {
+      return err(FailureCode.notFound, 'attachment not found');
+    }
+    if (maxBytes < 1 || maxBytes > _maxImageBytes) {
+      return err(FailureCode.invalidArgument, 'invalid image byte limit');
+    }
+    final rows = await _database.query(
+      'SELECT * FROM attachments WHERE id = ?',
+      [attachmentId],
+    );
+    if (rows.isEmpty) return err(FailureCode.notFound, 'attachment not found');
+    final row = rows.single;
+    final mime = row['mime'] as String;
+    final declared = row['size'] as int;
+    if (row['conversation_id'] != conversationId ||
+        row['owner_account_id'] != senderId ||
+        !_imageMimeTypes.contains(mime) ||
+        declared > maxBytes) {
+      return err(FailureCode.notFound, 'attachment not found');
+    }
+    final file = File('$_mediaDir/${row['rel_path']}');
+    final List<int> bytes;
+    try {
+      if (!await file.exists()) {
+        return err(FailureCode.notFound, 'attachment not found');
+      }
+      if (await file.length() != declared) {
+        return err(FailureCode.notFound, 'attachment not found');
+      }
+      bytes = await file.readAsBytes();
+    } catch (_) {
+      return err(FailureCode.notFound, 'attachment not found');
+    }
+    if (bytes.length != declared) {
+      return err(FailureCode.notFound, 'attachment not found');
+    }
+    return Ok(
+      AttachmentImageContent(
+        mime: mime,
+        size: declared,
+        sha256: row['sha256'] as String,
+        bytes: bytes,
+      ),
+    );
   }
 
   /// 删除附件（仅 owner）：删行并尽力删除 blob 文件。

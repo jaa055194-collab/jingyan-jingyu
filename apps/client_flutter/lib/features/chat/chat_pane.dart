@@ -332,6 +332,57 @@ class _ChatPaneState extends State<ChatPane> {
     super.dispose();
   }
 
+  /// Explicit, bounded image open. Nothing is fetched until the user taps.
+  Future<void> _openImage(ShellMessage message) async {
+    final model = widget.model;
+    final account = model.connectedAccountId;
+    final conversation = model.selectedConversationId;
+    final image = await model.openImageAttachment(message.id);
+    if (!mounted) return;
+    if (image == null) {
+      if (!model.locked) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('图片暂不可用；不会自动重试。')));
+      }
+      return;
+    }
+    if (!model.authenticated ||
+        model.locked ||
+        model.connectedAccountId != account ||
+        model.selectedConversationId != conversation) {
+      return;
+    }
+    final provider = MemoryImage(image.bytes);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('message-image-dialog'),
+        title: Text(message.attachmentName ?? '图片'),
+        content: SizedBox(
+          width: 360,
+          child: Image.memory(
+            image.bytes,
+            fit: BoxFit.contain,
+            cacheWidth: 1080,
+            cacheHeight: 1080,
+            errorBuilder: (_, _, _) => const Text('图片无法显示。'),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              provider.evict();
+              Navigator.of(dialogContext).pop();
+            },
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+    provider.evict();
+  }
+
   Future<void> attach(String kind) async {
     final model = widget.model;
     final account = model.connectedAccountId;
@@ -464,6 +515,22 @@ class _ChatPaneState extends State<ChatPane> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               SelectableText(message.text),
+                              if (message.imageAttachment &&
+                                  message.attachmentId != null)
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    key: Key('open-image-${message.id}'),
+                                    onPressed: model.busy || model.locked
+                                        ? null
+                                        : () => _openImage(message),
+                                    icon: const Icon(
+                                      Icons.image_outlined,
+                                      size: 18,
+                                    ),
+                                    label: const Text('查看图片'),
+                                  ),
+                                ),
                               const SizedBox(height: 4),
                               Text(
                                 message.status,

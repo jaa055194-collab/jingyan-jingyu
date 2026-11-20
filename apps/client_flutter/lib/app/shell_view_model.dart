@@ -1,5 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../net/attachment_api.dart';
+
 /// UI-only contract. The runtime owns persistence, network and platform access.
 abstract class ShellViewModel extends ChangeNotifier {
   bool get ready;
@@ -106,6 +108,10 @@ abstract class ShellViewModel extends ChangeNotifier {
 
   Future<void> discardSharedText() async {}
 
+  /// Explicitly opens the image referenced by a canonical message. Returns
+  /// null when the request is stale, refused or unavailable; never throws.
+  Future<MessageImage?> openImageAttachment(String messageId) async => null;
+
   Future<void> setAppLock(bool enabled, String pin);
   Future<void> unlock(String pin);
   Future<void> setHideNotificationBody(bool value);
@@ -185,9 +191,17 @@ class ShellMessage {
     required this.text,
     this.outgoing = false,
     this.status = '已发送',
+    this.attachmentId,
+    this.attachmentName,
+    this.imageAttachment = false,
   });
   final String id;
   final String text;
   final bool outgoing;
   final String status;
+
+  /// Canonical synced message only: outbox/dropped rows never carry a ref.
+  final String? attachmentId;
+  final String? attachmentName;
+  final bool imageAttachment;
 }
