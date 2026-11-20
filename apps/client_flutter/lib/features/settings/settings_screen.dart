@@ -406,28 +406,28 @@ class SettingsScreen extends StatelessWidget {
                 '不写绑定/预算、不代表模型可用或预算获批',
               ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                final runtime = model;
-                final connection = runtime is ClientRuntime
-                    ? runtime.connection
-                    : null;
-                ModelDiagnosticsApi? api;
-                if (connection != null) api = ModelDiagnosticsApi(connection);
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => ModelDiagnosticsScreen(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) {
+                    final runtime = model;
+                    final connection = runtime is ClientRuntime &&
+                            runtime.authenticated && !runtime.locked
+                        ? runtime.connection
+                        : null;
+                    final api = connection == null
+                        ? null
+                        : ModelDiagnosticsApi(connection);
+                    // Profile ids are not account ids; the page does not infer one.
+                    return ModelDiagnosticsScreen(
+                      session: api == null ? null : model,
                       readCatalog: api?.readModelCatalog,
                       readTodayUsage: api?.readTodayUsage,
                       readRolling7Trend: api?.readRolling7Trend,
                       readBudget: api?.readBudget,
-                      // AI profile id is not the AI account id, so no profile is
-                      // inferred from the owned account list; it is typed in.
-                      knownProviderIds: const <String>[],
-                      knownProfileIds: const <String>[],
-                    ),
-                  ),
-                );
-              },
+                    );
+                  },
+                ),
+              ),
             ),
             ListTile(
               key: const Key('open-lifecycle-status'),
