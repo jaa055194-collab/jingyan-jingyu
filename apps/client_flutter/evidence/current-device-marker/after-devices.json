@@ -1,0 +1,13 @@
+[
+  {
+    "id": "fixture-local",
+    "deviceName": "合成笔记本",
+    "lastUsedAt": "2026-11-20T02:03:04.000Z",
+    "current": true
+  },
+  {
+    "id": "fixture-peer",
+    "deviceName": "合成手机",
+    "lastUsedAt": "2026-11-20T02:03:04.000Z"
+  }
+]
