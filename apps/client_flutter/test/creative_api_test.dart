@@ -117,14 +117,37 @@ void main() {
     },
   );
 
-  test('missed summary without report is accepted; generated summary requires report', () async {
-    await serveOnce({
-      'reports': [_summary(status: 'missed', withReport: false)],
+  test(
+    'list preserves missing bodies without relabeling their status',
+    () async {
+      await serveOnce({
+        'reports': [
+          _summary(status: 'missed', withReport: false),
+          _summary(withReport: false),
+        ],
+      });
+      final reports = await api.listReports();
+      expect(reports.map((row) => row.status), ['missed', 'generated']);
+      expect(reports.map((row) => row.report), [null, null]);
+    },
+  );
+
+  for (final mismatch in ['kind', 'periodKey']) {
+    test('list rejects a payload that changes the row $mismatch', () async {
+      await serveOnce({
+        'reports': [
+          {
+            ..._summary(),
+            'report': {
+              ..._report(),
+              mismatch: mismatch == 'kind' ? 'annual' : '2026-11-08',
+            },
+          },
+        ],
+      });
+      await expectLater(api.listReports(), throwsFormatException);
     });
-    final reports = await api.listReports();
-    expect(reports.single.status, 'missed');
-    expect(reports.single.report, isNull);
-  });
+  }
 
   test(
     'getReport uses exact encoded path and parses full annual report',

@@ -137,17 +137,25 @@ class CreativeReportSummary {
       }
       final rawReport = json['report'];
       final status = _reportStatus(json['status']);
+      final aiId = _id(json['aiId']);
+      final kind = _reportKind(json['kind']);
+      final periodKey = _id(json['periodKey']);
       if (rawReport != null && status != 'generated') {
         throw const FormatException();
       }
+      final report = rawReport == null
+          ? null
+          : CreativeReport.fromJson(_asMap(rawReport));
+      if (report != null &&
+          (report.kind != kind || report.periodKey != periodKey)) {
+        throw const FormatException();
+      }
       return CreativeReportSummary(
-        aiId: _id(json['aiId']),
-        kind: _reportKind(json['kind']),
-        periodKey: _id(json['periodKey']),
+        aiId: aiId,
+        kind: kind,
+        periodKey: periodKey,
         status: status,
-        report: rawReport == null
-            ? null
-            : CreativeReport.fromJson(_asMap(rawReport)),
+        report: report,
       );
     } on FormatException {
       throw const FormatException('关系报告列表响应无效');
