@@ -331,6 +331,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
             ShellMessage(
               id: message.messageId,
               text: _messageLabel(message.kind, message.body),
+              attachmentId: message.body['attachmentId'] is String
+                  ? message.body['attachmentId'] as String
+                  : null,
+              attachmentName: _attachmentName(message.kind, message.body),
+              imageAttachment:
+                  message.kind == MessageKind.image &&
+                  message.body['attachmentId'] is String &&
+                  message.body['recalled'] != true,
             ),
           for (final item in shell.outbox.items.where(
             (e) => e.conversationId == _selected,
@@ -351,6 +359,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
               status: '发送失败',
             ),
         ];
+  static String? _attachmentName(MessageKind kind, Map<String, Object?> body) {
+    if (kind != MessageKind.image && kind != MessageKind.file) return null;
+    if (body['attachmentId'] is! String) return null;
+    final name = body['name'];
+    return name is String ? FileAttachmentContent.safeDisplayName(name) : null;
+  }
+
   static String _messageLabel(
     MessageKind kind,
     Map<String, Object?> body, {
@@ -365,6 +380,57 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       return FileAttachmentContent.safeDisplayName(name);
     }
     return fallback ?? '[${kind.wire}]';
+  }
+
+  @override
+  Future<MessageImage?> openImageAttachment(String messageId) async {
+    final conversationId = _selected;
+    final sessionConnection = connection;
+    final sessionShell = shell;
+    if (conversationId == null ||
+        sessionConnection == null ||
+        _busy ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected ||
+        !_online) {
+      return null;
+    }
+    final generation = _generation;
+    final epoch = _historySyncEpoch;
+    bool current() =>
+        _current(generation) &&
+        generation == _generation &&
+        epoch == _historySyncEpoch &&
+        _selected == conversationId &&
+        identical(connection, sessionConnection) &&
+        identical(shell, sessionShell) &&
+        authenticated &&
+        !locked &&
+        !_switching &&
+        !_sessionRejected &&
+        _online;
+    final visible = sessionShell
+        .messagesFor(conversationId)
+        .any(
+          (message) =>
+              message.messageId == messageId &&
+              message.kind == MessageKind.image &&
+              message.body['attachmentId'] is String &&
+              message.body['recalled'] != true,
+        );
+    if (!visible || !current()) return null;
+    try {
+      final image = await AttachmentApi(
+        sessionConnection,
+      ).readMessageImage(conversationId: conversationId, messageId: messageId);
+      // A lock, switch or reconnect while the bytes were in flight discards
+      // them instead of publishing a stale plaintext image.
+      return current() ? image : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   @override

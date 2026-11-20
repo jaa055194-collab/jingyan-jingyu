@@ -151,6 +151,10 @@ abstract final class Routes {
   static const String messageRecall =
       '$prefix/conversations/{conversationId}/messages/{messageId}/recall';
 
+  /// Bounded image bytes for one visible message's own attachment (GET).
+  static const String messageAttachment =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/attachment';
+
   /// 单会话差集同步：`/conversations/{conversationId}/sync`。
   static const String sync = '$prefix/conversations/{conversationId}/sync';
 

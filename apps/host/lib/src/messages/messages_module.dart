@@ -5,6 +5,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
@@ -145,6 +146,83 @@ class MessagesModule extends HostModule {
     router.get(Routes.conversationPins, _pinsList);
     router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
+    router.get(Routes.messageAttachment, _messageAttachment);
+  }
+
+  /// Message-scoped bounded image bytes. Authorization precedes any read:
+  /// membership, history floor, then the message, then the attachment. Every
+  /// authorization/missing/invalid-content failure is a uniform 404.
+  Future<HostResponse> _messageAttachment(HostRequest request) async {
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    final notFound = HostResponse.failure(
+      const Failure(FailureCode.notFound, 'not visible'),
+    );
+    if (!await _members.canRead(principal.accountId, conversationId)) {
+      return notFound;
+    }
+    final history = _services.maybeGet<HistoryMembershipCheck>();
+    // Byte-serving must fail closed: without the history boundary we cannot
+    // prove the message is inside the viewer's visible range.
+    if (history == null) return notFound;
+    final first = await history.firstVisibleSeq(
+      principal.accountId,
+      conversationId,
+    );
+    if (first == null) return notFound;
+    final message = await _store.read(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+    if (message.isErr || message.value.seq < first) return notFound;
+    return _imageContent(message.value);
+  }
+
+  Future<HostResponse> _imageContent(StoredMessage message) async {
+    final notFound = HostResponse.failure(
+      const Failure(FailureCode.notFound, 'not visible'),
+    );
+    final attachments = _attachments;
+    if (attachments == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'attachments unavailable'),
+      );
+    }
+    final body = message.body;
+    if (body['recalled'] == true || message.kind != MessageKind.image) {
+      return notFound;
+    }
+    final attachmentId = body['attachmentId'];
+    if (attachmentId is! String) return notFound;
+    final content = await attachments.readImageContent(
+      attachmentId: attachmentId,
+      conversationId: message.conversationId,
+      senderId: message.senderId,
+    );
+    if (content.isErr) return notFound;
+    final image = content.value;
+    return HostResponse(
+      200,
+      json: {
+        'mime': image.mime,
+        'size': image.size,
+        'sha256': image.sha256,
+        'dataBase64': base64Encode(image.bytes),
+      },
+      headers: const {
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    );
   }
 
   Future<int?> _favoriteVisibility(String owner, String conversationId) async {
