@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 
 import '../../app/shell_view_model.dart';
 import '../favorites/favorites_screen.dart';
+import 'message_favorite_action.dart';
 import 'voice_message_playback.dart';
 
 class ConversationList extends StatelessWidget {
@@ -337,15 +340,47 @@ class _ChatPaneState extends State<ChatPane> {
   final composer = TextEditingController();
   ModalRoute<dynamic>? _voiceRoute;
   bool _paneActive = true;
+  int _favoriteViewRevision = 0;
+  List<Listenable> _navigationChanges = const [];
+  bool _favoriteViewRefreshQueued = false;
   // Keep one tear-off so an old pane can stop only the attempt it owns.
   late final bool Function() _voiceViewIsCurrent = _isVoiceViewCurrent;
   bool _isVoiceViewCurrent() =>
       mounted && _paneActive && (_voiceRoute?.isCurrent ?? true);
 
+  void _onFavoriteNavigationChanged() {
+    // The shell's Navigator observer reports even a push and pop between
+    // frames. Retire the old control synchronously before any callback runs.
+    _favoriteViewRevision++;
+    if (_favoriteViewRefreshQueued) return;
+    _favoriteViewRefreshQueued = true;
+    scheduleMicrotask(() {
+      _favoriteViewRefreshQueued = false;
+      if (mounted && _paneActive) setState(() {});
+    });
+  }
+
+  void _removeNavigationListeners() {
+    for (final changes in _navigationChanges) {
+      changes.removeListener(_onFavoriteNavigationChanged);
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _voiceRoute = ModalRoute.of(context);
+    final route = ModalRoute.of(context);
+    if (!identical(route, _voiceRoute) || route?.isCurrent == false) {
+      _favoriteViewRevision++;
+    }
+    _voiceRoute = route;
+    _removeNavigationListeners();
+    _navigationChanges =
+        route?.navigator?.widget.observers.whereType<Listenable>().toList() ??
+        const [];
+    for (final changes in _navigationChanges) {
+      changes.addListener(_onFavoriteNavigationChanged);
+    }
     if (!_voiceViewIsCurrent()) _stopVoice();
   }
 
@@ -353,6 +388,7 @@ class _ChatPaneState extends State<ChatPane> {
   void didUpdateWidget(ChatPane oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.model, widget.model)) {
+      _favoriteViewRevision++;
       oldWidget.model.stopVoicePlayback(viewIsCurrent: _voiceViewIsCurrent);
     }
   }
@@ -366,12 +402,14 @@ class _ChatPaneState extends State<ChatPane> {
   @override
   void deactivate() {
     _paneActive = false;
+    _favoriteViewRevision++;
     _stopVoice();
     super.deactivate();
   }
 
   @override
   void dispose() {
+    _removeNavigationListeners();
     _stopVoice();
     composer.dispose();
     super.dispose();
@@ -487,9 +525,28 @@ class _ChatPaneState extends State<ChatPane> {
   @override
   Widget build(BuildContext context) {
     final model = widget.model;
-    if (model.selectedConversationId == null) {
+    final conversationId = model.selectedConversationId;
+    if (conversationId == null) {
       return const Center(child: Text('选择一个会话，开始聊天'));
     }
+    final messages = model.messages;
+    final favoriteContext = model.messageFavoriteContext;
+    final favoriteViewRevision = _favoriteViewRevision;
+    final favoriteAccount = model.connectedAccountId;
+    final favoriteSession = model.ownAiSessionContext;
+    bool favoriteViewIsCurrent() =>
+        mounted &&
+        _paneActive &&
+        identical(widget.model, model) &&
+        _favoriteViewRevision == favoriteViewRevision &&
+        _voiceRoute?.isCurrent == true &&
+        model.authenticated &&
+        !model.locked &&
+        model.connectedAccountId == favoriteAccount &&
+        model.ownAiSessionContext == favoriteSession &&
+        model.selectedConversationId == conversationId &&
+        model.messageFavoriteContext == favoriteContext;
+
     if (composer.text != model.draft) {
       composer.value = TextEditingValue(
         text: model.draft,
@@ -547,13 +604,13 @@ class _ChatPaneState extends State<ChatPane> {
             ),
           ),
         Expanded(
-          child: model.messages.isEmpty
+          child: messages.isEmpty
               ? const Center(child: Text('还没有消息'))
               : ListView.builder(
                   padding: const EdgeInsets.all(16),
-                  itemCount: model.messages.length,
+                  itemCount: messages.length,
                   itemBuilder: (context, index) {
-                    final message = model.messages[index];
+                    final message = messages[index];
                     return Align(
                       alignment: message.outgoing
                           ? Alignment.centerRight
@@ -601,6 +658,22 @@ class _ChatPaneState extends State<ChatPane> {
                                       ? () => _playVoice(message)
                                       : null,
                                   onStop: _stopVoice,
+                                ),
+                              if (message.favoriteEligible &&
+                                  favoriteContext != null &&
+                                  favoriteViewIsCurrent())
+                                MessageFavoriteAction(
+                                  key: ValueKey((
+                                    favoriteViewRevision,
+                                    favoriteContext,
+                                    conversationId,
+                                    message.id,
+                                  )),
+                                  model: model,
+                                  conversationId: conversationId,
+                                  messageId: message.id,
+                                  expectedContext: favoriteContext,
+                                  viewIsCurrent: favoriteViewIsCurrent,
                                 ),
                               const SizedBox(height: 4),
                               Text(

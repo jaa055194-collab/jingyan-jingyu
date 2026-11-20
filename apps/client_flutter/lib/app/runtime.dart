@@ -14,6 +14,7 @@ import '../net/account_auth.dart';
 import '../net/attachment_api.dart';
 import '../net/attachment_send_flow.dart';
 import '../net/attachment_upload_api.dart';
+import '../net/favorites_api.dart';
 import '../net/host_connection.dart';
 import '../net/group_api.dart';
 import '../net/own_ai_api.dart';
@@ -98,7 +99,15 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool _chatEntered = false;
   bool _sessionRejected = false;
   bool _controllersReady = false;
-  String? _error, _selected, _preview;
+  String? _error, _selectedConversation, _preview;
+  int _favoriteSelectionRevision = 0;
+  final _submittedMessageFavorites = <(String, String)>{};
+  String? get _selected => _selectedConversation;
+  set _selected(String? value) {
+    if (_selectedConversation != value) _favoriteSelectionRevision++;
+    _selectedConversation = value;
+  }
+
   String _draft = '';
   final _draftRevisions = <String, int>{};
   ({
@@ -380,6 +389,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
                   message.body['attachmentId'] is String &&
                   message.body['recalled'] != true,
               voiceAttachment: _voiceAttachmentOf(message) != null,
+              favoriteEligible: _favoriteSource(message),
             ),
           for (final item in shell.outbox.items.where(
             (e) => e.conversationId == _selected,
@@ -472,6 +482,80 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     } catch (_) {
       return null;
     }
+  }
+
+  // The synced cache has already applied the authorized history floor. A
+  // present but malformed recall marker also fails closed for this write.
+  static bool _favoriteSource(MessageEventFrame row) =>
+      row.seq > 0 &&
+      (!row.body.containsKey('recalled') || row.body['recalled'] == false);
+
+  @override
+  Object? get messageFavoriteContext {
+    final transport = connection;
+    final owner = connectedAccountId;
+    final selected = _selected;
+    if (_disposed ||
+        !_controllersReady ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected ||
+        transport == null ||
+        owner == null ||
+        selected == null ||
+        !_conversations.any((row) => row.id == selected)) {
+      return null;
+    }
+    return (
+      owner,
+      _generation,
+      _historySyncEpoch,
+      _favoriteSelectionRevision,
+      transport,
+      shell,
+    );
+  }
+
+  @override
+  bool hasSubmittedMessageFavorite(String messageId) =>
+      messageFavoriteContext != null &&
+      _submittedMessageFavorites.contains((_selected!, messageId));
+
+  @override
+  Future<FavoriteSaveOutcome> saveMessageFavorite({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async {
+    final transport = connection;
+    bool current() =>
+        viewIsCurrent() &&
+        messageFavoriteContext == expectedContext &&
+        identical(transport, connection) &&
+        _selected == conversationId &&
+        shell
+            .messagesFor(conversationId)
+            .any(
+              (row) =>
+                  row.conversationId == conversationId &&
+                  row.messageId == messageId &&
+                  _favoriteSource(row),
+            );
+
+    // Keep the attempt spent even if the response never arrives. The host
+    // does not deduplicate this POST and an interrupted request may commit.
+    if (transport == null ||
+        !_online ||
+        _busy ||
+        !current() ||
+        !_submittedMessageFavorites.add((conversationId, messageId))) {
+      return FavoriteSaveOutcome.cancelled;
+    }
+    final outcome = await FavoritesApi(transport)
+        .saveMessage(conversationId: conversationId, messageId: messageId);
+    return current() ? outcome : FavoriteSaveOutcome.cancelled;
   }
 
   @override
@@ -1017,6 +1101,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _discardVoice();
     _invalidateSharedTextContext(discard: true);
     final generation = ++_generation;
+    _submittedMessageFavorites.clear();
     _invalidateOwnAiDirect();
     _pendingMention = null;
     _credentials = null;
@@ -1281,6 +1366,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       final submission = _submissionTransport;
       final oldPlugins = plugins;
       ++_generation;
+      _submittedMessageFavorites.clear();
       _invalidateOwnAiDirect();
       _pendingMention = null;
       _credentials = credentials;

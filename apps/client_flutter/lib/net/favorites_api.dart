@@ -159,13 +159,69 @@ final class FavoritesMalformed extends FavoritesOutcome {
   const FavoritesMalformed();
 }
 
-/// Reads the authenticated caller's existing favorites. The host applies its
-/// live visibility check; an omitted row is not a client-side tombstone.
+/// `unknown` means the write may have committed. `cancelled` is produced by
+/// the client when an action or its result is no longer current.
+enum FavoriteSaveOutcome { saved, rejected, unknown, cancelled }
+
+/// The host owns favorites and applies its live visibility check to both reads
+/// and saves. An omitted row is not a client-side tombstone.
 class FavoritesApi {
   const FavoritesApi(this.connection);
 
   final HostConnection connection;
   static const _maxResponseBytes = 2 * 1024 * 1024;
+
+  /// One explicit write. The host allocates a new id for each accepted request,
+  /// so an inconclusive result must never be automatically retried.
+  Future<FavoriteSaveOutcome> saveMessage({
+    required String conversationId,
+    required String messageId,
+  }) async {
+    try {
+      ConversationId.parse(conversationId);
+      MessageId.parse(messageId);
+    } on FormatException {
+      return FavoriteSaveOutcome.rejected;
+    }
+    try {
+      final receipt = await connection.request(
+        'POST',
+        Routes.favorites,
+        body: {
+          'kind': 'message',
+          'conversationId': conversationId,
+          'messageId': messageId,
+        },
+        retryAuthentication: false,
+      );
+      final id = receipt['id'];
+      if (receipt.length != 3 ||
+          receipt['kind'] != 'message' ||
+          !receipt.containsKey('title') ||
+          receipt['title'] != null ||
+          id is! String) {
+        return FavoriteSaveOutcome.unknown;
+      }
+      validateId(id, kind: 'favorite');
+      return FavoriteSaveOutcome.saved;
+    } on HostRequestException catch (error) {
+      return switch (error.failure.code) {
+        FailureCode.invalidArgument ||
+        FailureCode.unauthenticated ||
+        FailureCode.forbidden ||
+        FailureCode.notFound => FavoriteSaveOutcome.rejected,
+        _ => FavoriteSaveOutcome.unknown,
+      };
+    } on FormatException {
+      return FavoriteSaveOutcome.unknown;
+    } on IOException {
+      return FavoriteSaveOutcome.unknown;
+    } on TimeoutException {
+      return FavoriteSaveOutcome.unknown;
+    } on StateError {
+      return FavoriteSaveOutcome.unknown;
+    }
+  }
 
   Future<FavoritesOutcome> readFavorites({
     HostReadCancellation? cancellation,
