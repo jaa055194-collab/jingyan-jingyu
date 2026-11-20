@@ -22,6 +22,9 @@ class _Host {
   final syncs = <(String, int)>[];
   final posts = <(String, Object?)>[];
 
+  /// Set to hold an ack response open so a test can race a lock against it.
+  Future<void> Function()? beforeAckReply;
+
   static Future<_Host> start(
     Map<String, List<Map<String, Object?>>> pages,
   ) async {
@@ -50,6 +53,7 @@ class _Host {
       posts.add((path, body));
       if (path.endsWith('/ack')) {
         acks.add((path, body));
+        await beforeAckReply?.call();
         final requested = (body as Map)['seq'];
         return fixture.reply(request, {
           'acknowledgedSeq': requested is int ? requested : 0,
@@ -93,11 +97,15 @@ class _Host {
   }
 }
 
-Map<String, Object?> _message(String conversation, int seq) => {
+Map<String, Object?> _message(
+  String conversation,
+  int seq, {
+  String sender = 'friend',
+}) => {
   'conversationId': conversation,
   'seq': seq,
   'messageId': '$conversation-$seq',
-  'senderId': 'friend',
+  'senderId': sender,
   'kind': 'text',
   'body': {'text': 'Synthetic $conversation message $seq'},
   'sentAt': '2026-11-19T00:00:00Z',
@@ -108,9 +116,21 @@ void main() {
   HttpOverrides.global = null;
 
   /// The host receipt is deliberately fire-and-forget so it cannot delay
-  /// opening a conversation; tests wait for the loopback request to land.
+  /// opening a conversation. Poll the observable outcome instead of sleeping a
+  /// fixed time, which is flaky when the suite runs alongside other work.
+  Future<void> waitFor(bool Function() condition, {String? reason}) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (!condition()) {
+      if (DateTime.now().isAfter(deadline)) {
+        fail('Timed out waiting${reason == null ? '' : ' for $reason'}');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  /// Waits until no further ack is expected; used to prove silence.
   Future<void> settle() =>
-      Future<void>.delayed(const Duration(milliseconds: 150));
+      Future<void>.delayed(const Duration(milliseconds: 300));
 
   test('unread counts cached messages above the read position', () async {
     final host = await _Host.start({
@@ -128,7 +148,7 @@ void main() {
     expect(host.acks, isEmpty);
 
     await runtime.selectConversation(_read);
-    await settle();
+    await waitFor(() => host.acks.isNotEmpty, reason: 'the read receipt');
     expect(runtime.shell.readSeqFor(_read), 2);
     expect(runtime.conversations.first.unread, 0);
     expect(runtime.conversations.last.unread, 3);
@@ -147,12 +167,12 @@ void main() {
     expect(runtime.conversations.first.unread, 2);
 
     await runtime.selectConversation(_read);
-    await settle();
+    await waitFor(() => host.acks.isNotEmpty, reason: 'the read receipt');
     expect(host.acks, hasLength(1));
     expect(host.acks.single.$1, '/api/v1/conversations/$_read/ack');
     expect(host.acks.single.$2, {'seq': 2});
 
-    // Selecting the same conversation again is not another explicit open.
+    // Re-selecting at the head sends nothing more.
     await runtime.selectConversation(_read);
     await settle();
     expect(host.acks, hasLength(1));
@@ -166,7 +186,10 @@ void main() {
     });
     final runtime = await host.open();
     await runtime.selectConversation(_read);
-    await settle();
+    await waitFor(
+      () => runtime.conversations.first.unread == 0,
+      reason: 'the initial read position',
+    );
     expect(runtime.conversations.first.unread, 0);
 
     // A live row is new information; it stays unread until an explicit reopen.
@@ -187,21 +210,59 @@ void main() {
     expect(runtime.shell.readSeqFor(_read), 1);
   });
 
-  test('re-opening the same conversation sends no second ack', () async {
+  test('re-tapping an open chat clears new arrivals with one ack', () async {
     final host = await _Host.start({
       _read: [_message(_read, 1)],
       _unread: const [],
     });
     final runtime = await host.open();
     await runtime.selectConversation(_read);
-    await settle();
+    await waitFor(() => host.acks.length == 1, reason: 'the first receipt');
     expect(host.acks, hasLength(1));
+    expect(runtime.conversations.first.unread, 0);
+
+    // A message arrives while the chat is already open.
+    await runtime.shell.acceptMessage(
+      MessageEventFrame(
+        id: 'live-2',
+        at: DateTime.utc(2026, 11, 20),
+        conversationId: _read,
+        seq: 2,
+        messageId: '$_read-2',
+        senderId: 'friend',
+        kind: MessageKind.text,
+        body: const {'text': 'live'},
+        sentAt: DateTime.utc(2026, 11, 20),
+      ),
+    );
+    expect(runtime.conversations.first.unread, 1);
+
+    // Explicitly tapping the conversation again clears it and reports the new
+    // head exactly once; further taps at the head stay silent.
+    await runtime.selectConversation(_read);
+    await waitFor(
+      () => host.acks.length == 2 && runtime.conversations.first.unread == 0,
+      reason: 'the re-tap receipt and cleared badge',
+    );
+    expect(runtime.conversations.first.unread, 0);
+    expect(host.acks, hasLength(2));
+    expect(host.acks.last.$2, {'seq': 2});
 
     await runtime.selectConversation(_read);
-    await runtime.selectConversation(_read);
     await settle();
-    expect(host.acks, hasLength(1));
-    expect(runtime.shell.readSeqFor(_read), 1);
+    expect(host.acks, hasLength(2));
+  });
+
+  test('own messages never count as unread', () async {
+    final host = await _Host.start({
+      // 'alice' is the connected account in the fixture session.
+      _read: [_message(_read, 1, sender: 'alice')],
+      _unread: [_message(_unread, 1)],
+    });
+    final runtime = await host.open();
+    expect(runtime.connectedAccountId, 'alice');
+    expect(runtime.conversations.first.unread, 0);
+    expect(runtime.conversations.last.unread, 1);
   });
 
   test('empty conversation opens without inventing unread or an ack', () async {
@@ -210,6 +271,7 @@ void main() {
     expect(runtime.conversations.every((c) => c.unread == 0), isTrue);
 
     await runtime.selectConversation(_read);
+    await settle();
     expect(runtime.shell.readSeqFor(_read), 0);
     expect(host.acks, isEmpty);
   });
@@ -234,7 +296,10 @@ void main() {
         return host.serve(request);
       };
       await runtime.selectConversation(_read);
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await waitFor(
+        () => ackAttempts == 1,
+        reason: 'the rejected ack to be attempted',
+      );
       expect(ackAttempts, 1);
       expect(runtime.error, isNull);
       expect(runtime.locked, isFalse);
@@ -244,7 +309,7 @@ void main() {
       // Reading still works after a rejected ack; nothing is retried in the
       // background, so the count stays at one attempt.
       await runtime.selectConversation(_unread);
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await settle();
       expect(ackAttempts, 1);
       expect(runtime.messages, isEmpty);
     },
@@ -267,32 +332,29 @@ void main() {
       expect(runtime.appLockEnabled, isTrue);
       expect(runtime.locked, isFalse);
       final shellFile = runtime.storage.file;
-      host.fixture.serve = (request) async {
-        if (request.method == 'POST') {
-          if (!started.isCompleted) started.complete();
-          await release.future;
-          await request.drain<void>();
-          return host.fixture.reply(request, {'acknowledgedSeq': 1});
-        }
-        return host.serve(request);
+      // Hold the ack response so the lock lands while the receipt is genuinely
+      // in flight; `acks` records it, so this is not vacuous.
+      host.beforeAckReply = () async {
+        if (!started.isCompleted) started.complete();
+        await release.future;
       };
-      final selecting = runtime.selectConversation(_read);
+      await runtime.selectConversation(_read);
       await started.future.timeout(const Duration(seconds: 5));
+      expect(host.acks, hasLength(1));
       final beforeLock = await shellFile.readAsString();
-      // The local read position is already committed; the receipt is in flight.
       expect(runtime.shell.readSeqFor(_read), 1);
+
       runtime.didChangeAppLifecycleState(AppLifecycleState.paused);
       expect(runtime.locked, isTrue);
       release.complete();
-      await selecting;
+      await settle();
       expect(runtime.error, isNull);
-      // No further local write after the lock.
+      // No further local write, no second receipt, no retry after unlock.
       expect(await shellFile.readAsString(), beforeLock);
-      expect(host.acks, isEmpty);
+      expect(host.acks, hasLength(1));
       await runtime.unlock('1234');
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      // A discarded receipt is never retried after unlock.
-      expect(host.acks, isEmpty);
+      await settle();
+      expect(host.acks, hasLength(1));
     },
   );
 }

@@ -640,39 +640,46 @@ void main() {
   });
 
   test(
-    'a restored install without readSeq treats synced history as already read',
+    'restart without opening keeps unread history, upgrade seeds from cursor',
     () async {
+      // A current install that synced but never opened 'c': the readSeq key
+      // exists, so its 3 synced rows must still count as unread after restart.
       final store = MemoryPersistence();
       final shell = historyShell(store);
       await shell.initialize();
+      await shell.acceptMessage(message(1, conversationId: 'other'));
       for (final seq in [1, 2, 3]) {
         await shell.acceptMessage(message(seq));
       }
-      // Simulate an upgrade: cursors and cache exist, but the newer readSeq key
-      // was never written by the previous app version.
+      await shell.markRead('other', 1);
+      expect(((store.data!['shell'] as Map)['readSeq'] as Map).keys, ['other']);
+
+      final restart = historyShell(store);
+      await restart.initialize();
+      expect(restart.readSeqFor('c'), 0);
+      expect(
+        restart.messagesFor('c').where((m) => m.seq > restart.readSeqFor('c')),
+        hasLength(3),
+      );
+
+      // A pre-upgrade snapshot has cursors but no readSeq key at all; that one
+      // upgrade seeds each cursor so old history is not shown as unread.
       final upgraded = Map<String, Object?>.from(store.data!);
       final section = Map<String, Object?>.from(upgraded['shell'] as Map)
         ..remove('readSeq');
       upgraded['shell'] = section;
       store.data = upgraded;
 
-      final reboot = historyShell(store);
-      await reboot.initialize();
-      expect(reboot.messagesFor('c').map((m) => m.seq), [1, 2, 3]);
-      expect(reboot.readSeqFor('c'), 3);
-      // Seeding is memory-only: no snapshot write happens just by restoring.
-      expect(store.writeAttempts, 3);
-      expect((store.data!['shell'] as Map).containsKey('readSeq'), isFalse);
-      // History that arrives after startup is genuinely unread.
-      await reboot.acceptMessage(message(4));
-      expect(reboot.readSeqFor('c'), 3);
+      final seeded = historyShell(store);
+      await seeded.initialize();
+      expect(seeded.readSeqFor('c'), 3);
+      expect(seeded.readSeqFor('other'), 1);
       expect(
-        reboot.messagesFor('c').where((m) => m.seq > reboot.readSeqFor('c')),
-        hasLength(1),
+        seeded.messagesFor('c').where((m) => m.seq > seeded.readSeqFor('c')),
+        isEmpty,
       );
-      // The first real markRead persists the advanced position.
-      await reboot.markRead('c', 4);
-      expect(((store.data!['shell'] as Map)['readSeq'] as Map)['c'], 4);
+      // Seeding is memory-only; the snapshot is not rewritten on restore.
+      expect((store.data!['shell'] as Map).containsKey('readSeq'), isFalse);
     },
   );
 

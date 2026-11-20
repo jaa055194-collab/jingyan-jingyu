@@ -337,13 +337,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         ];
 
   /// The cache is already pruned to the visible history floor, so every cached
-  /// canonical row at or above the read position is genuinely unread. Outbox
-  /// and dropped rows are not canonical messages and never count.
+  /// canonical row above the read position is genuinely unread. The user's own
+  /// messages never badge, and outbox/dropped rows are not canonical messages.
   int _unreadFor(String conversationId) {
     final read = shell.readSeqFor(conversationId);
+    final self = connectedAccountId;
     var count = 0;
     for (final message in shell.messagesFor(conversationId)) {
-      if (message.seq > read) count++;
+      if (message.seq > read && message.senderId != self) count++;
     }
     return count;
   }
@@ -1604,25 +1605,24 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   Future<void> selectConversation(String id) async {
-    final reopened = _selected == id;
-    if (!reopened) {
+    if (_selected != id) {
       _invalidateSharedTextContext();
       unawaited(_clearAttachmentSelection());
     }
     _selected = id;
     _draft = shell.draftFor(id);
     notifyListeners();
-    if (!reopened) {
-      // The local position is awaited so callers observe it immediately; the
-      // best-effort host receipt must never delay opening a conversation.
-      final head = await _markConversationRead(id);
-      if (head != null) unawaited(_sendReadReceipt(id, head));
-    }
+    // Selection stays synchronous: the durable mark and its receipt run off the
+    // shell serial queue (a flush can hold it across network IO) and are guarded
+    // so a stale result never publishes. Re-selecting re-checks the head so a
+    // message that arrived while the chat was open can still clear the badge.
+    unawaited(_markConversationRead(id));
   }
 
-  /// Persists the local read position for [id] and returns the acknowledged
-  /// head, or null when the session changed before the checkpoint completed.
-  Future<int?> _markConversationRead(String id) async {
+  /// Persists the read position for [id] and reports it once. Nothing happens
+  /// when the position is already at the head, so repeated opens never send a
+  /// duplicate receipt.
+  Future<void> _markConversationRead(String id) async {
     final generation = _generation;
     final sessionShell = shell;
     final sessionConnection = connection;
@@ -1635,10 +1635,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         _sessionRejected ||
         !_online ||
         !identical(shell, sessionShell)) {
-      return null;
+      return;
     }
     final head = sessionShell.lastSeqFor(id);
-    if (head < 1) return null;
+    if (head < 1 || sessionShell.readSeqFor(id) >= head) return;
     bool current() =>
         _current(generation) &&
         epoch == _historySyncEpoch &&
@@ -1658,19 +1658,21 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         },
       );
     } catch (_) {
-      return null;
+      return;
     }
-    return current() ? head : null;
+    if (!current()) return;
+    await _sendReadReceipt(id, head, generation, epoch, sessionConnection);
   }
 
-  /// Exactly one best-effort receipt per explicit open. A failure is silent and
-  /// is never retried; a later lock/logout/switch discards it.
-  Future<void> _sendReadReceipt(String id, int head) async {
-    final generation = _generation;
-    final sessionShell = shell;
-    final sessionConnection = connection;
-    final epoch = _historySyncEpoch;
-    if (sessionConnection == null || !identical(shell, sessionShell)) return;
+  /// Exactly one best-effort receipt per successful advance. A failure is
+  /// silent and is never retried; a later lock/logout/switch discards it.
+  Future<void> _sendReadReceipt(
+    String id,
+    int head,
+    int generation,
+    int epoch,
+    HostConnection sessionConnection,
+  ) async {
     if (!_current(generation) ||
         epoch != _historySyncEpoch ||
         _selected != id ||

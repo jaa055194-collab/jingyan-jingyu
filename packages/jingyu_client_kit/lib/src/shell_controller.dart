@@ -84,12 +84,14 @@ class ClientShellController {
       for (final entry in (data['cursors'] as Map).entries) {
         _cursors[entry.key as String] = SyncCursor(lastSeq: entry.value as int);
       }
-      // `readSeq` is newer than the cursor map, so an existing install restores
-      // cursors without it. Treat that already-synced history as read rather
-      // than showing the whole cache as unread after an upgrade. This is memory
-      // only; rows that arrive after startup still count as unread.
-      for (final entry in _cursors.entries) {
-        _readSeq.putIfAbsent(entry.key, () => entry.value.lastSeq);
+      // `readSeq` is newer than the cursor map, so an install from before this
+      // feature restores cursors without it. Only that one-time upgrade seeds
+      // already-synced history as read; once the key exists, an absent
+      // conversation stays at 0 so never-opened history keeps counting.
+      if (!data.containsKey('readSeq')) {
+        for (final entry in _cursors.entries) {
+          _readSeq[entry.key] = entry.value.lastSeq;
+        }
       }
       _dropped.addAll(failures);
     }
