@@ -215,13 +215,14 @@ class AccountsModule extends HostModule {
   }
 
   Future<HostResponse> _devices(HostRequest request) async {
-    final session = await _session(request);
-    if (session.isErr) return HostResponse.failure(session.failureOrNull!);
-    return HostResponse.ok(
-      (await session.value.devices.list(
-        AccountId.parse(request.principal!.accountId),
-      )).map((d) => d.toJson()).toList(),
-    );
+    final scope = await _currentSession(request);
+    if (scope == null) return _unauthenticated();
+    final currentId = request.principal!.deviceId;
+    final devices = await scope.session.devices.list(scope.actor);
+    return HostResponse.ok([
+      for (final device in devices)
+        {...device.toJson(), if (device.id.value == currentId) 'current': true},
+    ]);
   }
 
   Future<HostResponse> _revoke(HostRequest request) async {
