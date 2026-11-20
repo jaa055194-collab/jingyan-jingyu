@@ -61,16 +61,26 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
   bool _loading = false;
   _Confirmation? _confirmation;
 
-  /// Identity captured when the read/revoke started. A mismatch afterwards
-  /// means the result belongs to a session that no longer exists.
-  String? _account;
+  /// Identity and callbacks are pinned to the session that opened this route.
+  /// A replacement connection requires opening a new route.
+  late final ShellViewModel? _routeSession;
+  late final String? _routeAccount;
+  late final Object? _routeSessionContext;
+  late final DeviceSessionLister? _routeLister;
+  late final DeviceRevoker? _routeRevoker;
+  bool _routeInvalid = false;
+  bool _revoking = false;
 
   @override
   void initState() {
     super.initState();
-    _capture();
-    widget.session?.addListener(_onSessionChanged);
-    if (widget.listDevices == null) {
+    _routeSession = widget.session;
+    _routeAccount = _routeSession?.connectedAccountId;
+    _routeSessionContext = _routeSession?.ownAiSessionContext;
+    _routeLister = widget.listDevices;
+    _routeRevoker = widget.revokeDevice;
+    _routeSession?.addListener(_onSessionChanged);
+    if (_routeLister == null) {
       _phase = _Phase.unbound;
     } else {
       _load();
@@ -81,61 +91,52 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
   void didUpdateWidget(DeviceSessionsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.session != widget.session) {
-      oldWidget.session?.removeListener(_onSessionChanged);
-      widget.session?.addListener(_onSessionChanged);
-      _capture();
+      _invalidateRoute();
     }
   }
 
   @override
   void dispose() {
-    widget.session?.removeListener(_onSessionChanged);
+    _routeSession?.removeListener(_onSessionChanged);
     super.dispose();
   }
 
-  void _capture() => _account = widget.session?.connectedAccountId;
-
-  /// True while the captured identity still matches the live session.
-  bool _identityValid() {
-    final session = widget.session;
+  bool _routeMatchesSession() {
+    if (_routeInvalid) return false;
+    final session = _routeSession;
     if (session == null) return true;
-    if (_account == null) return false;
-    return session.authenticated &&
+    final valid = _routeAccount != null &&
+        session.authenticated &&
         !session.locked &&
-        session.connectedAccountId == _account;
+        session.connectedAccountId == _routeAccount &&
+        session.ownAiSessionContext == _routeSessionContext;
+    if (!valid) _invalidateRoute();
+    return valid;
+  }
+
+  void _invalidateRoute() {
+    if (_routeInvalid) return;
+    setState(() {
+      _routeInvalid = true;
+      _devices = const [];
+      _notice = null;
+      _confirmation = null;
+      _loading = false;
+      _revoking = false;
+      _phase = _Phase.unavailable;
+      _discarded = true;
+    });
   }
 
   void _onSessionChanged() {
-    if (!mounted) return;
-    if (_identityValid()) {
-      setState(() {});
-      return;
-    }
-    // Lock, logout or an authenticated-account change: drop the pending
-    // confirmation and any in-flight result instead of applying it.
-    final hadWork = _confirmation != null || _loading;
-    setState(() {
-      _confirmation = null;
-      _loading = false;
-      _devices = const [];
-      _phase = _Phase.unavailable;
-      if (hadWork) _discarded = true;
-    });
-    _capture();
+    if (!mounted || !_routeMatchesSession()) return;
+    setState(() {});
   }
 
   Future<void> _load() async {
-    final lister = widget.listDevices;
-    if (lister == null || _loading) return;
-    final account = _account;
-    final session = widget.session;
-    if (session != null && !_identityValid()) {
-      setState(() {
-        _phase = _Phase.denied;
-        _notice = '登录状态已变化，请重新打开设备会话；不会自动重试。';
-      });
-      return;
-    }
+    final lister = _routeLister;
+    if (lister == null || _routeInvalid || _loading || _revoking) return;
+    if (!_routeMatchesSession()) return;
     setState(() {
       _loading = true;
       _discarded = false;
@@ -151,18 +152,7 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
       // Never surface raw transport text; unknown is not success.
       read = const DeviceSessionsRead(DeviceSessionsStatus.unavailable);
     }
-    if (!mounted) return;
-    if (session != null &&
-        (!_identityValid() || session.connectedAccountId != account)) {
-      setState(() {
-        _loading = false;
-        _devices = const [];
-        _phase = _Phase.unavailable;
-        _discarded = true;
-      });
-      _capture();
-      return;
-    }
+    if (!mounted || !_routeMatchesSession()) return;
     setState(() {
       _loading = false;
       _discarded = false;
@@ -188,7 +178,9 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
       device.current || !_devices.any((row) => row.current);
 
   void _askRevoke(DeviceSummary device) {
-    if (_loading) return;
+    if (_routeInvalid || _loading || _revoking || !_routeMatchesSession()) {
+      return;
+    }
     setState(() {
       _discarded = false;
       _notice = null;
@@ -198,24 +190,21 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
 
   Future<void> _submit() async {
     final confirmation = _confirmation;
-    final revoke = widget.revokeDevice;
+    final revoke = _routeRevoker;
     if (confirmation == null ||
         revoke == null ||
+        _routeInvalid ||
+        _loading ||
+        _revoking ||
         confirmation.submitting ||
-        (confirmation.strong && confirmation.typed.trim() != confirmation.device.deviceName)) {
+        (confirmation.strong &&
+            confirmation.typed.trim() != confirmation.device.deviceName)) {
       return;
     }
-    final session = widget.session;
-    if (session != null && !_identityValid()) {
-      setState(() {
-        _confirmation = null;
-        _discarded = true;
-      });
-      return;
-    }
+    if (!_routeMatchesSession()) return;
     final device = confirmation.device;
-    final account = _account;
     setState(() {
+      _revoking = true;
       confirmation.submitting = true;
       confirmation.failure = null;
     });
@@ -225,25 +214,13 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
     } catch (_) {
       outcome = DeviceRevokeOutcome.unavailable(device.id);
     }
-    if (!mounted) return;
-    // A lock, logout or account change while the request was in flight means
-    // the answer cannot be attributed to the current session: discard it and
-    // clear any pending confirmation without claiming a revoke.
-    if (session != null &&
-        (!_identityValid() || session.connectedAccountId != account)) {
-      setState(() {
-        _confirmation = null;
-        _discarded = true;
-        _devices = const [];
-        _phase = _Phase.unavailable;
-      });
-      _capture();
-      return;
-    }
-    if (!identical(_confirmation, confirmation) || outcome.deviceId != device.id) {
-      return;
+    if (!mounted || !_routeMatchesSession()) return;
+    if (!identical(_confirmation, confirmation)) return;
+    if (outcome.deviceId != device.id) {
+      outcome = DeviceRevokeOutcome.malformed(device.id);
     }
     setState(() {
+      _revoking = false;
       confirmation.submitting = false;
       if (outcome.confirmed) {
         _devices = List<DeviceSummary>.unmodifiable(
@@ -296,7 +273,8 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
               alignment: AlignmentDirectional.centerStart,
               child: TextButton(
                 key: Key('device-revoke-${device.id}'),
-                onPressed: _loading || widget.revokeDevice == null
+                onPressed:
+                    _routeInvalid || _loading || _revoking || _routeRevoker == null
                     ? null
                     : () => _askRevoke(device),
                 child: const Text('远程下线'),
@@ -321,8 +299,10 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
     if (confirmation == null) return const SizedBox.shrink();
     final device = confirmation.device;
     final canSubmit =
+        !_routeInvalid &&
+        !_revoking &&
         !confirmation.submitting &&
-        widget.revokeDevice != null &&
+        _routeRevoker != null &&
         (!confirmation.strong ||
             confirmation.typed.trim() == device.deviceName);
     return Card(
@@ -388,7 +368,7 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    final bound = widget.listDevices != null;
+    final bound = _routeLister != null;
     return Scaffold(
       appBar: AppBar(title: Text(widget.title)),
       body: ListView(
@@ -410,7 +390,9 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
             alignment: AlignmentDirectional.centerStart,
             child: TextButton(
               key: const Key('device-sessions-refresh'),
-              onPressed: bound && !_loading ? _load : null,
+              onPressed: bound && !_routeInvalid && !_loading && !_revoking
+                  ? _load
+                  : null,
               child: Text(_loading ? '加载中…' : '刷新'),
             ),
           ),
@@ -420,7 +402,7 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
                 key: const Key('device-sessions-discarded'),
                 padding: const EdgeInsets.only(top: 4),
                 child: const Text(
-                  '登录、锁定或账号已变化：已丢弃进行中的结果并清除待确认操作；不会自动重试。',
+                  '登录、锁定或账号已变化：此页面已失效，已清除设备信息及待确认操作；请重新打开设备会话。',
                 ),
               ),
             if (_notice != null)

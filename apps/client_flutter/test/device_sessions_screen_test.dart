@@ -23,15 +23,25 @@ DeviceSummary device(
 DeviceSessionsRead loaded(List<DeviceSummary> devices) =>
     DeviceSessionsRead.loaded(devices);
 
-TestShellModel signedIn({String account = 'account-a'}) => TestShellModel()
-  ..connectedAccountId = account
-  ..online = true;
+class TestDeviceSession extends TestShellModel {
+  Object sessionContext = Object();
+
+  @override
+  Object? get ownAiSessionContext =>
+      connectedAccountId == null ? null : sessionContext;
+}
+
+TestDeviceSession signedIn({String account = 'account-a'}) =>
+    TestDeviceSession()
+      ..connectedAccountId = account
+      ..online = true;
 
 Future<void> pump(
   WidgetTester tester, {
   Future<DeviceSessionsRead> Function()? read,
   Future<DeviceRevokeOutcome> Function(String deviceId)? revoke,
   TestShellModel? session,
+  bool settle = true,
 }) async {
   // Tall enough that the list, a row action and the confirmation panel are all
   // on screen; the production layout scrolls on a real device.
@@ -48,7 +58,7 @@ Future<void> pump(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  if (settle) await tester.pumpAndSettle();
 }
 
 /// Submits the open confirmation without waiting for a pending animation: an
@@ -162,6 +172,93 @@ void main() {
     expect(find.byKey(const Key('device-sessions-unavailable')), findsOneWidget);
     expect(find.textContaining('secret detail'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('another row and refresh cannot hide an in-flight revoke result', (
+    tester,
+  ) async {
+    final gate = Completer<DeviceRevokeOutcome>();
+    var reads = 0;
+    final revokedIds = <String>[];
+    await pump(
+      tester,
+      read: () async {
+        reads++;
+        return loaded([
+          device('device-a', name: '工作站'),
+          device('device-b', name: '手机', current: true),
+        ]);
+      },
+      revoke: (id) {
+        revokedIds.add(id);
+        return gate.future;
+      },
+    );
+    await tester.tap(find.byKey(const Key('device-revoke-device-a')));
+    await tester.pumpAndSettle();
+    await submitConfirmation(tester);
+
+    await tester.tap(find.byKey(const Key('device-revoke-device-b')));
+    await tester.pump();
+    expect(find.byKey(const Key('device-confirm-panel')), findsOneWidget);
+    expect(find.text('设备：工作站（device-a）'), findsOneWidget);
+    expect(
+      tester.widget<TextButton>(
+        find.byKey(const Key('device-revoke-device-b')),
+      ).onPressed,
+      isNull,
+    );
+
+    await tester.tap(find.byKey(const Key('device-sessions-refresh')));
+    await tester.pump();
+    expect(
+      tester.widget<TextButton>(
+        find.byKey(const Key('device-sessions-refresh')),
+      ).onPressed,
+      isNull,
+    );
+    expect(reads, 1);
+    expect(revokedIds, ['device-a']);
+
+    gate.complete(DeviceRevokeOutcome.revoked('device-a'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('device-row-device-a')), findsNothing);
+    expect(find.byKey(const Key('device-row-device-b')), findsOneWidget);
+    expect(find.textContaining('已远程下线：工作站'), findsOneWidget);
+    expect(reads, 1);
+    expect(revokedIds, ['device-a']);
+  });
+
+  testWidgets('refresh cannot start a read while a revoke is in flight', (
+    tester,
+  ) async {
+    final gate = Completer<DeviceRevokeOutcome>();
+    var reads = 0;
+    await pump(
+      tester,
+      read: () async {
+        reads++;
+        return loaded([
+          device('device-a', name: '工作站'),
+          device('device-b', name: '手机', current: true),
+        ]);
+      },
+      revoke: (id) => gate.future,
+    );
+    await tester.tap(find.byKey(const Key('device-revoke-device-a')));
+    await tester.pumpAndSettle();
+    await submitConfirmation(tester);
+
+    await tester.tap(find.byKey(const Key('device-sessions-refresh')));
+    await tester.pump();
+    expect(reads, 1);
+    expect(find.byKey(const Key('device-confirm-panel')), findsOneWidget);
+
+    gate.complete(DeviceRevokeOutcome.revoked('device-a'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('device-row-device-a')), findsNothing);
+    expect(find.textContaining('已远程下线：工作站'), findsOneWidget);
+    expect(reads, 1);
   });
 
   testWidgets('cancelling the confirmation never issues a revoke', (tester) async {
@@ -280,6 +377,33 @@ void main() {
     expect(find.textContaining('已远程下线'), findsNothing);
   });
 
+  testWidgets('a revoke result for another device leaves controls usable', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      read: () async => loaded([
+        device('device-a', name: '工作站'),
+        device('device-b', name: '手机', current: true),
+      ]),
+      revoke: (_) async => DeviceRevokeOutcome.revoked('device-b'),
+    );
+    await tester.tap(find.byKey(const Key('device-revoke-device-a')));
+    await tester.pumpAndSettle();
+    await submitConfirmation(tester);
+    await tester.pump();
+
+    expect(find.byKey(const Key('device-row-device-a')), findsOneWidget);
+    expect(find.byKey(const Key('device-failure-device-a')), findsOneWidget);
+    expect(find.textContaining('已远程下线'), findsNothing);
+    expect(
+      tester.widget<TextButton>(
+        find.byKey(const Key('device-sessions-refresh')),
+      ).onPressed,
+      isNotNull,
+    );
+  });
+
   testWidgets('the host-reported current device needs a stronger confirmation', (
     tester,
   ) async {
@@ -340,6 +464,136 @@ void main() {
     );
   });
 
+  testWidgets('lock then unlock cannot restore a pending read result', (
+    tester,
+  ) async {
+    final session = signedIn();
+    final gate = Completer<DeviceSessionsRead>();
+    var reads = 0;
+    await pump(
+      tester,
+      session: session,
+      read: () {
+        reads++;
+        return gate.future;
+      },
+      revoke: (id) async => DeviceRevokeOutcome.revoked(id),
+      settle: false,
+    );
+    await tester.pump();
+    expect(reads, 1);
+    session.locked = true;
+    session.notifyListeners();
+    await tester.pumpAndSettle();
+    session.locked = false;
+    session.notifyListeners();
+    await tester.pumpAndSettle();
+
+    // The route's reader is still bound to the original connection. A lock
+    // permanently invalidates it, even after the same account unlocks.
+    await tester.tap(find.byKey(const Key('device-sessions-refresh')));
+    await tester.pump();
+    expect(reads, 1);
+    gate.complete(loaded([device('private-device', name: '私密设备名')]));
+    await tester.pumpAndSettle();
+    expect(reads, 1);
+    expect(find.byKey(const Key('device-row-private-device')), findsNothing);
+    expect(find.text('私密设备名'), findsNothing);
+    expect(find.byKey(const Key('device-sessions-discarded')), findsOneWidget);
+  });
+
+  testWidgets('same-account session replacement discards pending revoke', (
+    tester,
+  ) async {
+    final session = signedIn();
+    final gate = Completer<DeviceRevokeOutcome>();
+    await pump(
+      tester,
+      session: session,
+      read: () async => loaded([
+        device('device-a', name: '旧会话设备名'),
+        device('device-b', name: '手机', current: true),
+      ]),
+      revoke: (id) => gate.future,
+    );
+    await tester.tap(find.byKey(const Key('device-revoke-device-a')));
+    await tester.pumpAndSettle();
+    await submitConfirmation(tester);
+
+    final originalContext = session.sessionContext;
+    session.sessionContext = Object();
+    session.notifyListeners();
+    await tester.pump();
+    expect(find.byKey(const Key('device-confirm-panel')), findsNothing);
+    expect(find.byKey(const Key('device-row-device-a')), findsNothing);
+
+    session.sessionContext = originalContext;
+    session.notifyListeners();
+    await tester.pump();
+    gate.complete(DeviceRevokeOutcome.revoked('device-a'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('device-row-device-a')), findsNothing);
+    expect(find.text('旧会话设备名'), findsNothing);
+    expect(find.byKey(const Key('device-sessions-notice')), findsNothing);
+    expect(find.byKey(const Key('device-sessions-discarded')), findsOneWidget);
+  });
+
+  testWidgets('account change disables refresh on a route bound to old connection', (
+    tester,
+  ) async {
+    final session = signedIn();
+    var reads = 0;
+    await pump(
+      tester,
+      session: session,
+      read: () async {
+        reads++;
+        return loaded([device('device-a')]);
+      },
+      revoke: (id) async => DeviceRevokeOutcome.revoked(id),
+    );
+    expect(reads, 1);
+    session.connectedAccountId = 'account-b';
+    session.notifyListeners();
+    await tester.pumpAndSettle();
+    session.connectedAccountId = 'account-a';
+    session.notifyListeners();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('device-sessions-refresh')));
+    await tester.pumpAndSettle();
+    expect(reads, 1);
+    expect(find.byKey(const Key('device-row-device-a')), findsNothing);
+    expect(find.byKey(const Key('device-sessions-discarded')), findsOneWidget);
+  });
+
+  testWidgets('lock clears a completed revoke message containing a device name', (
+    tester,
+  ) async {
+    final session = signedIn();
+    await pump(
+      tester,
+      session: session,
+      read: () async => loaded([
+        device('device-a', name: '私密设备名'),
+        device('device-b', name: '手机', current: true),
+      ]),
+      revoke: (id) async => DeviceRevokeOutcome.revoked(id),
+    );
+    await tester.tap(find.byKey(const Key('device-revoke-device-a')));
+    await tester.pumpAndSettle();
+    await submitConfirmation(tester);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('私密设备名'), findsOneWidget);
+
+    session.locked = true;
+    session.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('device-sessions-notice')), findsNothing);
+    expect(find.text('私密设备名'), findsNothing);
+    expect(find.textContaining('已远程下线'), findsNothing);
+  });
+
   testWidgets('lock during the request discards the result and the confirmation', (
     tester,
   ) async {
@@ -362,9 +616,12 @@ void main() {
     session.notifyListeners();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('device-confirm-panel')), findsNothing);
+    session.locked = false;
+    session.notifyListeners();
+    await tester.pumpAndSettle();
     gate.complete(DeviceRevokeOutcome.revoked('device-a'));
     await tester.pumpAndSettle();
-    // Locked: the device metadata is hidden again and nothing is claimed.
+    // Unlocking does not make the old request or its metadata current again.
     expect(find.byKey(const Key('device-row-device-a')), findsNothing);
     expect(find.byKey(const Key('device-sessions-notice')), findsNothing);
     expect(find.byKey(const Key('device-sessions-discarded')), findsOneWidget);
