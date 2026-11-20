@@ -350,6 +350,18 @@ class _Host {
   }
 
   Future<void> serve(HttpRequest request) async {
+    // Opening a conversation reports its read position. That receipt is not a
+    // message post, so it must not inflate `posts` or fail these fixtures.
+    final isAck = request.method == 'POST' && request.uri.path.endsWith('/ack');
+    if (isAck) {
+      try {
+        await request.drain<void>();
+      } catch (_) {
+        // Fire-and-forget: a test may dispose while a receipt is in flight.
+        return;
+      }
+      return fixture.reply(request, {'acknowledgedSeq': 0});
+    }
     await request.drain<void>();
     if (request.method != 'GET') {
       posts++;

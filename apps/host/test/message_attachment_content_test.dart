@@ -486,6 +486,7 @@ void main() {
       final sent = await send(other, 'conv-1', 'c1', 'text', {'text': 'hi'});
       final messageId =
           ((sent.json! as Map)['message'] as Map)['messageId'] as String;
+      // Send-time validation now rejects the forged reference outright.
       final edited = await pipeline.handle(
         HostRequest(
           method: 'POST',
@@ -498,7 +499,29 @@ void main() {
           },
         ),
       );
-      expect(edited.status, 200, reason: '${edited.json}');
+      expect(edited.status, 404, reason: '${edited.json}');
+
+      // Defense in depth: even if a forged body already reached storage (older
+      // data, a future write path), the content route still refuses it because
+      // the attachment owner is not the message sender.
+      await db.execute(
+        'UPDATE messages SET body = ? WHERE conversation_id = ? AND message_id = ?',
+        [
+          cipher.encrypt(
+            jsonEncode({'attachmentId': ownerAttachment, 'name': 'pic.png'}),
+            aad: 'messages:body:$messageId',
+          ),
+          'conv-1',
+          messageId,
+        ],
+      );
+      final stored = await store.read(
+        conversationId: 'conv-1',
+        messageId: messageId,
+      );
+      expect(stored.value.body['attachmentId'], ownerAttachment);
+      expect(stored.value.senderId, other);
+      expect(stored.value.senderId, isNot(owner));
       expect((await read(other, 'conv-1', messageId)).status, 404);
     });
 
