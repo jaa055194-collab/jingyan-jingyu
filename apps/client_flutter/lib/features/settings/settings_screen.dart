@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../app/runtime.dart';
 import '../../app/shell_view_model.dart';
 import '../../net/attachment_api.dart';
+import '../../net/device_sessions_api.dart';
 import '../../net/lifecycle_api.dart';
 import '../../platform/native_platform.dart';
 import '../../net/ai_config_write_api.dart';
@@ -21,6 +22,7 @@ import '../lifecycle/backup_quota_screen.dart';
 import '../voice/voice_call_list_screen.dart';
 import '../voice/voice_screen.dart';
 import '../world/world_status_screen.dart';
+import 'device_sessions_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
@@ -258,6 +260,35 @@ class SettingsScreen extends StatelessWidget {
                   MaterialPageRoute<void>(
                     builder: (_) =>
                         AttachmentsListScreen(listAttachments: listAttachments),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('open-device-sessions'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.devices_outlined),
+              title: const Text('设备会话'),
+              subtitle: const Text(
+                '查看当前账号已登录的设备并显式远程下线；本机或无法确定本机时需输入设备名确认，'
+                '只在宿主确认后才算下线，不显示、不保存任何令牌',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final runtime = model;
+                final connection = runtime is ClientRuntime
+                    ? runtime.connection
+                    : null;
+                final api = connection == null
+                    ? null
+                    : DeviceSessionsApi(connection);
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => DeviceSessionsScreen(
+                      listDevices: api?.listDevices,
+                      revokeDevice: api?.revokeDevice,
+                      session: model,
+                    ),
                   ),
                 );
               },
