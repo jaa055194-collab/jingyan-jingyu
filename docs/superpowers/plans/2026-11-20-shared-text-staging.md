@@ -26,7 +26,7 @@ Lead integrates, verifies source constraints/traceability, full Flutter/root, sh
 - [x] Guarded kit `saveDraft(checkActive)` keeps prior draft on failed/cancelled write; shell suite 19/19.
 - [x] Explicit target panel at 375/768/1280, occupied/empty/error/cancel/stale/lock/busy/target-removal cases; UI focused 10/10 and analysis clean.
 - [x] Full Flutter (643 passed, one existing skip) and analysis clean; focused runtime/auth/text, UI and kit suites pass in the short-path source; matched production captures and independent review.
-- [ ] Repository-wide checks and Windows/Android debug builds from the clean short path; publish focused PR and bind the ticket; final CI remains the review gate.
+- [x] Clean short-path repository checks passed (host 1,525 tests, 15 existing skips; all shared packages) and Windows/Android debug builds passed from `136e704`; focused PR #147 is published and bound, with final CI as the remaining review gate.
 
 Evidence: [matched application captures](../../../apps/client_flutter/evidence/shared-text-staging.md).
 
