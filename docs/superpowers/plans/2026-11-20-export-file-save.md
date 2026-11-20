@@ -40,7 +40,9 @@
 - [x] RED: serialization/4 MiB cap, bridge validation and UI save tests fail before the save APIs exist.
 - [x] Client bundle encoder, injected file store, explicit save action, honest cancel/failure notices and import durability warning; focused tests pass.
 - [x] Windows/Android native save dialogs with byte-exact destination writes and no path returned to Dart (static compile checks pending final build).
-- [ ] Full Flutter suite, repository checks, Windows/Android debug builds, matched production UI evidence, independent review, focused PR.
+- [x] Full Flutter suite (654 passed, one existing skip) and analysis clean; clean short-path repository checks passed (host 1,525 with 15 existing skips; all shared packages); Windows and Android debug builds passed from `6c91d25`.
+- [x] Matched production captures committed; focused PR #148 published and bound; exact-head CI passed.
+- [ ] Independent final review sign-off; then report ready for review (not complete AC-29).
 
 ## Limits
 
