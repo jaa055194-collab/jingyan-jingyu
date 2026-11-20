@@ -132,6 +132,7 @@ void main() {
           'dropped': [],
           'drafts': {},
           'cursors': {'c': 2},
+          'readSeq': {},
           'messages': [],
         },
       });
@@ -558,6 +559,145 @@ void main() {
     await reboot.initialize();
     expect(reboot.messagesFor('c').single.seq, 1);
   });
+  test(
+    'read position advances forward, clamps to the head, and survives restart',
+    () async {
+      final store = MemoryPersistence();
+      final shell = historyShell(store);
+      await shell.initialize();
+      for (final seq in [1, 2, 3]) {
+        await shell.acceptMessage(message(seq));
+      }
+      expect(shell.readSeqFor('c'), 0);
+      final writes = store.writeAttempts;
+
+      await shell.markRead('c', 2);
+      expect(shell.readSeqFor('c'), 2);
+      expect(store.writeAttempts, writes + 1);
+      expect(((store.data!['shell'] as Map)['readSeq'] as Map)['c'], 2);
+
+      // Never rewinds, never passes the cached head, and never rewrites.
+      await shell.markRead('c', 1);
+      await shell.markRead('c', 99);
+      expect(shell.readSeqFor('c'), 3);
+      expect(store.writeAttempts, writes + 2);
+
+      final reboot = historyShell(store);
+      await reboot.initialize();
+      expect(reboot.readSeqFor('c'), 3);
+      expect(reboot.readSeqFor('unknown'), 0);
+      expect(reboot.messagesFor('c').map((m) => m.seq), [1, 2, 3]);
+      expect(reboot.draftFor('c'), isEmpty);
+    },
+  );
+
+  test('a failed read checkpoint keeps the previous position', () async {
+    final store = MemoryPersistence();
+    final shell = historyShell(store);
+    await shell.initialize();
+    await shell.acceptMessage(message(1));
+    await shell.acceptMessage(message(2));
+    await shell.markRead('c', 1);
+    store.fail = true;
+
+    await expectLater(shell.markRead('c', 2), throwsStateError);
+    expect(shell.readSeqFor('c'), 1);
+    expect(((store.data!['shell'] as Map)['readSeq'] as Map)['c'], 1);
+  });
+
+  test('read checkpoint honours checkActive before publishing', () async {
+    final store = MemoryPersistence();
+    final shell = historyShell(store);
+    await shell.initialize();
+    await shell.acceptMessage(message(1));
+    final started = Completer<void>(), release = Completer<void>();
+    addTearDown(() {
+      if (!release.isCompleted) release.complete();
+    });
+    store.beforeWrite = () async {
+      if (!started.isCompleted) started.complete();
+      await release.future;
+    };
+    final other = writeClientSection(store, 'consent', {'approved': true});
+    await started.future;
+    var active = true;
+    final read = expectLater(
+      shell.markRead(
+        'c',
+        1,
+        checkActive: () {
+          if (!active) throw StateError('superseded');
+        },
+      ),
+      throwsStateError,
+    );
+    active = false;
+    release.complete();
+    await Future.wait([other, read]);
+    expect(shell.readSeqFor('c'), 0);
+    // The cancelled checkpoint never recorded a position for this conversation.
+    expect(((store.data!['shell'] as Map)['readSeq'] as Map)['c'], isNull);
+  });
+
+  test(
+    'restart without opening keeps unread history, upgrade seeds from cursor',
+    () async {
+      // A current install that synced but never opened 'c': the readSeq key
+      // exists, so its 3 synced rows must still count as unread after restart.
+      final store = MemoryPersistence();
+      final shell = historyShell(store);
+      await shell.initialize();
+      await shell.acceptMessage(message(1, conversationId: 'other'));
+      for (final seq in [1, 2, 3]) {
+        await shell.acceptMessage(message(seq));
+      }
+      await shell.markRead('other', 1);
+      expect(((store.data!['shell'] as Map)['readSeq'] as Map).keys, ['other']);
+
+      final restart = historyShell(store);
+      await restart.initialize();
+      expect(restart.readSeqFor('c'), 0);
+      expect(
+        restart.messagesFor('c').where((m) => m.seq > restart.readSeqFor('c')),
+        hasLength(3),
+      );
+
+      // A pre-upgrade snapshot has cursors but no readSeq key at all; that one
+      // upgrade seeds each cursor so old history is not shown as unread.
+      final upgraded = Map<String, Object?>.from(store.data!);
+      final section = Map<String, Object?>.from(upgraded['shell'] as Map)
+        ..remove('readSeq');
+      upgraded['shell'] = section;
+      store.data = upgraded;
+
+      final seeded = historyShell(store);
+      await seeded.initialize();
+      expect(seeded.readSeqFor('c'), 3);
+      expect(seeded.readSeqFor('other'), 1);
+      expect(
+        seeded.messagesFor('c').where((m) => m.seq > seeded.readSeqFor('c')),
+        isEmpty,
+      );
+      // Seeding is memory-only; the snapshot is not rewritten on restore.
+      expect((store.data!['shell'] as Map).containsKey('readSeq'), isFalse);
+    },
+  );
+
+  test(
+    'markRead above the cached head clamps instead of overshooting',
+    () async {
+      final store = MemoryPersistence();
+      final shell = historyShell(store);
+      await shell.initialize();
+      await shell.acceptMessage(message(1));
+      await shell.acceptMessage(message(2));
+
+      await shell.markRead('c', 999);
+      expect(shell.readSeqFor('c'), 2);
+      expect(((store.data!['shell'] as Map)['readSeq'] as Map)['c'], 2);
+    },
+  );
+
   test(
     'AI attachment consent persists independently per conversation',
     () async {

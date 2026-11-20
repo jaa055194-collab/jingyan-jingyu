@@ -322,7 +322,33 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   }
 
   @override
-  List<ShellConversation> get conversations => _conversations;
+  List<ShellConversation> get conversations => !_controllersReady
+      ? _conversations
+      : [
+          for (final conversation in _conversations)
+            ShellConversation(
+              id: conversation.id,
+              title: conversation.title,
+              preview: conversation.preview,
+              unread: _unreadFor(conversation.id),
+              kind: conversation.kind,
+              ownerAccountId: conversation.ownerAccountId,
+            ),
+        ];
+
+  /// The cache is already pruned to the visible history floor, so every cached
+  /// canonical row above the read position is genuinely unread. The user's own
+  /// messages never badge, and outbox/dropped rows are not canonical messages.
+  int _unreadFor(String conversationId) {
+    final read = shell.readSeqFor(conversationId);
+    final self = connectedAccountId;
+    var count = 0;
+    for (final message in shell.messagesFor(conversationId)) {
+      if (message.seq > read && message.senderId != self) count++;
+    }
+    return count;
+  }
+
   @override
   List<ShellMessage> get messages => _selected == null
       ? []
@@ -1586,6 +1612,88 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _selected = id;
     _draft = shell.draftFor(id);
     notifyListeners();
+    // Selection stays synchronous: the durable mark and its receipt run off the
+    // shell serial queue (a flush can hold it across network IO) and are guarded
+    // so a stale result never publishes. Re-selecting re-checks the head so a
+    // message that arrived while the chat was open can still clear the badge.
+    unawaited(_markConversationRead(id));
+  }
+
+  /// Persists the read position for [id] and reports it once. Nothing happens
+  /// when the position is already at the head, so repeated opens never send a
+  /// duplicate receipt.
+  Future<void> _markConversationRead(String id) async {
+    final generation = _generation;
+    final sessionShell = shell;
+    final sessionConnection = connection;
+    final epoch = _historySyncEpoch;
+    if (sessionConnection == null ||
+        !_controllersReady ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected ||
+        !_online ||
+        !identical(shell, sessionShell)) {
+      return;
+    }
+    final head = sessionShell.lastSeqFor(id);
+    if (head < 1 || sessionShell.readSeqFor(id) >= head) return;
+    bool current() =>
+        _current(generation) &&
+        epoch == _historySyncEpoch &&
+        _selected == id &&
+        identical(shell, sessionShell) &&
+        identical(connection, sessionConnection) &&
+        authenticated &&
+        !locked &&
+        !_switching &&
+        !_sessionRejected;
+    try {
+      await sessionShell.markRead(
+        id,
+        head,
+        checkActive: () {
+          if (!current()) throw const _ReadInterrupted();
+        },
+      );
+    } catch (_) {
+      return;
+    }
+    if (!current()) return;
+    await _sendReadReceipt(id, head, generation, epoch, sessionConnection);
+  }
+
+  /// Exactly one best-effort receipt per successful advance. A failure is
+  /// silent and is never retried; a later lock/logout/switch discards it.
+  Future<void> _sendReadReceipt(
+    String id,
+    int head,
+    int generation,
+    int epoch,
+    HostConnection sessionConnection,
+  ) async {
+    if (!_current(generation) ||
+        epoch != _historySyncEpoch ||
+        _selected != id ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected) {
+      return;
+    }
+    try {
+      await sessionConnection.request(
+        'POST',
+        Routes.messageAck.replaceAll(
+          '{conversationId}',
+          Uri.encodeComponent(id),
+        ),
+        body: {'seq': head},
+      );
+    } catch (_) {
+      // Reading must never be blocked by a best-effort read receipt.
+    }
   }
 
   @override
@@ -2082,6 +2190,10 @@ class _AttachmentDraft {
 
 class _SyncInterrupted implements Exception {
   const _SyncInterrupted();
+}
+
+class _ReadInterrupted implements Exception {
+  const _ReadInterrupted();
 }
 
 class _PreparedSnapshot {
