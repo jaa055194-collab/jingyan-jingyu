@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../app/runtime.dart';
 import '../../app/shell_view_model.dart';
 import '../../net/attachment_api.dart';
+import '../../net/device_sessions_api.dart';
 import '../../net/lifecycle_api.dart';
 import '../../platform/native_platform.dart';
 import '../../net/ai_config_write_api.dart';
@@ -25,6 +26,7 @@ import '../search/search_screen.dart';
 import '../voice/voice_call_list_screen.dart';
 import '../voice/voice_screen.dart';
 import '../world/world_status_screen.dart';
+import 'device_sessions_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
@@ -141,6 +143,34 @@ class SettingsScreen extends StatelessWidget {
               onChanged: model.busy || model.selectedConversationId == null
                   ? null
                   : model.setAiConsent,
+            ),
+            ListTile(
+              key: const Key('open-device-sessions'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.devices_outlined),
+              title: const Text('设备会话'),
+              subtitle: const Text('查看已登录设备，或远程下线'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) {
+                    final runtime = model;
+                    final connection =
+                        runtime is ClientRuntime &&
+                            runtime.authenticated && !runtime.locked
+                        ? runtime.connection
+                        : null;
+                    final api = connection == null
+                        ? null
+                        : DeviceSessionsApi(connection);
+                    return DeviceSessionsScreen(
+                      listDevices: api?.listDevices,
+                      revokeDevice: api?.revokeDevice,
+                      session: api == null ? null : model,
+                    );
+                  },
+                ),
+              ),
             ),
             const Divider(height: 32),
             Text('通用', style: Theme.of(context).textTheme.titleMedium),
