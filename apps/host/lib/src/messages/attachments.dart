@@ -533,11 +533,15 @@ class AttachmentService {
     }
   }
 
-  /// 读取附件元数据；owner 或可读该会话的成员可见。extracted 时附带解密正文。
+  /// 读取附件元数据；owner 或可读该会话的成员可见。
+  ///
+  /// 解密正文只对 owner 且 [includeExtractedText] 为真时返回；其他可见成员
+  /// 只拿到元数据。其余字段与 notFound 语义保持不变。
   Future<Result<Map<String, Object?>>> getAttachment({
     required String accountId,
     required String attachmentId,
     Future<bool> Function(String, String)? canReadConversation,
+    bool includeExtractedText = false,
   }) async {
     try {
       validateId(accountId, kind: 'account');
@@ -551,7 +555,8 @@ class AttachmentService {
     );
     if (rows.isEmpty) return err(FailureCode.notFound, 'attachment not found');
     final row = rows.single;
-    var allowed = row['owner_account_id'] == accountId;
+    final isOwner = row['owner_account_id'] == accountId;
+    var allowed = isOwner;
     if (!allowed) {
       final conversationId = row['conversation_id'] as String?;
       if (conversationId != null && canReadConversation != null) {
@@ -574,7 +579,9 @@ class AttachmentService {
       'extractionStatus': row['extraction_status'],
       'createdAt': row['created_at'],
     };
-    if (row['extraction_status'] == 'extracted' &&
+    if (includeExtractedText &&
+        isOwner &&
+        row['extraction_status'] == 'extracted' &&
         row['extracted_text'] != null) {
       final decoded = _cipher.decrypt(
         row['extracted_text'] as String,

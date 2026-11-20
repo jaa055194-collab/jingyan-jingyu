@@ -881,11 +881,39 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.invalidArgument, 'bad body'),
       );
     }
+    final newBody = (body.value['body']! as Map).cast<String, Object?>();
+    // An edit must not introduce a reference to an attachment the editor could
+    // not have sent. Reuse the same send-time check as _send; a body without an
+    // attachmentId (including one that removes a reference) keeps old behavior.
+    final attachmentRef = newBody['attachmentId'];
+    if (attachmentRef != null) {
+      if (attachmentRef is! String) {
+        return HostResponse.failure(
+          const Failure(FailureCode.invalidArgument, 'bad attachmentId'),
+        );
+      }
+      final attachments = _attachments;
+      if (attachments == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.internal, 'attachments unavailable'),
+        );
+      }
+      final check = await attachments.assertSendable(
+        ownerAccountId: principal.accountId,
+        attachmentId: attachmentRef,
+        conversationId: conversationId,
+      );
+      if (check.isErr) {
+        return HostResponse.failure(
+          const Failure(FailureCode.notFound, 'not visible'),
+        );
+      }
+    }
     final result = await _store.edit(
       conversationId: conversationId,
       messageId: messageId,
       senderId: principal.accountId,
-      body: (body.value['body']! as Map).cast<String, Object?>(),
+      body: newBody,
     );
     if (result.isErr) return HostResponse.failure(result.failureOrNull!);
     final edited = result.value;

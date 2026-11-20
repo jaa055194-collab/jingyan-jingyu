@@ -178,10 +178,14 @@ class AttachmentsModule extends HostModule {
     final principal = request.principal!;
     final attachmentId = request.pathParams['attachmentId']!;
     final members = _services.maybeGet<MembershipCheck>();
+    // Only the owner's read decrypts text: the service itself gates on
+    // owner_account_id == caller, so a conversation member always gets
+    // metadata only even though this route is shared.
     final result = await _attachments.getAttachment(
       accountId: principal.accountId,
       attachmentId: attachmentId,
       canReadConversation: members?.canRead,
+      includeExtractedText: true,
     );
     return HostResponse.fromResult(result);
   }
