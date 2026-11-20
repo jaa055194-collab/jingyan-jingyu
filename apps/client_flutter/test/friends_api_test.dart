@@ -155,6 +155,104 @@ void main() {
     },
   );
 
+  test('requestFriend sends exactly one authenticated bodyless POST', () async {
+    final calls = <(String, String, String?, String)>[];
+    server.listen((request) async {
+      calls.add((
+        request.method,
+        request.uri.toString(),
+        request.headers.value(HttpHeaders.authorizationHeader),
+        await utf8.decoder.bind(request).join(),
+      ));
+      await request.response.close();
+    });
+    await api.requestFriend('Exact_ID-02');
+    expect(calls, [
+      ('POST', '/api/v1/friends/Exact_ID-02/requests', 'Bearer fixture', ''),
+    ]);
+  });
+
+  test('invalid friend request target never reaches the host', () async {
+    var calls = 0;
+    server.listen((request) async {
+      calls++;
+      await request.response.close();
+    });
+    for (final id in ['', 'Bad ID', 'a/b', ' Exact_ID-02 ']) {
+      await expectLater(api.requestFriend(id), throwsFormatException);
+    }
+    expect(calls, 0);
+  });
+
+  test('outgoing request on 401 never renews or replays', () async {
+    var renewals = 0;
+    final calls = <String>[];
+    final guarded = HostConnection(
+      connection.base,
+      'stale',
+      onUnauthorized: () async {
+        renewals++;
+        return true;
+      },
+    );
+    addTearDown(guarded.close);
+    server.listen((request) async {
+      await request.drain<void>();
+      calls.add(request.uri.path);
+      request.response.statusCode = 401;
+      await request.response.close();
+    });
+    await expectLater(
+      FriendsApi(guarded).requestFriend('Exact_ID-02'),
+      throwsA(
+        isA<HostRequestException>().having(
+          (e) => e.failure.code,
+          'code',
+          FailureCode.unauthenticated,
+        ),
+      ),
+    );
+    expect(calls, ['/api/v1/friends/Exact_ID-02/requests']);
+    expect(renewals, 0);
+  });
+
+  test(
+    'outgoing request neither follows redirects nor accepts malformed success',
+    () async {
+      final calls = <String>[];
+      server.listen((request) async {
+        await request.drain<void>();
+        calls.add(request.uri.path);
+        if (calls.length == 1) {
+          request.response.statusCode = 303;
+          request.response.headers.set(
+            HttpHeaders.locationHeader,
+            '/unexpected',
+          );
+        } else {
+          request.response.write('{"state":"opaque-proxy-payload"}');
+        }
+        await request.response.close();
+      });
+      await expectLater(
+        api.requestFriend('Exact_ID-02'),
+        throwsA(isA<HostRequestException>()),
+      );
+      expect(calls, ['/api/v1/friends/Exact_ID-02/requests']);
+      await expectLater(
+        api.requestFriend('Exact_ID-02'),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.toString(),
+            'safe text',
+            isNot(contains('opaque-proxy-payload')),
+          ),
+        ),
+      );
+      expect(calls, List.filled(2, '/api/v1/friends/Exact_ID-02/requests'));
+    },
+  );
+
   test('list accepts an empty array', () async {
     server.listen((r) async {
       await r.drain<void>();

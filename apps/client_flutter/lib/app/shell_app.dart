@@ -273,19 +273,50 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
-  /// Wire the contacts list and explicit invite actions only when the runtime
-  /// has a host connection. The screen never submits an action on load.
+  /// Wire the existing Contacts reads and writes to the live connection.
   Widget contacts() {
     final model = widget.model;
-    final HostConnection? connection = model is ClientRuntime
-        ? model.connection
-        : null;
+    if (model is! ClientRuntime) return const ContactsScreen();
+    final connection = model.connection;
     if (connection == null) return const ContactsScreen();
     final api = FriendsApi(connection);
+    final owner = model.connectedAccountId;
+    final session = model.ownAiSessionContext;
+    final navigation = widget.navigation;
+
+    ({String accountId, Object session})? requestContext() {
+      // Use the existing explicit-confirmation epoch so even a lock followed
+      // by an unlock of the same account invalidates an older confirmation.
+      final lockEpoch = model.ownAiDirectContext;
+      if (!mounted ||
+          !identical(widget.model, model) ||
+          destination != 1 ||
+          settings ||
+          !model.authenticated ||
+          model.locked ||
+          owner == null ||
+          model.connectedAccountId != owner ||
+          session == null ||
+          model.ownAiSessionContext != session ||
+          lockEpoch == null ||
+          !identical(model.connection, connection)) {
+        return null;
+      }
+      return (
+        accountId: owner,
+        session: (model, connection, session, lockEpoch),
+      );
+    }
+
     return ContactsScreen(
+      key: ValueKey((model, connection, owner, session)),
       loadFriends: api.list,
       acceptFriend: api.acceptFriend,
       denyFriend: api.denyFriend,
+      requestFriend: requestContext() == null ? null : api.requestFriend,
+      requestContext: requestContext,
+      requestChanges: Listenable.merge([model, navigation]),
+      navigationGeneration: () => navigation.generation,
     );
   }
 
