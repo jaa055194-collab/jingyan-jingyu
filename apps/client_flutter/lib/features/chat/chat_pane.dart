@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 
 import '../../app/shell_view_model.dart';
+import '../favorites/favorites_screen.dart';
 import 'voice_message_playback.dart';
 
 class ConversationList extends StatelessWidget {
@@ -53,6 +54,13 @@ class ConversationList extends StatelessWidget {
         icon: const Icon(Icons.refresh),
         label: const Text('刷新会话'),
       ),
+      if (FavoritesScreen.canOpen(model))
+        TextButton.icon(
+          key: const Key('open-favorites'),
+          onPressed: () => FavoritesScreen.open(context, model),
+          icon: const Icon(Icons.bookmark_border),
+          label: const Text('我的收藏'),
+        ),
       Expanded(
         child: model.conversations.isEmpty
             ? const Center(
