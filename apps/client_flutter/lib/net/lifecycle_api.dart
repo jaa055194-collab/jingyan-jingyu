@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'dart:convert';
+
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
@@ -177,7 +179,30 @@ class LifecycleExportBundle {
   final Map<String, Object?> manifest;
   final String sha256sums;
 
+  /// Maximum serialized envelope accepted by the local save bridge.
+  static const int maxFileBytes = 4 * 1024 * 1024;
+
   int get fileCount => files.length;
+
+  /// The exact version-1 package envelope, for an explicit local save only.
+  /// Callers must not render the returned content.
+  String exportFileContents() {
+    final content = jsonEncode({
+      'ownerAccountId': ownerAccountId,
+      'files': files,
+      'manifest': manifest,
+      'sha256sums': sha256sums,
+    });
+    if (utf8.encode(content).length > maxFileBytes) {
+      throw const FormatException('导出文件超出本地保存上限');
+    }
+    // Refuse to hand out a package this client could not read back.
+    LifecycleExportBundle.fromJson(
+      (jsonDecode(content) as Map).cast<String, Object?>(),
+    );
+    return content;
+  }
+
   bool get hasChecksums => sha256sums.isNotEmpty;
   Map<String, Object?> get counts {
     final value = manifest['counts'];

@@ -1,3 +1,4 @@
+import 'package:client_flutter/features/lifecycle/backup_files.dart';
 import 'package:client_flutter/features/lifecycle/backup_quota_screen.dart';
 import 'package:client_flutter/net/host_connection.dart';
 import 'package:client_flutter/net/lifecycle_api.dart';
@@ -57,6 +58,25 @@ LifecycleImportReport _report(LifecycleImportMode mode) =>
       },
       'conflicts': [],
     });
+
+class _FakeBackupFiles implements BackupFileStore {
+  SavedBackupFile? result = const SavedBackupFile(
+    name: 'jingyu-export.json',
+    bytes: 12,
+  );
+  Object? error;
+  int calls = 0;
+  LifecycleExportBundle? lastBundle;
+
+  @override
+  Future<SavedBackupFile?> save(LifecycleExportBundle bundle) async {
+    calls++;
+    lastBundle = bundle;
+    final failure = error;
+    if (failure != null) throw failure;
+    return result;
+  }
+}
 
 class _FakeApi extends LifecycleApi {
   _FakeApi() : super(HostConnection(Uri.parse('http://127.0.0.1:1'), 'token'));
@@ -124,8 +144,16 @@ class _FakeApi extends LifecycleApi {
 }
 
 void main() {
-  Future<void> pump(WidgetTester tester, LifecycleApi api) async {
-    await tester.pumpWidget(MaterialApp(home: BackupQuotaScreen(api: api)));
+  Future<void> pump(
+    WidgetTester tester,
+    LifecycleApi api, {
+    BackupFileStore? backupFiles,
+  }) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BackupQuotaScreen(api: api, backupFiles: backupFiles),
+      ),
+    );
     await tester.pumpAndSettle();
   }
 
@@ -188,6 +216,72 @@ void main() {
       expect(find.textContaining('不是完整账号备份'), findsOneWidget);
       expect(find.textContaining('secret-persona-text'), findsNothing);
       expect(api.importCalls, 0);
+    },
+  );
+
+  testWidgets(
+    'save action appears only after export and passes the exact bundle',
+    (tester) async {
+      final api = _FakeApi();
+      final files = _FakeBackupFiles();
+      await pump(tester, api, backupFiles: files);
+      final saveButton = find.byKey(const Key('save-lifecycle'));
+      expect(saveButton, findsOneWidget);
+      expect(tester.widget<FilledButton>(saveButton).onPressed, isNull);
+
+      await tapKey(tester, 'export-lifecycle');
+      expect(find.byKey(const Key('save-lifecycle')), findsOneWidget);
+      expect(tester.widget<FilledButton>(saveButton).onPressed, isNotNull);
+      expect(files.calls, 0);
+
+      await tapKey(tester, 'save-lifecycle');
+      expect(files.calls, 1);
+      expect(files.lastBundle?.files, _bundle().files);
+      expect(find.textContaining('已保存导出文件：jingyu-export.json'), findsOneWidget);
+      expect(find.textContaining('文件含聊天明文'), findsOneWidget);
+      expect(find.textContaining('12 B'), findsOneWidget);
+      expect(find.textContaining('secret-persona-text'), findsNothing);
+      expect(find.textContaining(r'C:\private'), findsNothing);
+      expect(api.importCalls, 0);
+    },
+  );
+
+  testWidgets('saving cancellation is reported without a retry', (
+    tester,
+  ) async {
+    final api = _FakeApi();
+    final files = _FakeBackupFiles()..result = null;
+    await pump(tester, api, backupFiles: files);
+    await tapKey(tester, 'export-lifecycle');
+    await tapKey(tester, 'save-lifecycle');
+    expect(files.calls, 1);
+    expect(find.textContaining('已取消保存'), findsOneWidget);
+  });
+
+  testWidgets('saving failure is honest and hides platform details', (
+    tester,
+  ) async {
+    final api = _FakeApi();
+    final files = _FakeBackupFiles()
+      ..error = StateError(r'C:\private\export.json failed');
+    await pump(tester, api, backupFiles: files);
+    await tapKey(tester, 'export-lifecycle');
+    await tapKey(tester, 'save-lifecycle');
+    expect(find.textContaining('导出文件保存失败或结果未确认'), findsOneWidget);
+    expect(find.textContaining('private'), findsNothing);
+  });
+
+  testWidgets(
+    'without a save platform export stays usable but save is disabled',
+    (tester) async {
+      final api = _FakeApi();
+      await pump(tester, api);
+      expect(find.textContaining('未接线本机文件保存'), findsOneWidget);
+      await tapKey(tester, 'export-lifecycle');
+      expect(find.textContaining('已导出到内存'), findsOneWidget);
+      final save = find.byKey(const Key('save-lifecycle'));
+      expect(save, findsOneWidget);
+      expect(tester.widget<FilledButton>(save).onPressed, isNull);
     },
   );
 

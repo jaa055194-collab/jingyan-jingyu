@@ -4,6 +4,7 @@ import '../../app/runtime.dart';
 import '../../app/shell_view_model.dart';
 import '../../net/attachment_api.dart';
 import '../../net/lifecycle_api.dart';
+import '../../platform/native_platform.dart';
 import '../../net/ai_config_write_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
@@ -15,6 +16,7 @@ import '../ai_config/ai_config_panel.dart';
 import '../attachments/attachments_list_screen.dart';
 import '../attachments/attachments_screen.dart';
 import '../diagnostics/module_test_panel.dart';
+import '../lifecycle/backup_files.dart';
 import '../lifecycle/backup_quota_screen.dart';
 import '../voice/voice_call_list_screen.dart';
 import '../voice/voice_screen.dart';
@@ -40,6 +42,9 @@ class SettingsScreen extends StatelessWidget {
     final connection = model is ClientRuntime ? model.connection : null;
     return BackupQuotaScreen(
       api: connection == null ? null : LifecycleApi(connection),
+      backupFiles: connection == null
+          ? null
+          : NativeBackupFileStore(NativePlatform()),
     );
   }
 

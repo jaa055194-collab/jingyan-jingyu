@@ -19,12 +19,16 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
     companion object {
         private const val REQUEST_PICK_ATTACHMENT = 1201
+        private const val REQUEST_SAVE_BACKUP = 1202
     }
 
     private lateinit var channel: MethodChannel
     private lateinit var pinStore: PinStore
     private var pendingShare: Map<String, Any?>? = null
     private var pendingFileResult: MethodChannel.Result? = null
+    private var pendingBackupResult: MethodChannel.Result? = null
+    private var pendingBackupBytes: ByteArray? = null
+    private var pendingBackupName: String? = null
     private val filePickerExecutor = Executors.newSingleThreadExecutor()
     private var authenticated = false
     private var biometricResult: MethodChannel.Result? = null
@@ -111,8 +115,8 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                     "pickAttachment" -> {
-                        if (pendingFileResult != null) {
-                            result.error("busy", "A file picker is already open", null)
+                        if (pendingFileResult != null || pendingBackupResult != null) {
+                            result.error("busy", "A file dialog is already open", null)
                         } else {
                             val kind = call.argument<String>("kind")
                             if (kind != "image" && kind != "file") {
@@ -128,6 +132,37 @@ class MainActivity : FlutterActivity() {
                                 } catch (error: Exception) {
                                     pendingFileResult = null
                                     result.error("pick_failed", "Cannot open file picker", null)
+                                }
+                            }
+                        }
+                    }
+                    "saveBackupFile" -> {
+                        if (pendingFileResult != null || pendingBackupResult != null) {
+                            result.error("busy", "A file dialog is already open", null)
+                        } else {
+                            val suggestedName = sanitizeBackupName(call.argument<String>("suggestedName"))
+                            val bytes = call.argument<ByteArray>("bytes")
+                            val maxBytes = call.argument<Int>("maxBytes")
+                            if (suggestedName == null || bytes == null || bytes.isEmpty() || maxBytes == null || maxBytes <= 0) {
+                                result.error("invalid_arguments", "Backup name, bytes and a positive limit are required", null)
+                            } else if (bytes.size > maxBytes) {
+                                result.error("invalid_arguments", "Backup exceeds the requested byte limit", null)
+                            } else {
+                                pendingBackupResult = result
+                                pendingBackupBytes = bytes
+                                pendingBackupName = suggestedName
+                                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    type = "application/json"
+                                    putExtra(Intent.EXTRA_TITLE, suggestedName)
+                                }
+                                try {
+                                    startActivityForResult(intent, REQUEST_SAVE_BACKUP)
+                                } catch (error: Exception) {
+                                    pendingBackupResult = null
+                                    pendingBackupBytes = null
+                                    pendingBackupName = null
+                                    result.error("save_failed", "Cannot open save dialog", null)
                                 }
                             }
                         }
@@ -152,6 +187,10 @@ class MainActivity : FlutterActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_SAVE_BACKUP) {
+            finishSaveBackup(resultCode, data)
+            return
+        }
         if (requestCode != REQUEST_PICK_ATTACHMENT) return
         val result = pendingFileResult ?: return
         pendingFileResult = null
@@ -188,6 +227,63 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+    }
+
+    private fun finishSaveBackup(resultCode: Int, data: Intent?) {
+        val result = pendingBackupResult ?: return
+        val bytes = pendingBackupBytes
+        val name = pendingBackupName
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            clearPendingBackup()
+            result.success(null)
+            return
+        }
+        if (uri.scheme != "content" || bytes == null || name == null) {
+            clearPendingBackup()
+            result.error("save_failed", "Backup destination is unavailable", null)
+            return
+        }
+        filePickerExecutor.execute {
+            try {
+                val output = contentResolver.openOutputStream(uri, "wt")
+                    ?: error("Cannot open backup destination")
+                output.use { stream ->
+                    stream.write(bytes)
+                    stream.flush()
+                }
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        clearPendingBackup()
+                        result.success(mapOf("name" to name, "bytes" to bytes.size))
+                    }
+                }
+            } catch (error: Exception) {
+                // A failed/partial document is not success. Do not delete the
+                // user's chosen destination; it may have held an older file.
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        clearPendingBackup()
+                        result.error("save_failed", "Cannot save backup file", null)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun clearPendingBackup() {
+        pendingBackupResult = null
+        pendingBackupBytes = null
+        pendingBackupName = null
+    }
+
+    private fun sanitizeBackupName(raw: String?): String? {
+        val base = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val basename = base.substringAfterLast('/').substringAfterLast('\\').trim()
+        val cleaned = basename.filter { it.code >= 32 && it.code != 127 }.trim().trimStart('.')
+        if (cleaned.isEmpty()) return null
+        val withExtension = if (cleaned.endsWith(".json", ignoreCase = true)) cleaned else "$cleaned.json"
+        return if (withExtension.length <= 100) withExtension else withExtension.take(95) + ".json"
     }
 
     private fun copyPickedFile(uri: Uri): File {
@@ -246,6 +342,10 @@ class MainActivity : FlutterActivity() {
         cancelBiometric()
         pendingFileResult?.success(null)
         pendingFileResult = null
+        pendingBackupResult?.success(null)
+        pendingBackupResult = null
+        pendingBackupBytes = null
+        pendingBackupName = null
         filePickerExecutor.shutdownNow()
         super.onDestroy()
     }

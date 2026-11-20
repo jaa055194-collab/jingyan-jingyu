@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/lifecycle_api.dart';
+import 'backup_files.dart';
 
 /// Read-only quota/disk + lifecycle view with EXPLICIT export/import actions.
 ///
@@ -18,6 +19,7 @@ class BackupQuotaScreen extends StatefulWidget {
     this.loadQuota,
     this.loadSurvey,
     this.api,
+    this.backupFiles,
   });
 
   final Future<LifecycleQuotaStatus> Function()? loadQuota;
@@ -27,6 +29,9 @@ class BackupQuotaScreen extends StatefulWidget {
   /// Settings entry passes only the read loaders; without this the write actions
   /// are honestly disabled rather than invented.
   final LifecycleApi? api;
+
+  /// Optional platform file destination. Save stays unavailable unless injected.
+  final BackupFileStore? backupFiles;
 
   @override
   State<BackupQuotaScreen> createState() => _BackupQuotaScreenState();
@@ -161,6 +166,32 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
     }
   }
 
+  Future<void> _saveToFile() async {
+    final store = widget.backupFiles;
+    final bundle = _exported;
+    if (store == null || bundle == null || _busy) return;
+    setState(() {
+      _busy = true;
+      _actionNotice = null;
+    });
+    try {
+      final saved = await store.save(bundle);
+      if (!mounted) return;
+      setState(() {
+        _actionNotice = saved == null
+            ? '已取消保存。'
+            : '已保存导出文件：${saved.name}（${_bytes(saved.bytes)}）。'
+                  '文件含聊天明文，请妥善保管。';
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _actionNotice = '导出文件保存失败或结果未确认；不会自动重试。');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _import() async {
     final api = widget.api;
     final bundle = _exported;
@@ -235,7 +266,8 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
             '人格 ${report.importedPersona}，会话 ${report.importedConversations}，'
             '消息 ${report.importedMessages}，记忆 ${report.importedMemories}，'
             '附件 ${report.importedAttachments}，冲突 ${report.conflicts.length}，'
-            '校验和${report.checksumVerified ? '通过' : '未通过'}。';
+            '校验和${report.checksumVerified ? '通过' : '未通过'}。'
+            '当前宿主导入仍为内存参考实现，重启后不会保留。';
       });
     } catch (_) {
       if (mounted) {
@@ -345,6 +377,17 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
                 child: const Text('导出'),
               ),
               FilledButton(
+                key: const Key('save-lifecycle'),
+                onPressed:
+                    actionsAvailable &&
+                        widget.backupFiles != null &&
+                        !_busy &&
+                        _exported != null
+                    ? _saveToFile
+                    : null,
+                child: const Text('保存到文件'),
+              ),
+              FilledButton(
                 key: const Key('import-lifecycle'),
                 onPressed: actionsAvailable && !_busy && _exported != null
                     ? _import
@@ -357,6 +400,10 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
           if (!actionsAvailable)
             const Text('当前入口未接线宿主连接：导出/导入不可用（需装配 LifecycleApi）。'),
           if (actionsAvailable && _exported == null) const Text('导入需先成功导出到内存。'),
+          if (actionsAvailable && widget.backupFiles == null)
+            const Text('未接线本机文件保存：导出仍可查看，保存到文件不可用。'),
+          if (actionsAvailable)
+            const Text('保存的文件为聊天明文；宿主导入当前仍为内存参考实现，重启后不会保留。'),
           if (actionsAvailable) ...[
             Text(
               '清理预览（只读，不执行）',
