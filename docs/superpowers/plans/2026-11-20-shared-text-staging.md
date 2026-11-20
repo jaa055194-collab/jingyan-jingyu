@@ -2,7 +2,7 @@
 
 **Goal:** Existing Android system-share deliveries no longer disappear on cold start or overwrite whichever conversation happens to be selected. Shared text is staged privately in memory, explicitly assigned to an empty visible conversation draft, then sent only by the ordinary separate Send action.
 
-**Baseline:** main `84410bdaae5c658f0ccf1cccee01b25736dabed9`, no dependency on chat-export branch. Source authority: #131 B; v4.2 FR-09/13, AC-16/32. No Android device operation tonight.
+**Baseline:** main `a508ccd9be12af0ce27ffba59ffdd8c778b3251f`; implementation commit follows. Source authority: #131 B; v4.2 FR-09/13, AC-16/32. No Android device operation tonight.
 
 ## Constraints and task contracts
 
@@ -18,6 +18,17 @@
 Task A runtime+kit: `apps/client_flutter/lib/app/runtime.dart`, `packages/jingyu_client_kit/lib/src/shell_controller.dart`, new `runtime_share_intake_test.dart`, existing shell tests. Read typed UI contract from teammate; no native/host.
 Task B UI: `shell_view_model.dart`, `shell_app.dart` and new `share_target_confirmation_test.dart` (or extract a tiny feature panel only if clearer). No runtime writes.
 Lead integrates, verifies source constraints/traceability, full Flutter/root, short-path builds, independent review and matched real app captures, then focused PR/CI. Keep cancel, occupied draft, malformed/URI-only, cold+warm parity/startup delivery, old-dialog/new-share, lock+account queued save tests.
+
+## Execution
+
+- [x] RED: warm share overwrote the selected draft and a failed checkpoint published a new kit memory draft.
+- [x] Typed cold+warm intake, draft preservation, pending-first policy, bounded/URI rejection, startup logout and lock invalidation; runtime focused 9/9.
+- [x] Guarded kit `saveDraft(checkActive)` keeps prior draft on failed/cancelled write; shell suite 19/19.
+- [x] Explicit target panel at 375/768/1280, occupied/empty/error/cancel/stale/lock/busy cases; UI focused 9/9 and analysis clean.
+- [x] Full Flutter (643 passed, one existing skip) and analysis clean; focused runtime/auth/text, UI and kit suites pass in the short-path source; matched production captures and independent review.
+- [ ] Repository-wide checks and Windows/Android debug builds from the clean short path; publish focused PR and bind the ticket; final CI remains the review gate.
+
+Evidence: [matched application captures](../../../apps/client_flutter/evidence/shared-text-staging.md).
 
 ## Limits
 
