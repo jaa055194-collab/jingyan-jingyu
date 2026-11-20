@@ -88,6 +88,24 @@ abstract class ShellViewModel extends ChangeNotifier {
   String? get selectedAttachmentName => null;
   Future<void> sendSelectedAttachment() async {}
   Future<void> discardSelectedAttachment() async {}
+
+  /// The persisted/visible draft for a conversation, without changing selection.
+  String draftFor(String conversationId) => '';
+
+  /// A transient OS-shared text value; never includes native intent fields.
+  ShellIncomingShare? get incomingSharedText => null;
+  String? get incomingShareNotice => null;
+
+  /// Changes whenever a pending share or its authenticated target is invalidated.
+  Object? get shareInteractionContext => null;
+
+  Future<bool> useSharedTextInDraft(
+    String conversationId, {
+    required Object interactionContext,
+  }) async => false;
+
+  Future<void> discardSharedText() async {}
+
   Future<void> setAppLock(bool enabled, String pin);
   Future<void> unlock(String pin);
   Future<void> setHideNotificationBody(bool value);
@@ -125,6 +143,12 @@ class ShellOwnAiDirectState {
   final bool? enabled;
   final String? conversationId;
   final String? notice;
+}
+
+class ShellIncomingShare {
+  const ShellIncomingShare({required this.text});
+
+  final String text;
 }
 
 class ShellOwnedAi {

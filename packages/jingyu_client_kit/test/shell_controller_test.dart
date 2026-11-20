@@ -10,10 +10,15 @@ class MemoryPersistence implements ClientPersistence {
   bool fail = false;
   int writeAttempts = 0;
   Future<void> Function()? beforeWrite;
+  Future<void> Function()? beforeRead;
   @override
-  Future<Map<String, Object?>?> read() async => data == null
-      ? null
-      : Map<String, Object?>.from(jsonDecode(jsonEncode(data)) as Map);
+  Future<Map<String, Object?>?> read() async {
+    await beforeRead?.call();
+    return data == null
+        ? null
+        : Map<String, Object?>.from(jsonDecode(jsonEncode(data)) as Map);
+  }
+
   @override
   Future<void> write(Map<String, Object?> snapshot) async {
     writeAttempts++;
@@ -49,6 +54,67 @@ ClientShellController historyShell(
 );
 
 void main() {
+  test('a failed draft checkpoint retains the prior draft in memory', () async {
+    final store = MemoryPersistence();
+    final shell = historyShell(store);
+    await shell.initialize();
+    await shell.saveDraft('c', 'previous');
+    final snapshot = await store.read();
+    store.fail = true;
+
+    await expectLater(
+      shell.saveDraft('c', 'new draft', checkActive: () {}),
+      throwsStateError,
+    );
+    expect(shell.draftFor('c'), 'previous');
+    expect(await store.read(), snapshot);
+  });
+
+  for (final boundary in ['queue', 'read']) {
+    test('guarded draft cancels at shared writer $boundary boundary', () async {
+      final store = MemoryPersistence();
+      final shell = historyShell(store);
+      await shell.initialize();
+      await shell.saveDraft('c', 'previous');
+      final started = Completer<void>(), release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      Future<void>? other;
+      if (boundary == 'queue') {
+        store.beforeWrite = () async {
+          if (!started.isCompleted) started.complete();
+          await release.future;
+        };
+        other = writeClientSection(store, 'consent', {'allowed': false});
+        await started.future;
+      } else {
+        store.beforeRead = () async {
+          if (!started.isCompleted) started.complete();
+          await release.future;
+        };
+      }
+      var active = true;
+      final failed = expectLater(
+        shell.saveDraft(
+          'c',
+          'incoming',
+          checkActive: () {
+            if (!active) throw StateError('expired');
+          },
+        ),
+        throwsStateError,
+      );
+      if (boundary == 'read') await started.future;
+      active = false;
+      release.complete();
+      await other;
+      await failed;
+      expect(shell.draftFor('c'), 'previous');
+      expect(((store.data!['shell'] as Map)['drafts'] as Map)['c'], 'previous');
+    });
+  }
+
   test(
     'a floor-only checkpoint restores before visible history arrives',
     () async {
