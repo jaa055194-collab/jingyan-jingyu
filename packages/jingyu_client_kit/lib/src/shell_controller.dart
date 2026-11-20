@@ -174,10 +174,18 @@ class ClientShellController {
     }
   });
 
-  Future<void> saveDraft(String id, String text) => _serial.run(() async {
+  /// Publishes a draft only after its snapshot replacement succeeds.
+  /// [checkActive] can cancel before the shared writer reads or replaces the
+  /// snapshot. A replacement that has already started cannot be cancelled.
+  Future<void> saveDraft(
+    String id,
+    String text, {
+    void Function()? checkActive,
+  }) => _serial.run(() async {
     _requireInitialized();
+    checkActive?.call();
+    await _persist(drafts: {..._drafts, id: text}, checkActive: checkActive);
     _drafts[id] = text;
-    await _persist();
   });
   int lastSeqFor(String conversationId) =>
       _cursors[conversationId]?.lastSeq ?? 0;

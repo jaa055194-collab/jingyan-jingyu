@@ -41,6 +41,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   int _generation = 0;
   bool _disposed = false;
   bool _switching = false;
+  bool _earlyLockRequested = false;
+  bool _earlyLogoutRequested = false;
+  bool _initialSessionRestore = true;
+  ShellIncomingShare? _sharedText;
+  String? _shareNotice;
+  Object _shareEpoch = Object();
+  _ShareInteractionContext? _shareContext;
   late FilePersistence storage;
   late ClientShellController shell;
   late AppLockController appLock;
@@ -113,8 +120,204 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool get online => _online;
   @override
   String? get error => _error;
+
+  bool get _shareIntakeOpen =>
+      !_disposed &&
+      !_switching &&
+      !_sessionRejected &&
+      !_earlyLogoutRequested &&
+      (_initialSessionRestore || authenticated);
+
+  ShellIncomingShare? get _sharedTextView => _sharedText;
+
+  bool get _canShowSharedText =>
+      _controllersReady &&
+      authenticated &&
+      !_sessionRejected &&
+      !locked &&
+      !_switching &&
+      !_disposed;
+
+  @override
+  ShellIncomingShare? get incomingSharedText =>
+      _canShowSharedText ? _sharedTextView : null;
+
+  @override
+  String? get incomingShareNotice => _canShowSharedText ? _shareNotice : null;
+
+  @override
+  Object? get shareInteractionContext {
+    if (!_canShowSharedText || _sharedText == null) return null;
+    final context = _shareContext;
+    if (context != null &&
+        identical(context.epoch, _shareEpoch) &&
+        identical(context.credentials, _credentials) &&
+        identical(context.share, _sharedText)) {
+      return context;
+    }
+    final next = _ShareInteractionContext(
+      _shareEpoch,
+      _credentials,
+      _sharedText!,
+    );
+    _shareContext = next;
+    return next;
+  }
+
+  void _invalidateSharedTextContext({bool discard = false}) {
+    _shareEpoch = Object();
+    _shareContext = null;
+    if (discard) {
+      _sharedText = null;
+      _shareNotice = null;
+    }
+  }
+
+  void _registerNativeHandler() {
+    NativePlatform.channel.setMethodCallHandler((call) async {
+      if (_disposed) return;
+      if (call.method == 'event') {
+        final type = (call.arguments as Map?)?['type'];
+        if (type == 'lock') {
+          _invalidateSharedTextContext();
+          if (!_controllersReady) {
+            _earlyLockRequested = true;
+          } else {
+            appLock.lock();
+            notifyListeners();
+          }
+        } else if (type == 'logout') {
+          _invalidateSharedTextContext(discard: true);
+          if (_initialSessionRestore) {
+            _earlyLogoutRequested = true;
+            return;
+          }
+          await _logout();
+        }
+      } else if (call.method == 'shareReceived') {
+        _acceptSharePayload(call.arguments);
+      }
+    });
+  }
+
+  void _acceptSharePayload(Object? raw) {
+    if (!_shareIntakeOpen) return;
+    if (_sharedText != null) {
+      _shareNotice = '已有分享待处理';
+      if (_canShowSharedText) notifyListeners();
+      return;
+    }
+    if (raw is! Map ||
+        !raw.containsKey('text') ||
+        raw['text'] is! String ||
+        (raw['text'] as String).trim().isEmpty ||
+        (raw['mimeType'] != null && raw['mimeType'] != 'text/plain') ||
+        (raw['uris'] != null &&
+            (raw['uris'] is! List || (raw['uris'] as List).isNotEmpty))) {
+      _shareNotice = '无法使用此分享内容';
+      if (_canShowSharedText) notifyListeners();
+      return;
+    }
+    final text = raw['text'] as String;
+    if (utf8.encode(text).length > 64 * 1024) {
+      _shareNotice = '分享内容过长，无法暂存';
+      if (_canShowSharedText) notifyListeners();
+      return;
+    }
+    _sharedText = ShellIncomingShare(text: text);
+    _shareNotice = null;
+    _invalidateSharedTextContext();
+    if (_canShowSharedText) notifyListeners();
+  }
+
+  @override
+  Future<void> discardSharedText() async {
+    _invalidateSharedTextContext(discard: true);
+    notifyListeners();
+  }
+
+  @override
+  Future<bool> useSharedTextInDraft(
+    String conversationId, {
+    required Object interactionContext,
+  }) async {
+    final pending = _sharedText;
+    if (!_canShowSharedText ||
+        _busy ||
+        pending == null ||
+        !identical(interactionContext, shareInteractionContext)) {
+      return false;
+    }
+    final sessionShell = shell;
+    final generation = _generation;
+    final selected = _selected;
+    final targetRevision = _draftRevisions[conversationId] ?? 0;
+    var saved = false;
+    void checkActive() {
+      if (!_canShowSharedText ||
+          !_current(generation) ||
+          !identical(shell, sessionShell) ||
+          !identical(_sharedText, pending) ||
+          !identical(interactionContext, shareInteractionContext) ||
+          _selected != selected ||
+          (_draftRevisions[conversationId] ?? 0) != targetRevision ||
+          !_conversations.any(
+            (conversation) => conversation.id == conversationId,
+          )) {
+        throw const _SharedTextInterrupted();
+      }
+      if (sessionShell.draftFor(conversationId).isNotEmpty ||
+          (_selected == conversationId && _draft.isNotEmpty)) {
+        throw const _SharedTextInterrupted();
+      }
+    }
+
+    try {
+      checkActive();
+      _busy = true;
+      notifyListeners();
+      await sessionShell.saveDraft(
+        conversationId,
+        pending.text,
+        checkActive: checkActive,
+      );
+      saved = true;
+      final canPublish =
+          _canShowSharedText &&
+          _current(generation) &&
+          identical(shell, sessionShell) &&
+          identical(interactionContext, shareInteractionContext) &&
+          _selected == selected &&
+          (_draftRevisions[conversationId] ?? 0) == targetRevision;
+      if (identical(_sharedText, pending)) {
+        _invalidateSharedTextContext(discard: true);
+      }
+      if (!canPublish) return false;
+      _selected = conversationId;
+      _draft = pending.text;
+      _draftRevisions[conversationId] = targetRevision + 1;
+      unawaited(_clearAttachmentSelection());
+      return true;
+    } on _SharedTextInterrupted {
+      return false;
+    } catch (_) {
+      if (_current(generation) && !saved) _shareNotice = '分享草稿保存失败';
+      return false;
+    } finally {
+      if (_current(generation)) _busy = false;
+      notifyListeners();
+    }
+  }
+
   @override
   String? get selectedConversationId => _selected;
+
+  @override
+  String draftFor(String conversationId) {
+    if (_selected == conversationId) return _draft;
+    return _controllersReady ? shell.draftFor(conversationId) : '';
+  }
+
   @override
   List<ShellConversation> get conversations => _conversations;
   @override
@@ -189,8 +392,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Future<void> initialize() async {
     final generation = _generation;
     WidgetsBinding.instance.addObserver(this);
+    _registerNativeHandler();
     try {
-      await native.invoke<Object?>('initialize');
+      final nativeState = await native.invoke<Object?>('initialize');
+      if (nativeState is Map && nativeState['pendingShare'] != null) {
+        _acceptSharePayload(nativeState['pendingShare']);
+      }
+      if (!_current(generation)) return;
       final directory = await native.invoke<String>('getDataDirectory');
       if (directory == null) throw const FileSystemException('本地目录不可用');
       _dataRoot = Directory(directory);
@@ -208,6 +416,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         auth: native,
         invalidate: () {
           _invalidateOwnAiDirect();
+          _invalidateSharedTextContext();
           if (appLock.enabled) _historySyncEpoch++;
         },
       );
@@ -219,8 +428,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       );
       if (!_current(generation)) return;
       _publishSnapshot(guest);
-      final saved = await native.invoke<String>('readSession');
-      if (saved != null) {
+      final saved = _earlyLogoutRequested
+          ? null
+          : await native.invoke<String>('readSession');
+      if (_earlyLogoutRequested) {
+        await native.invoke<void>('clearSession');
+      }
+      if (saved != null && !_earlyLogoutRequested) {
         try {
           final decoded = jsonDecode(saved);
           if (decoded is! Map<String, dynamic>) throw const FormatException();
@@ -237,42 +451,26 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
             await prepared.transport?.close();
             return;
           }
-          _credentials = credentials;
-          _publishSnapshot(prepared);
-          connection = _newConnection(credentials, generation);
-          _onboarded = decoded['onboarded'] == true;
-          _chatEntered = _chatEntered || _onboarded;
+          if (_earlyLogoutRequested) {
+            await prepared.transport?.close();
+            await native.invoke<void>('clearSession');
+          } else {
+            _credentials = credentials;
+            _publishSnapshot(prepared);
+            connection = _newConnection(credentials, generation);
+            _onboarded = decoded['onboarded'] == true;
+            _chatEntered = _chatEntered || _onboarded;
+          }
         } on FormatException {
           // Old unscoped credentials are not paired with private legacy data.
           _error = '旧登录记录缺少账号或设备身份，请重新登录；本地旧数据保持不变';
         }
       }
       if (!_current(generation)) return;
-      NativePlatform.channel.setMethodCallHandler((call) async {
-        if (_disposed) return;
-        if (call.method == 'event' &&
-            (call.arguments as Map?)?['type'] == 'lock') {
-          appLock.lock();
-          notifyListeners();
-        }
-        if (call.method == 'event' &&
-            (call.arguments as Map?)?['type'] == 'logout') {
-          await _logout();
-        }
-        if (call.method == 'shareReceived') {
-          final data = call.arguments as Map;
-          if (_selected != null) {
-            _draftRevisions.update(
-              _selected!,
-              (revision) => revision + 1,
-              ifAbsent: () => 1,
-            );
-          }
-          _draft = data['text']?.toString() ?? '';
-          if (_selected != null) await shell.saveDraft(_selected!, _draft);
-          notifyListeners();
-        }
-      });
+      _initialSessionRestore = false;
+      _earlyLogoutRequested = false;
+      if (!authenticated) _invalidateSharedTextContext(discard: true);
+      if (_earlyLockRequested) appLock.lock();
       _ready = true;
       if (connection != null && !locked) unawaited(_refresh());
       reconnect = Timer.periodic(const Duration(seconds: 15), (_) {
@@ -405,6 +603,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         return false;
       }
       _credentials = rotated;
+      _invalidateSharedTextContext();
       _pendingRenewal = null;
       connection?.updateAccessToken(rotated.accessToken);
       _submissionTransport?.updateAccessToken(rotated.accessToken);
@@ -414,6 +613,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         if (error is HostRequestException &&
             error.failure.code == FailureCode.unauthenticated) {
           _sessionRejected = true;
+          _invalidateSharedTextContext(discard: true);
           _invalidateOwnAiDirect();
           _ownAiAccounts = [];
           _ownAiNotice = null;
@@ -492,6 +692,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   HostConnection? _submissionTransport;
 
   Future<void> _logout() async {
+    _invalidateSharedTextContext(discard: true);
     final generation = ++_generation;
     _invalidateOwnAiDirect();
     _pendingMention = null;
@@ -732,6 +933,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     }
     if (!_current(generation)) return;
     _switching = true;
+    _invalidateSharedTextContext(discard: true);
     _PreparedSnapshot? prepared;
     var published = false;
     try {
@@ -993,6 +1195,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         error.failure.code == FailureCode.unauthenticated &&
         error.failure.details['authenticationRenewalFailed'] != true) {
       _sessionRejected = true;
+      _invalidateSharedTextContext(discard: true);
       _invalidateOwnAiDirect();
       _online = false;
       _ownAiAccounts = [];
@@ -1307,7 +1510,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   Future<void> selectConversation(String id) async {
-    if (_selected != id) unawaited(_clearAttachmentSelection());
+    if (_selected != id) {
+      _invalidateSharedTextContext();
+      unawaited(_clearAttachmentSelection());
+    }
     _selected = id;
     _draft = shell.draftFor(id);
     notifyListeners();
@@ -1690,6 +1896,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   });
   @override
   Future<void> unlock(String pin) => _run(() async {
+    _invalidateSharedTextContext();
     if (!await appLock.unlockWithPin(pin)) {
       throw const FormatException('PIN 不正确');
     }
@@ -1742,6 +1949,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _invalidateSharedTextContext(discard: true);
     ++_generation;
     _invalidateOwnAiDirect();
     _pendingMention = null;
@@ -1757,6 +1965,17 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _submissionTransport = null;
     super.dispose();
   }
+}
+
+class _SharedTextInterrupted implements Exception {
+  const _SharedTextInterrupted();
+}
+
+class _ShareInteractionContext {
+  const _ShareInteractionContext(this.epoch, this.credentials, this.share);
+  final Object epoch;
+  final ClientCredentials? credentials;
+  final ShellIncomingShare share;
 }
 
 /// Capture even direct appLock.lock() calls without changing lock behavior or

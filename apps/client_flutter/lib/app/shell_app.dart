@@ -14,6 +14,7 @@ import '../features/contacts/contacts_screen.dart';
 import '../net/friends_api.dart';
 import '../features/inbox/inbox_screen.dart';
 import '../features/creative/creative_screen.dart';
+import '../features/share/shared_text_panel.dart';
 
 class WhaleChatApp extends StatefulWidget {
   const WhaleChatApp({super.key, required this.model});
@@ -70,26 +71,30 @@ class _WhaleChatAppState extends State<WhaleChatApp> {
 
 // Observes route intent without altering any push, pop, or back behavior. A
 // generation tracks transient dialogs/pages even if the source is current again.
-class _NavigationIntentObserver extends NavigatorObserver {
+class _NavigationIntentObserver extends NavigatorObserver with ChangeNotifier {
   int generation = 0;
+
+  void advance() {
+    generation++;
+    notifyListeners();
+  }
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) =>
-      generation++;
+      advance();
   @override
-  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) =>
-      generation++;
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) => advance();
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) =>
-      generation++;
+      advance();
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
-      generation++;
+      advance();
   @override
   void didStartUserGesture(
     Route<dynamic> route,
     Route<dynamic>? previousRoute,
-  ) => generation++;
+  ) => advance();
 }
 
 class _ShellHome extends StatefulWidget {
@@ -420,6 +425,25 @@ class _ShellHomeState extends State<_ShellHome> {
               Expanded(
                 child: Column(
                   children: [
+                    if (model.authenticated && !model.locked)
+                      SharedTextPanel(
+                        model: model,
+                        navigationGeneration: () =>
+                            widget.navigation.generation,
+                        navigationChanges: widget.navigation,
+                        onApplied: () async {
+                          if (!mounted ||
+                              !model.authenticated ||
+                              model.locked) {
+                            return;
+                          }
+                          setState(() {
+                            destination = 0;
+                            settings = false;
+                            if (!wide) mobileChat = true;
+                          });
+                        },
+                      ),
                     if (model.busy) const LinearProgressIndicator(),
                     if (model.error != null)
                       Material(
