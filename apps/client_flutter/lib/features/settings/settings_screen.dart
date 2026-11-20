@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../../app/runtime.dart';
@@ -20,6 +22,8 @@ import '../ai_config/model_diagnostics_screen.dart';
 import '../attachments/attachments_list_screen.dart';
 import '../attachments/attachments_screen.dart';
 import '../diagnostics/module_test_panel.dart';
+import '../lifecycle/backup_file_preview.dart';
+import '../lifecycle/backup_file_preview_panel.dart';
 import '../lifecycle/backup_files.dart';
 import '../lifecycle/backup_quota_screen.dart';
 import '../search/search_screen.dart';
@@ -41,17 +45,63 @@ class SettingsScreen extends StatelessWidget {
   final Future<void> Function(BuildContext, String)? onOpenOwnAiChat;
   final String? checkingOwnAiAccount;
 
-  /// Builds the lifecycle/backup screen, wiring the real [LifecycleApi] when a
-  /// host connection exists so export/import are usable. Cleanup stays disabled
-  /// (no merged host cleanup route). Exposed for focused wiring tests.
-  static BackupQuotaScreen lifecycleScreenFor(ShellViewModel model) {
+  /// Builds the existing lifecycle screen; Settings pins optional local preview
+  /// access when the route opens, not when the shell later rebuilds.
+  static BackupQuotaScreen lifecycleScreenFor(
+    ShellViewModel model, {
+    BackupFilePreviewAccess? filePreview,
+  }) {
     final connection = model is ClientRuntime ? model.connection : null;
     return BackupQuotaScreen(
       api: connection == null ? null : LifecycleApi(connection),
       backupFiles: connection == null
           ? null
           : NativeBackupFileStore(NativePlatform()),
+      filePreview: filePreview,
       canWritePlaintext: model.authenticated && !model.locked,
+    );
+  }
+
+  static BackupFilePreviewAccess? _captureFilePreview(ShellViewModel model) {
+    if (!Platform.isWindows ||
+        model is! ClientRuntime ||
+        !model.authenticated ||
+        model.locked) {
+      return null;
+    }
+    final runtime = model;
+    final owner = runtime.connectedAccountId;
+    final connection = runtime.connection;
+    final epoch = runtime.ownAiSessionContext;
+    final lockEnabled = runtime.appLockEnabled;
+    final lockEpoch = runtime.ownAiDirectContext;
+    if (owner == null ||
+        connection == null ||
+        epoch == null ||
+        lockEpoch == null) {
+      return null;
+    }
+    final platform = NativePlatform();
+    return (
+      session: runtime,
+      isCurrent: () {
+        final interaction = runtime.ownAiDirectContext;
+        // Inactive can advance this epoch even with the PIN disabled. A real
+        // lock still invalidates the route, including before its first frame.
+        return runtime.authenticated &&
+            !runtime.locked &&
+            runtime.appLockEnabled == lockEnabled &&
+            runtime.connectedAccountId == owner &&
+            runtime.ownAiSessionContext == epoch &&
+            interaction != null &&
+            (!lockEnabled || identical(interaction, lockEpoch)) &&
+            identical(runtime.connection, connection);
+      },
+      pick: (isCurrent) => pickBackupFilePreview(
+        platform: platform,
+        expectedOwnerAccountId: owner,
+        isCurrent: isCurrent,
+      ),
     );
   }
 
@@ -469,13 +519,15 @@ class SettingsScreen extends StatelessWidget {
               subtitle: const Text('只读查看当前账号配额与生命周期对象清点；不代表可用或已授权'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
+                final filePreview = _captureFilePreview(model);
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    // The pushed route outlives a lock, so re-evaluate the
-                    // session on every build and disable plaintext writes.
+                    // Keep the existing export/import gates live. Local preview
+                    // callbacks stay on the original session for this route.
                     builder: (_) => ListenableBuilder(
                       listenable: model,
-                      builder: (_, _) => lifecycleScreenFor(model),
+                      builder: (_, _) =>
+                          lifecycleScreenFor(model, filePreview: filePreview),
                     ),
                   ),
                 );

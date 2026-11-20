@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/lifecycle_api.dart';
+import 'backup_file_preview_panel.dart';
 import 'backup_files.dart';
 
 /// Read-only quota/disk + lifecycle view with EXPLICIT export/import actions.
@@ -20,6 +21,7 @@ class BackupQuotaScreen extends StatefulWidget {
     this.loadSurvey,
     this.api,
     this.backupFiles,
+    this.filePreview,
     this.canWritePlaintext = true,
   });
 
@@ -33,6 +35,9 @@ class BackupQuotaScreen extends StatefulWidget {
 
   /// Optional platform file destination. Save stays unavailable unless injected.
   final BackupFileStore? backupFiles;
+
+  /// Local preview is separate from the host-exported bundle used by import.
+  final BackupFilePreviewAccess? filePreview;
 
   /// Whether the surrounding session is currently unlocked and still bound to
   /// the account whose bundle is in memory. A pushed route survives a lock, so
@@ -439,6 +444,11 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
             const Text(
               key: Key('lifecycle-write-locked'),
               '当前已锁定或账号状态已变化：保存和导入已停用。',
+            ),
+          if (widget.filePreview case final access?)
+            BackupFilePreviewPanel(
+              access: access,
+              enabled: !_busy && widget.canWritePlaintext,
             ),
           if (actionsAvailable) ...[
             Text(
