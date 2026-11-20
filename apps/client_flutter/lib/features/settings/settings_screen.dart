@@ -45,6 +45,7 @@ class SettingsScreen extends StatelessWidget {
       backupFiles: connection == null
           ? null
           : NativeBackupFileStore(NativePlatform()),
+      canWritePlaintext: model.authenticated && !model.locked,
     );
   }
 
@@ -402,7 +403,12 @@ class SettingsScreen extends StatelessWidget {
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) => lifecycleScreenFor(model),
+                    // The pushed route outlives a lock, so re-evaluate the
+                    // session on every build and disable plaintext writes.
+                    builder: (_) => ListenableBuilder(
+                      listenable: model,
+                      builder: (_, _) => lifecycleScreenFor(model),
+                    ),
                   ),
                 );
               },

@@ -176,12 +176,24 @@ std::optional<std::wstring> PromptBackupPath(HWND window, const std::wstring& su
   throw std::runtime_error("Cannot open backup save dialog");
 }
 // Write next to the destination, flush, then replace so a crash or full disk
-// never leaves a truncated backup that looks like a successful save.
+// never leaves a truncated backup that looks like a successful save. The unique
+// sibling name means a pre-existing file is never truncated before the OS
+// overwrite prompt has been accepted.
 void WriteBackupFile(const std::wstring& path, const std::vector<uint8_t>& bytes) {
-  const std::wstring temporary = path + L".jingyu-backup-tmp";
+  // GetTempFileNameW needs a directory, not the chosen file path.
+  const auto separator = path.find_last_of(L"\\/");
+  if (separator == std::wstring::npos) throw std::runtime_error("Cannot create backup file");
+  const std::wstring directory = path.substr(0, separator + 1);
+  wchar_t tempName[MAX_PATH]{};
+  if (!GetTempFileNameW(directory.c_str(), L"jyb", 0, tempName))
+    throw std::runtime_error("Cannot create backup file");
+  const std::wstring temporary = tempName;
   HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                             FILE_ATTRIBUTE_TEMPORARY, nullptr);
-  if (file == INVALID_HANDLE_VALUE) throw std::runtime_error("Cannot create backup file");
+  if (file == INVALID_HANDLE_VALUE) {
+    DeleteFileW(temporary.c_str());
+    throw std::runtime_error("Cannot create backup file");
+  }
   bool writtenAll = true;
   size_t offset = 0;
   while (writtenAll && offset < bytes.size()) {

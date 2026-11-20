@@ -20,6 +20,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val REQUEST_PICK_ATTACHMENT = 1201
         private const val REQUEST_SAVE_BACKUP = 1202
+        private const val MAX_BACKUP_BYTES = 4 * 1024 * 1024
     }
 
     private lateinit var channel: MethodChannel
@@ -143,8 +144,8 @@ class MainActivity : FlutterActivity() {
                             val suggestedName = sanitizeBackupName(call.argument<String>("suggestedName"))
                             val bytes = call.argument<ByteArray>("bytes")
                             val maxBytes = call.argument<Int>("maxBytes")
-                            if (suggestedName == null || bytes == null || bytes.isEmpty() || maxBytes == null || maxBytes <= 0) {
-                                result.error("invalid_arguments", "Backup name, bytes and a positive limit are required", null)
+                            if (suggestedName == null || bytes == null || bytes.isEmpty() || maxBytes == null || maxBytes <= 0 || maxBytes > MAX_BACKUP_BYTES) {
+                                result.error("invalid_arguments", "Backup name, bytes and a valid limit are required", null)
                             } else if (bytes.size > maxBytes) {
                                 result.error("invalid_arguments", "Backup exceeds the requested byte limit", null)
                             } else {
@@ -252,10 +253,23 @@ class MainActivity : FlutterActivity() {
                     stream.write(bytes)
                     stream.flush()
                 }
+                // The user may have renamed the document or the provider may
+                // dedupe it; report what the destination actually says, and
+                // report the destination's real length rather than the input.
+                val actualName = contentResolver.query(
+                    uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }?.trim()?.takeIf { it.isNotEmpty() } ?: name
+                val writtenBytes = contentResolver.openFileDescriptor(uri, "r")
+                    ?.use { descriptor -> descriptor.statSize }
+                    ?.takeIf { it == bytes.size.toLong() }
+                    ?.toInt()
+                    ?: error("Backup destination size does not match")
                 runOnUiThread {
                     if (!isDestroyed) {
                         clearPendingBackup()
-                        result.success(mapOf("name" to name, "bytes" to bytes.size))
+                        result.success(mapOf("name" to actualName, "bytes" to writtenBytes))
                     }
                 }
             } catch (error: Exception) {

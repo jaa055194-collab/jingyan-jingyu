@@ -148,10 +148,15 @@ void main() {
     WidgetTester tester,
     LifecycleApi api, {
     BackupFileStore? backupFiles,
+    bool canWritePlaintext = true,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: BackupQuotaScreen(api: api, backupFiles: backupFiles),
+        home: BackupQuotaScreen(
+          api: api,
+          backupFiles: backupFiles,
+          canWritePlaintext: canWritePlaintext,
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -284,6 +289,42 @@ void main() {
       expect(tester.widget<FilledButton>(save).onPressed, isNull);
     },
   );
+
+  testWidgets(
+    'locked or switched session cannot save or import the old bundle',
+    (tester) async {
+      final api = _FakeApi();
+      final files = _FakeBackupFiles();
+      await pump(tester, api, backupFiles: files);
+      await tapKey(tester, 'export-lifecycle');
+      expect(find.byKey(const Key('save-lifecycle')), findsOneWidget);
+
+      await pump(tester, api, backupFiles: files, canWritePlaintext: false);
+      await ensureVisible(tester, 'lifecycle-action-notice');
+      expect(find.textContaining('已清除内存中的导出内容'), findsOneWidget);
+      final save = find.byKey(const Key('save-lifecycle'));
+      final import = find.byKey(const Key('import-lifecycle'));
+      expect(tester.widget<FilledButton>(save).onPressed, isNull);
+      expect(tester.widget<FilledButton>(import).onPressed, isNull);
+      await ensureVisible(tester, 'lifecycle-write-locked');
+      expect(find.byKey(const Key('lifecycle-write-locked')), findsOneWidget);
+      expect(files.calls, 0);
+      expect(api.importCalls, 0);
+    },
+  );
+
+  testWidgets('import confirmation warns that host import is not durable', (
+    tester,
+  ) async {
+    final api = _FakeApi();
+    await pump(tester, api);
+    await tapKey(tester, 'export-lifecycle');
+    await tapKey(tester, 'import-lifecycle');
+    expect(find.textContaining('重启后不会保留'), findsWidgets);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(api.importCalls, 0);
+  });
 
   testWidgets('cancelling import confirmation performs no import', (
     tester,
