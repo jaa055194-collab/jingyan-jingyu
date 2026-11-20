@@ -41,6 +41,21 @@ class NativePlatform implements NativeLockAuth {
     return PlatformSavedFile(name: name.trim(), bytes: written);
   }
 
+  Future<bool> playVoiceMessage({
+    required int requestId,
+    required int epoch,
+    required Uint8List bytes,
+  }) async =>
+      await invoke<bool>('playVoiceMessage', {
+        'requestId': requestId,
+        'epoch': epoch,
+        'bytes': bytes,
+      }) ==
+      true;
+
+  Future<void> stopVoiceMessage(int requestId) =>
+      invoke<void>('stopVoiceMessage', {'requestId': requestId});
+
   Future<T?> invoke<T>(String method, [Map<String, Object?>? arguments]) =>
       channel.invokeMethod<T>(method, arguments);
   @override

@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 
 import '../../app/shell_view_model.dart';
+import 'voice_message_playback.dart';
 
 class ConversationList extends StatelessWidget {
   const ConversationList({
@@ -326,10 +327,57 @@ class ChatPane extends StatefulWidget {
 
 class _ChatPaneState extends State<ChatPane> {
   final composer = TextEditingController();
+  ModalRoute<dynamic>? _voiceRoute;
+  bool _paneActive = true;
+  // Keep one tear-off so an old pane can stop only the attempt it owns.
+  late final bool Function() _voiceViewIsCurrent = _isVoiceViewCurrent;
+  bool _isVoiceViewCurrent() =>
+      mounted && _paneActive && (_voiceRoute?.isCurrent ?? true);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _voiceRoute = ModalRoute.of(context);
+    if (!_voiceViewIsCurrent()) _stopVoice();
+  }
+
+  @override
+  void didUpdateWidget(ChatPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.model, widget.model)) {
+      oldWidget.model.stopVoicePlayback(viewIsCurrent: _voiceViewIsCurrent);
+    }
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    _paneActive = true;
+  }
+
+  @override
+  void deactivate() {
+    _paneActive = false;
+    _stopVoice();
+    super.deactivate();
+  }
+
   @override
   void dispose() {
+    _stopVoice();
     composer.dispose();
     super.dispose();
+  }
+
+  void _stopVoice() =>
+      widget.model.stopVoicePlayback(viewIsCurrent: _voiceViewIsCurrent);
+
+  void _playVoice(ShellMessage message) {
+    widget.model.playVoiceMessage(
+      message.id,
+      viewIsCurrent: _voiceViewIsCurrent,
+      waitForView: () => WidgetsBinding.instance.endOfFrame,
+    );
   }
 
   /// Explicit, bounded image open. Nothing is fetched until the user taps.
@@ -448,6 +496,10 @@ class _ChatPaneState extends State<ChatPane> {
     final canManageAttachment =
         model.authenticated && !model.busy && !model.locked;
     final canSendAttachment = canManageAttachment && model.online;
+    final showVoice = model.supportsVoicePlayback && model.authenticated && !model.locked;
+    final voice = showVoice ? model.voicePlayback : null;
+    final voiceActive = voice?.phase == ShellVoicePhase.loading ||
+        voice?.phase == ShellVoicePhase.playing;
     return Column(
       children: [
         ListTile(
@@ -530,6 +582,17 @@ class _ChatPaneState extends State<ChatPane> {
                                     ),
                                     label: const Text('查看图片'),
                                   ),
+                                ),
+                              if (showVoice && message.voiceAttachment)
+                                VoiceMessagePlaybackControl(
+                                  messageId: message.id,
+                                  phase: voice?.messageId == message.id
+                                      ? voice?.phase
+                                      : null,
+                                  onPlay: model.online && !model.busy && !voiceActive
+                                      ? () => _playVoice(message)
+                                      : null,
+                                  onStop: _stopVoice,
                                 ),
                               const SizedBox(height: 4),
                               Text(

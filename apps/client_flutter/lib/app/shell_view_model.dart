@@ -112,6 +112,20 @@ abstract class ShellViewModel extends ChangeNotifier {
   /// null when the request is stale, refused or unavailable; never throws.
   Future<MessageImage?> openImageAttachment(String messageId) async => null;
 
+  bool get supportsVoicePlayback => false;
+  ShellVoicePlayback? get voicePlayback => null;
+
+  /// Starts one explicit play for a visible, sent voice message. The pane
+  /// supplies its current-route check and, when present, its frame barrier.
+  Future<void> playVoiceMessage(
+    String messageId, {
+    required bool Function() viewIsCurrent,
+    Future<void> Function()? waitForView,
+  }) async {}
+
+  /// The pane can stop only playback it started, including when it is removed.
+  void stopVoicePlayback({bool Function()? viewIsCurrent}) {}
+
   Future<void> setAppLock(bool enabled, String pin);
   Future<void> unlock(String pin);
   Future<void> setHideNotificationBody(bool value);
@@ -119,6 +133,15 @@ abstract class ShellViewModel extends ChangeNotifier {
   Future<void> setThemeMode(ThemeMode value);
   Future<void> setFontScale(double value);
   void clearError();
+}
+
+enum ShellVoicePhase { loading, playing, denied, unavailable }
+
+class ShellVoicePlayback {
+  const ShellVoicePlayback(this.messageId, this.phase);
+
+  final String messageId;
+  final ShellVoicePhase phase;
 }
 
 enum OwnAiChatEntry {
@@ -194,6 +217,7 @@ class ShellMessage {
     this.attachmentId,
     this.attachmentName,
     this.imageAttachment = false,
+    this.voiceAttachment = false,
   });
   final String id;
   final String text;
@@ -204,4 +228,5 @@ class ShellMessage {
   final String? attachmentId;
   final String? attachmentName;
   final bool imageAttachment;
+  final bool voiceAttachment;
 }
