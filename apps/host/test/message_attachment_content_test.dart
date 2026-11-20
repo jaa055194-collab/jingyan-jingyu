@@ -498,7 +498,12 @@ void main() {
           },
         ),
       );
-      expect(edited.status, 200, reason: '${edited.json}');
+      // The edit itself is now refused: an editor may not introduce a reference
+      // to an attachment it could not have sent, so the forged reference never
+      // reaches storage. This assertion predates that rule and used to expect
+      // 200 here; the content read below is 404 either way.
+      expect(edited.status, 404, reason: '${edited.json}');
+      expect(edited.json, {'error': 'not_found'});
       expect((await read(other, 'conv-1', messageId)).status, 404);
     });
 
