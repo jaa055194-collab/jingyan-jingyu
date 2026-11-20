@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -70,10 +72,7 @@ class _InboxScreenState extends State<InboxScreen> {
   String? _message;
   final _outcomes = <String, _RowOutcome>{};
   String? _busyRefId;
-
-  /// Bumped by every (re)read so a late action result cannot be published onto
-  /// a list the user has already replaced.
-  int _loadGeneration = 0;
+  bool get _refreshBlocked => _loading || _busyRefId != null;
 
   @override
   void initState() {
@@ -83,23 +82,21 @@ class _InboxScreenState extends State<InboxScreen> {
 
   Future<void> _load() async {
     final load = widget.loadNotifications;
-    if (!mounted || load == null || _loading) return;
-    final generation = ++_loadGeneration;
+    if (!mounted || load == null || _refreshBlocked) return;
     setState(() {
       _loading = true;
       _message = null;
-      _busyRefId = null;
       _outcomes.clear();
     });
     try {
       final items = await load();
-      if (!mounted || generation != _loadGeneration) return;
+      if (!mounted) return;
       setState(() {
         _items = items;
         _loading = false;
       });
     } catch (error) {
-      if (!mounted || generation != _loadGeneration) return;
+      if (!mounted) return;
       final denied =
           error is HostRequestException &&
           (error.failure.code == FailureCode.forbidden ||
@@ -140,49 +137,68 @@ class _InboxScreenState extends State<InboxScreen> {
   /// Ask for an explicit confirmation. Returns true only for a deliberate
   /// confirmation made against the same session epoch; a lock, logout or
   /// account change while the dialog is open closes it without a write.
-  Future<bool> _confirm(NotificationItem item, {required bool accept}) async {
-    final token = widget.actionContext?.call();
-    if (token == null) return false;
+  Future<bool> _confirm(
+    NotificationItem item,
+    Object token, {
+    required bool accept,
+  }) async {
     final changes = widget.actionChanges;
-    final dialogContexts = <BuildContext>[];
+    final navigator = Navigator.of(context, rootNavigator: true);
+    var invalidated = false;
+    late final DialogRoute<bool> route;
+
+    void finish(bool confirmed) {
+      if (route.isCurrent && !invalidated) navigator.pop(confirmed);
+    }
+
+    route = DialogRoute<bool>(
+      context: context,
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
+      barrierColor:
+          DialogTheme.of(context).barrierColor ??
+          Theme.of(context).dialogTheme.barrierColor ??
+          Colors.black54,
+      builder: (_) => AlertDialog(
+        key: const Key('inbox-confirm-dialog'),
+        title: Text(accept ? '接受好友邀请？' : '拒绝好友邀请？'),
+        content: Text(
+          accept
+              ? '将接受来自 ${item.refId} 的好友邀请。这会修改好友关系，需要宿主确认。'
+              : '将拒绝来自 ${item.refId} 的好友邀请。这会修改好友关系，需要宿主确认。',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('inbox-confirm-cancel'),
+            onPressed: () => finish(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('inbox-confirm-ok'),
+            onPressed: () => finish(true),
+            child: Text(accept ? '确认接受' : '确认拒绝'),
+          ),
+        ],
+      ),
+    );
 
     void onChanged() {
-      if (widget.actionContext?.call() == token) return;
-      for (final dialogContext in dialogContexts) {
-        if (dialogContext.mounted) Navigator.of(dialogContext).pop(false);
+      if (invalidated || (mounted && widget.actionContext?.call() == token)) {
+        return;
       }
+      invalidated = true;
+      // A different route may be on top, or this notification may arrive
+      // during a Navigator operation. Remove only this confirmation once.
+      scheduleMicrotask(() {
+        if (navigator.mounted && route.isActive) {
+          navigator.removeRoute(route, false);
+        }
+      });
     }
 
     changes?.addListener(onChanged);
     try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) {
-          dialogContexts.add(dialogContext);
-          return AlertDialog(
-            key: const Key('inbox-confirm-dialog'),
-            title: Text(accept ? '接受好友邀请？' : '拒绝好友邀请？'),
-            content: Text(
-              accept
-                  ? '将接受来自 ${item.refId} 的好友邀请。这会修改好友关系，需要宿主确认。'
-                  : '将拒绝来自 ${item.refId} 的好友邀请。这会修改好友关系，需要宿主确认。',
-            ),
-            actions: [
-              TextButton(
-                key: const Key('inbox-confirm-cancel'),
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                key: const Key('inbox-confirm-ok'),
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: Text(accept ? '确认接受' : '确认拒绝'),
-              ),
-            ],
-          );
-        },
-      );
-      return confirmed == true && mounted;
+      final confirmed = await navigator.push(route);
+      return !invalidated && confirmed == true && mounted;
     } finally {
       changes?.removeListener(onChanged);
     }
@@ -191,39 +207,29 @@ class _InboxScreenState extends State<InboxScreen> {
   Future<void> _respond(NotificationItem item, {required bool accept}) async {
     final action = accept ? widget.acceptFriend : widget.denyFriend;
     final token = widget.actionContext?.call();
-    if (action == null || token == null || _busyRefId != null) return;
+    if (action == null || token == null || _refreshBlocked) return;
     if (!_actionable(item)) return;
 
-    if (!await _confirm(item, accept: accept)) return;
+    if (!await _confirm(item, token, accept: accept)) return;
     if (!mounted || widget.actionContext?.call() != token) return;
-    if (_busyRefId != null || !_actionable(item)) return;
+    if (_refreshBlocked || !_actionable(item)) return;
+    if (_items?.contains(item) != true) return;
 
-    final generation = _loadGeneration;
     setState(() => _busyRefId = item.refId);
-
-    /// A result may only be published for the same session epoch and the same
-    /// list generation the action was started from.
-    bool current() =>
-        mounted &&
-        generation == _loadGeneration &&
-        widget.actionContext?.call() == token;
-
+    var outcome = accept
+        ? const _RowOutcome.accepted()
+        : const _RowOutcome.denied();
     try {
       await action(item.refId);
-      if (!current()) return;
-      setState(() {
-        _busyRefId = null;
-        _outcomes[item.refId] = accept
-            ? const _RowOutcome.accepted()
-            : const _RowOutcome.denied();
-      });
     } catch (error) {
-      if (!current()) return;
-      setState(() {
-        _busyRefId = null;
-        _outcomes[item.refId] = _RowOutcome.failed(_failureCopy(error));
-      });
+      outcome = _RowOutcome.failed(_failureCopy(error));
     }
+    if (!mounted) return;
+    final current = widget.actionContext?.call() == token;
+    setState(() {
+      _busyRefId = null;
+      if (current) _outcomes[item.refId] = outcome;
+    });
   }
 
   @override
@@ -263,7 +269,7 @@ class _InboxScreenState extends State<InboxScreen> {
             alignment: AlignmentDirectional.centerEnd,
             child: TextButton.icon(
               key: const Key('inbox-refresh'),
-              onPressed: _loading ? null : _load,
+              onPressed: _refreshBlocked ? null : _load,
               icon: const Icon(Icons.refresh),
               label: Text(_message == null ? '刷新收件箱' : '重试读取'),
             ),

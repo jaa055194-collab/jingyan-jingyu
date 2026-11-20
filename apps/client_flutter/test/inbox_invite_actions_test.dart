@@ -41,10 +41,12 @@ Future<void> _pump(
   Future<void> Function(String accountId)? accept,
   Future<void> Function(String accountId)? deny,
   _Session? session,
+  GlobalKey<NavigatorState>? navigatorKey,
 }) async {
   final state = session ?? _Session();
   await tester.pumpWidget(
     MaterialApp(
+      navigatorKey: navigatorKey,
       home: Scaffold(
         body: InboxScreen(
           loadNotifications: () async => items,
@@ -269,6 +271,45 @@ void main() {
     expect(find.text('已接受'), findsNothing);
   });
 
+  testWidgets('invalidating a covered confirmation removes only its route', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    final session = _Session();
+    final navigator = GlobalKey<NavigatorState>();
+    await _pump(
+      tester,
+      items: [_request()],
+      accept: (accountId) async => calls.add(accountId),
+      session: session,
+      navigatorKey: navigator,
+    );
+
+    await tester.tap(find.byKey(const Key('inbox-accept-acct-a')));
+    await tester.pumpAndSettle();
+    const confirmation = Key('inbox-confirm-dialog');
+    expect(find.byKey(confirmation), findsOneWidget);
+    const unrelated = Key('unrelated-route');
+    navigator.currentState!.push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Other page', key: unrelated)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(unrelated), findsOneWidget);
+
+    session.rotate();
+    session.rotate();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(unrelated), findsOneWidget);
+    expect(find.byKey(confirmation, skipOffstage: false), findsNothing);
+    navigator.currentState!.pop();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('notification-acct-a')), findsOneWidget);
+    expect(calls, isEmpty);
+  });
+
   testWidgets('a session change during the host write discards the result', (
     tester,
   ) async {
@@ -297,11 +338,14 @@ void main() {
     gate.complete();
     await tester.pumpAndSettle();
 
-    // No stale success banner and no fabricated failure: the row is back to
-    // pending because the client cannot know the host outcome any more.
     expect(find.text('已接受'), findsNothing);
     expect(find.textContaining('不会自动重试'), findsNothing);
-    expect(find.byKey(const Key('inbox-accept-acct-a')), findsOneWidget);
+    expect(
+      tester.widget<TextButton>(find.byKey(const Key('inbox-accept-acct-a')))
+          .onPressed,
+      isNotNull,
+      reason: 'discarding the result must still release the write guard',
+    );
   });
 
   testWidgets('other rows are disabled while an action is in flight', (
@@ -337,10 +381,11 @@ void main() {
     );
   });
 
-  testWidgets('a manual refresh discards an outcome still in flight', (
+  testWidgets('refresh cannot reenable a second write for a pending row', (
     tester,
   ) async {
     final gate = Completer<void>();
+    final writes = <String>[];
     var reads = 0;
     final session = _Session();
     await tester.pumpWidget(
@@ -349,10 +394,13 @@ void main() {
           body: InboxScreen(
             loadNotifications: () async {
               reads++;
-              return [_request()];
+              return gate.isCompleted ? [] : [_request()];
             },
-            acceptFriend: (_) => gate.future,
-            denyFriend: (_) async {},
+            acceptFriend: (id) {
+              writes.add('accept $id');
+              return gate.future;
+            },
+            denyFriend: (id) async => writes.add('deny $id'),
             actionContext: () => session.token,
             actionChanges: session,
           ),
@@ -360,21 +408,23 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(reads, 1);
 
-    await tester.tap(find.byKey(const Key('inbox-accept-acct-a')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('inbox-confirm-ok')));
-    await tester.pump();
+    await _confirm(tester, const Key('inbox-accept-acct-a'));
+    expect(writes, ['accept acct-a']);
+    final refresh = find.byKey(const Key('inbox-refresh'));
+    expect(tester.widget<TextButton>(refresh).onPressed, isNull);
+    expect(find.byKey(const Key('inbox-deny-acct-a')), findsOneWidget);
+    expect(tester.widget<TextButton>(find.byKey(const Key('inbox-deny-acct-a'))).onPressed, isNull);
 
-    await tester.tap(find.byKey(const Key('inbox-refresh')));
-    await tester.pumpAndSettle();
-    expect(reads, 2);
-
+    expect(writes, ['accept acct-a']);
+    expect(reads, 1, reason: 'refresh waits for the outstanding write');
     gate.complete();
     await tester.pumpAndSettle();
+    expect(find.text('已接受'), findsOneWidget);
 
-    expect(find.text('已接受'), findsNothing);
-    expect(find.byKey(const Key('inbox-accept-acct-a')), findsOneWidget);
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    expect(find.byKey(const Key('inbox-empty')), findsOneWidget);
   });
 }
