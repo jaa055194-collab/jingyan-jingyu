@@ -15,14 +15,14 @@ Same scenario, viewport, DPR, theme, fonts, fixture and driver in both renders. 
 | Render path | Flutter widget harness, `RenderRepaintBoundary.toImage` → PNG, unedited |
 | Fixture connection | synthetic `HostConnection` subclass; no real host, session, account or message content |
 | Dependency lock SHA-256 | `C0BF09F7A5EF28F2AFAA8819BFE6A7ABDAC2A0F975D033C8B4E96D4D99099937` (identical in both worktrees) |
-| Capture driver SHA-256 | `ADF40315BF2D5885BB9D4219420D283E0C9546FEB88F020C97042B44212955C2` (identical in both worktrees) |
+| Capture driver SHA-256 | `28BA6CF2E5B073E698EFF1B0A7CF6F4FF502C96309A1837D4CD2B2963FB635D8` (identical in both worktrees) |
 
 ## Before / After pair
 
 | State | Production revision | Image | PNG SHA-256 | Driver metrics |
 | --- | --- | --- | --- | --- |
 | Before: Settings has no search entry | `e7fdf7d968ca5b358529dffc4321205acf02aff2` (detached worktree) | [message-search-before-e7fdf7d.png](message-search-before-e7fdf7d.png) | `1B3366B4F80A1EE5EBB8E2252895C8C6900CA8B7A23FD25CFD86F584F44537E1` | `searchEntry=0 searches=0` |
-| After: one `消息搜索` entry in the read-only group | `{{AFTER_SHA}}` | [message-search-after-settings.png](message-search-after-settings.png) | `AE1EAD27D853FD8F1DE06347D8FDABEB224D7D9DCFD3C8833A13470ECA5F52B3` | `searchEntry=1 searches=0` |
+| After: one `消息搜索` entry in the read-only group | `92812a1570c42ad53f2b5cc5ea72c6178cefeec5` | [message-search-after-settings.png](message-search-after-settings.png) | `AE1EAD27D853FD8F1DE06347D8FDABEB224D7D9DCFD3C8833A13470ECA5F52B3` | `searchEntry=1 searches=0` |
 
 `searchEntry` is the number of `open-message-search` widgets the driver finds after scrolling to the same anchor; `searches` is the number of `GET /api/v1/search` calls the fixture observed. The Before render therefore proves the entry is genuinely absent at `e7fdf7d`, not merely cropped out. In both runs `searches=0`, i.e. opening Settings and scrolling issues no search request.
 
@@ -30,7 +30,7 @@ Same scenario, viewport, DPR, theme, fonts, fixture and driver in both renders. 
 
 | State | Revision | Image | PNG SHA-256 |
 | --- | --- | --- | --- |
-| Search screen after one explicit submit, synthetic hits | `{{AFTER_SHA}}` | [message-search-after-results.png](message-search-after-results.png) | `C87B0871488800668A92AAA38DBC461576DCC2A556BC2FF5666270B06A8B06C1` |
+| Search screen after one explicit submit, synthetic hits | `92812a1570c42ad53f2b5cc5ea72c6178cefeec5` | [message-search-after-results.png](message-search-after-results.png) | `C87B0871488800668A92AAA38DBC461576DCC2A556BC2FF5666270B06A8B06C1` |
 
 This is a **follow-on** capture of a later UI state on the After revision, not a second before/after pair. The driver asserts: opening the search screen issues zero requests and shows the idle state; exactly one submit produces exactly one `GET`; two synthetic hits render with their conversation, sender, kind, seq, snippet and host-reported `mode`. The hits are synthetic fixture rows shaped exactly like the merged host route; they are **not** a real host's search results.
 
@@ -49,6 +49,12 @@ flutter test --no-pub evidence/message_search_capture_test.dart \
 ```
 
 On the After worktree additionally pass `--dart-define=CAPTURE_FOLLOW_ON=<absolute png>`. The driver lives outside `test/`, so ordinary `flutter test` runs neither need the font paths nor emit screenshots.
+
+## Verification run for this revision
+
+- `flutter analyze --no-pub` in `apps/client_flutter`: **No issues found!**
+- `flutter test --no-pub` full client suite: **686 passed, 1 skipped, 0 failed** (baseline at `e7fdf7d` was 666, so the 20 new tests are all additive). The suite was run in five file chunks because full-suite invocations were repeatedly killed by unrelated concurrent load on this shared 8-CPU machine; every chunk that reported "All tests passed!" exited 0. No assertion ever failed — the only failures seen were `Connection closed before test suite loaded` / `did not complete` harness kills, and each affected file passed when re-run.
+- Re-running both captures with the final driver reproduced all three PNGs **byte-identically**, so the images do not depend on driver whitespace or run order.
 
 ## Limits (do not overclaim)
 
