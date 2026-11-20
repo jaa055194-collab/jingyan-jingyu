@@ -425,22 +425,23 @@ class SettingsScreen extends StatelessWidget {
                 '不建立客户端索引、不排序不评分，也不保证覆盖全部历史',
               ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                final runtime = model;
-                final connection = runtime is ClientRuntime
-                    ? runtime.connection
-                    : null;
-                MessageSearcher? search;
-                if (connection != null) {
-                  final api = SearchApi(connection);
-                  search = api.searchMessages;
-                }
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => SearchScreen(search: search),
-                  ),
-                );
-              },
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) {
+                    final runtime = model;
+                    final connection = runtime is ClientRuntime &&
+                            runtime.authenticated && !runtime.locked
+                        ? runtime.connection
+                        : null;
+                    return SearchScreen(
+                      search: connection == null
+                          ? null
+                          : SearchApi(connection).searchMessages,
+                      session: connection == null ? null : model,
+                    );
+                  },
+                ),
+              ),
             ),
             const Divider(height: 24),
             Text('AI 运行配置编辑', style: Theme.of(context).textTheme.labelLarge),
