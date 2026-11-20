@@ -280,20 +280,36 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
-  /// Host-backed read-only notifications loader with the same semantics as
-  /// [creative]: wire [NotificationApi.readNotifications] only when the runtime
-  /// exposes a live connection; otherwise the inbox keeps its honest gap state.
-  /// The shell only wires loaders here — tab layout and settings are untouched.
+  /// Host-backed notifications loader with the same semantics as [creative]:
+  /// wire [NotificationApi.readNotifications] only when the runtime exposes a
+  /// live connection; otherwise the inbox keeps its honest gap state.
+  ///
+  /// Pending friend-request rows additionally reuse the existing
+  /// [FriendsApi.acceptFriend]/[FriendsApi.denyFriend] writes — the same
+  /// transport the contacts tab uses, never a second one — and only while the
+  /// runtime reports an authenticated, unlocked session. The epoch is the
+  /// runtime-issued session/lock identity: it becomes null on lock or logout and
+  /// changes on an account switch, so a pending confirmation or an in-flight
+  /// result is discarded instead of being published as a stale success. The
+  /// shell only wires these callbacks; tab layout and settings are untouched.
   Widget inbox() {
     final model = widget.model;
     final HostConnection? connection = model is ClientRuntime
         ? model.connection
         : null;
     if (connection == null) return const InboxScreen();
-    final api = NotificationApi(connection);
+    final notifications = NotificationApi(connection);
+    final friends = FriendsApi(connection);
+    Object? actionContext() => model.authenticated && !model.locked
+        ? '${model.connectedAccountId}|${model.ownAiSessionContext}'
+        : null;
     return InboxScreen(
       key: ObjectKey(connection),
-      loadNotifications: () => api.readNotifications(),
+      loadNotifications: () => notifications.readNotifications(),
+      acceptFriend: friends.acceptFriend,
+      denyFriend: friends.denyFriend,
+      actionContext: actionContext,
+      actionChanges: model,
     );
   }
 

@@ -45,8 +45,31 @@ void main() {
     expect(find.text('好友邀请'), findsOneWidget);
     expect(find.textContaining('来自 acct-a'), findsOneWidget);
     expect(find.text('pending'), findsOneWidget);
-    expect(find.text('本页只读，不修改好友关系。'), findsOneWidget);
+    expect(find.text('本页只读，不修改好友关系。'), findsNothing);
+    // Without an injected accept/deny callback and a live session epoch the
+    // row stays read-only: nothing is offered and nothing is claimed.
+    expect(find.byKey(const Key('inbox-accept-acct-a')), findsNothing);
+    expect(find.byKey(const Key('inbox-deny-acct-a')), findsNothing);
+    expect(find.text('已接受'), findsNothing);
     expect(find.textContaining('请在“联系人”页处理'), findsNothing);
+  });
+
+  testWidgets('the footer honestly describes the narrowed write scope', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: InboxScreen(loadNotifications: () async => [_item()]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('inbox-footer')), findsOneWidget);
+    expect(find.textContaining('接受/拒绝需要再次确认'), findsOneWidget);
+    expect(find.textContaining('结果以宿主返回为准'), findsOneWidget);
+    expect(find.textContaining('其他通知只读'), findsOneWidget);
   });
 
   testWidgets('empty list is an honest empty state', (tester) async {
