@@ -350,7 +350,18 @@ class _Host {
   }
 
   Future<void> serve(HttpRequest request) async {
-    await request.drain<void>();
+    try {
+      await request.drain<void>();
+    } catch (_) {
+      // The read receipt is fire-and-forget, so a test may dispose while one is
+      // still in flight; an aborted body is not a fixture failure.
+      return;
+    }
+    // Opening a conversation now reports its read position. That receipt is not
+    // a message post, so it must not inflate `posts` or fail these fixtures.
+    if (request.method == 'POST' && request.uri.path.endsWith('/ack')) {
+      return fixture.reply(request, {'acknowledgedSeq': 0});
+    }
     if (request.method != 'GET') {
       posts++;
       return fixture.reply(request, {'error': 'not_found'}, status: 404);

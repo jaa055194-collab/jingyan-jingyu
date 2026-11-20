@@ -322,7 +322,32 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   }
 
   @override
-  List<ShellConversation> get conversations => _conversations;
+  List<ShellConversation> get conversations => !_controllersReady
+      ? _conversations
+      : [
+          for (final conversation in _conversations)
+            ShellConversation(
+              id: conversation.id,
+              title: conversation.title,
+              preview: conversation.preview,
+              unread: _unreadFor(conversation.id),
+              kind: conversation.kind,
+              ownerAccountId: conversation.ownerAccountId,
+            ),
+        ];
+
+  /// The cache is already pruned to the visible history floor, so every cached
+  /// canonical row at or above the read position is genuinely unread. Outbox
+  /// and dropped rows are not canonical messages and never count.
+  int _unreadFor(String conversationId) {
+    final read = shell.readSeqFor(conversationId);
+    var count = 0;
+    for (final message in shell.messagesFor(conversationId)) {
+      if (message.seq > read) count++;
+    }
+    return count;
+  }
+
   @override
   List<ShellMessage> get messages => _selected == null
       ? []
@@ -1579,13 +1604,94 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   Future<void> selectConversation(String id) async {
-    if (_selected != id) {
+    final reopened = _selected == id;
+    if (!reopened) {
       _invalidateSharedTextContext();
       unawaited(_clearAttachmentSelection());
     }
     _selected = id;
     _draft = shell.draftFor(id);
     notifyListeners();
+    if (!reopened) {
+      // The local position is awaited so callers observe it immediately; the
+      // best-effort host receipt must never delay opening a conversation.
+      final head = await _markConversationRead(id);
+      if (head != null) unawaited(_sendReadReceipt(id, head));
+    }
+  }
+
+  /// Persists the local read position for [id] and returns the acknowledged
+  /// head, or null when the session changed before the checkpoint completed.
+  Future<int?> _markConversationRead(String id) async {
+    final generation = _generation;
+    final sessionShell = shell;
+    final sessionConnection = connection;
+    final epoch = _historySyncEpoch;
+    if (sessionConnection == null ||
+        !_controllersReady ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected ||
+        !_online ||
+        !identical(shell, sessionShell)) {
+      return null;
+    }
+    final head = sessionShell.lastSeqFor(id);
+    if (head < 1) return null;
+    bool current() =>
+        _current(generation) &&
+        epoch == _historySyncEpoch &&
+        _selected == id &&
+        identical(shell, sessionShell) &&
+        identical(connection, sessionConnection) &&
+        authenticated &&
+        !locked &&
+        !_switching &&
+        !_sessionRejected;
+    try {
+      await sessionShell.markRead(
+        id,
+        head,
+        checkActive: () {
+          if (!current()) throw const _ReadInterrupted();
+        },
+      );
+    } catch (_) {
+      return null;
+    }
+    return current() ? head : null;
+  }
+
+  /// Exactly one best-effort receipt per explicit open. A failure is silent and
+  /// is never retried; a later lock/logout/switch discards it.
+  Future<void> _sendReadReceipt(String id, int head) async {
+    final generation = _generation;
+    final sessionShell = shell;
+    final sessionConnection = connection;
+    final epoch = _historySyncEpoch;
+    if (sessionConnection == null || !identical(shell, sessionShell)) return;
+    if (!_current(generation) ||
+        epoch != _historySyncEpoch ||
+        _selected != id ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected) {
+      return;
+    }
+    try {
+      await sessionConnection.request(
+        'POST',
+        Routes.messageAck.replaceAll(
+          '{conversationId}',
+          Uri.encodeComponent(id),
+        ),
+        body: {'seq': head},
+      );
+    } catch (_) {
+      // Reading must never be blocked by a best-effort read receipt.
+    }
   }
 
   @override
@@ -2082,6 +2188,10 @@ class _AttachmentDraft {
 
 class _SyncInterrupted implements Exception {
   const _SyncInterrupted();
+}
+
+class _ReadInterrupted implements Exception {
+  const _ReadInterrupted();
 }
 
 class _PreparedSnapshot {

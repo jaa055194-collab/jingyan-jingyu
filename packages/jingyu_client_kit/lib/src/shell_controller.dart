@@ -32,6 +32,7 @@ class ClientShellController {
   final _cursors = <String, SyncCursor>{};
   final _messages = <String, List<MessageEventFrame>>{};
   final _drafts = <String, String>{};
+  final _readSeq = <String, int>{};
   final _dropped = <DroppedMessage>[];
   bool _initialized = false;
   int _requestId = 0;
@@ -41,6 +42,7 @@ class ClientShellController {
   List<MessageEventFrame> messagesFor(String id) =>
       List.unmodifiable(_messages[id] ?? []);
   String draftFor(String id) => _drafts[id] ?? '';
+  int readSeqFor(String id) => _readSeq[id] ?? 0;
 
   Future<void> initialize() => _serial.run(() async {
     if (_initialized) return;
@@ -70,8 +72,24 @@ class ClientShellController {
       outbox.restore(restored);
       _messages.addAll(messages);
       _drafts.addAll(Map<String, String>.from(data['drafts'] as Map));
+      final readSeq = data['readSeq'];
+      if (readSeq is Map) {
+        for (final entry in readSeq.entries) {
+          final value = entry.value;
+          if (entry.key is String && value is int && value > 0) {
+            _readSeq[entry.key as String] = value;
+          }
+        }
+      }
       for (final entry in (data['cursors'] as Map).entries) {
         _cursors[entry.key as String] = SyncCursor(lastSeq: entry.value as int);
+      }
+      // `readSeq` is newer than the cursor map, so an existing install restores
+      // cursors without it. Treat that already-synced history as read rather
+      // than showing the whole cache as unread after an upgrade. This is memory
+      // only; rows that arrive after startup still count as unread.
+      for (final entry in _cursors.entries) {
+        _readSeq.putIfAbsent(entry.key, () => entry.value.lastSeq);
       }
       _dropped.addAll(failures);
     }
@@ -190,6 +208,22 @@ class ClientShellController {
   int lastSeqFor(String conversationId) =>
       _cursors[conversationId]?.lastSeq ?? 0;
 
+  /// Advances the persisted read position, clamped to the cached canonical head.
+  /// Only an explicit open calls this; a failed checkpoint keeps the old value.
+  Future<void> markRead(String id, int seq, {void Function()? checkActive}) =>
+      _serial.run(() async {
+        _requireInitialized();
+        checkActive?.call();
+        final head = lastSeqFor(id);
+        final next = seq < 0 ? 0 : (seq > head ? head : seq);
+        if (next <= readSeqFor(id)) return;
+        await _persist(
+          readSeq: {..._readSeq, id: next},
+          checkActive: checkActive,
+        );
+        _readSeq[id] = next;
+      });
+
   /// Checkpoints a host-confirmed visibility bound before applying its page.
   /// Only this conversation's canonical cache can be pruned; other gaps still
   /// need to be filled by [acceptMessage]. [checkActive] may throw to cancel
@@ -273,6 +307,7 @@ class ClientShellController {
     OutboxItem? pendingItem,
     Map<String, String>? drafts,
     Map<String, SyncCursor>? cursors,
+    Map<String, int>? readSeq,
     Map<String, List<MessageEventFrame>>? messages,
     MessageEventFrame? pendingMessage,
     void Function()? checkActive,
@@ -293,6 +328,7 @@ class ClientShellController {
     'cursors': {
       for (final e in (cursors ?? _cursors).entries) e.key: e.value.lastSeq,
     },
+    'readSeq': {...(readSeq ?? _readSeq)},
     'messages': [
       for (final list in (messages ?? _messages).values)
         for (final m in list) m.toEnvelope(),
