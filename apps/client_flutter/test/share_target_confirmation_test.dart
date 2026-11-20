@@ -41,7 +41,7 @@ class _ShareModel extends ShellViewModel {
   @override
   List<ShellMessage> messages = const [];
   @override
-  final conversations = const [
+  List<ShellConversation> conversations = const [
     ShellConversation(id: 'group-a', title: '小鲸', kind: 'group'),
     ShellConversation(id: 'group-b', title: '好友', kind: 'group'),
   ];
@@ -238,6 +238,29 @@ void main() {
       ),
       findsNothing,
     );
+    expect(find.widgetWithText(FilledButton, '加入草稿'), findsNothing);
+    expect(model.applied, isEmpty);
+    expect(model.share, isNotNull);
+  });
+
+  testWidgets('target disappearing before confirmation cannot be applied', (
+    tester,
+  ) async {
+    final model = _ShareModel();
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await tester.tap(find.text('选择会话'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('share-target-group-b')));
+    await tester.pumpAndSettle();
+
+    model
+      ..conversations = const [
+        ShellConversation(id: 'group-a', title: '小鲸', kind: 'group'),
+      ]
+      ..notifyListeners();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('stale-share-target-dialog')), findsOneWidget);
     expect(find.widgetWithText(FilledButton, '加入草稿'), findsNothing);
     expect(model.applied, isEmpty);
     expect(model.share, isNotNull);

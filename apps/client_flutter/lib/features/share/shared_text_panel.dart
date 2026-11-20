@@ -175,7 +175,7 @@ final class _ShareTargetDialogState extends State<_ShareTargetDialog> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: Listenable.merge([widget.model, widget.navigationChanges]),
     builder: (context, _) {
-      if (!shareCurrent) invalidated = true;
+      if (!shareCurrent || !candidatesCurrent) invalidated = true;
       if (invalidated) {
         return AlertDialog(
           key: const Key('stale-share-target-dialog'),

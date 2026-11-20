@@ -288,7 +288,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           identical(shell, sessionShell) &&
           identical(interactionContext, shareInteractionContext) &&
           _selected == selected &&
-          (_draftRevisions[conversationId] ?? 0) == targetRevision;
+          (_draftRevisions[conversationId] ?? 0) == targetRevision &&
+          _conversations.any(
+            (conversation) => conversation.id == conversationId,
+          );
       if (identical(_sharedText, pending)) {
         _invalidateSharedTextContext(discard: true);
       }
