@@ -322,7 +322,46 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   }
 
   @override
-  List<ShellConversation> get conversations => _conversations;
+  List<ShellConversation> get conversations => _withUnread(_conversations);
+
+  /// Projects the locally persisted read position onto the host's conversation
+  /// list. Only cached canonical messages count: outbox and dropped rows are
+  /// never in the shell's message cache, so a queued or failed local send can
+  /// never invent a badge. The cache is also already pruned to the host's
+  /// `firstVisibleSeq` by [ClientShellController.applySyncHistoryFloor], so
+  /// history a member cannot read is excluded without a second stored bound.
+  ///
+  /// No cached messages means 0 with no badge rather than a guess. An absent
+  /// read position is 0 in the shell, so a conversation whose visible suffix has
+  /// never been opened stays unread until the user opens it.
+  List<ShellConversation> _withUnread(List<ShellConversation> source) {
+    if (!_controllersReady) return source;
+    final sessionShell = shell;
+    return [
+      for (final conversation in source)
+        ShellConversation(
+          id: conversation.id,
+          title: conversation.title,
+          preview: conversation.preview,
+          unread: _unreadFor(sessionShell, conversation.id),
+          kind: conversation.kind,
+          ownerAccountId: conversation.ownerAccountId,
+        ),
+    ];
+  }
+
+  static int _unreadFor(
+    ClientShellController sessionShell,
+    String conversationId,
+  ) {
+    final read = sessionShell.readSeqFor(conversationId);
+    var unread = 0;
+    for (final message in sessionShell.messagesFor(conversationId)) {
+      if (message.seq > read) unread++;
+    }
+    return unread;
+  }
+
   @override
   List<ShellMessage> get messages => _selected == null
       ? []
@@ -1586,7 +1625,81 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _selected = id;
     _draft = shell.draftFor(id);
     notifyListeners();
+    // Opening must never wait on the read receipt: the caller publishes the chat
+    // immediately and the local mark plus its optional report run behind it.
+    unawaited(_markSelectedRead(id));
   }
+
+  /// Marks an explicitly opened conversation read, then reports that position
+  /// once to the host ack route.
+  ///
+  /// The local mark is the source of truth for the badge and always happens
+  /// first; it never needs the network. The report is best effort: only when the
+  /// session is authenticated, unlocked, online, still the same generation and
+  /// still the same selection. A failure is silent, never retried and never
+  /// blocks reading. Anything that invalidates the context while the request is
+  /// in flight discards the result instead of publishing a stale acknowledgement.
+  Future<void> _markSelectedRead(String conversationId) async {
+    if (!_controllersReady ||
+        _disposed ||
+        _switching ||
+        _sessionRejected ||
+        locked) {
+      return;
+    }
+    final generation = _generation;
+    final sessionShell = shell;
+    final sessionConnection = connection;
+    final epoch = _historySyncEpoch;
+    final head = sessionShell.headSeqFor(conversationId);
+    if (head <= sessionShell.readSeqFor(conversationId)) return;
+
+    bool current() =>
+        _current(generation) &&
+        _historySyncEpoch == epoch &&
+        identical(shell, sessionShell) &&
+        identical(connection, sessionConnection) &&
+        _selected == conversationId &&
+        authenticated &&
+        !locked &&
+        !_switching &&
+        !_sessionRejected;
+
+    final int marked;
+    try {
+      marked = await sessionShell.markRead(
+        conversationId,
+        head,
+        checkActive: () {
+          if (!current()) throw const _ReadPositionInterrupted();
+        },
+      );
+    } on _ReadPositionInterrupted {
+      return;
+    } catch (_) {
+      // A failed local checkpoint keeps the previous position and the badge.
+      return;
+    }
+    // The badge clears as soon as the position is durable, before any network.
+    if (_current(generation)) notifyListeners();
+    if (!current() || marked <= 0) return;
+    if (sessionConnection == null || !_online) return;
+    try {
+      await sessionConnection.request(
+        'POST',
+        Routes.messageAck.replaceAll(
+          '{conversationId}',
+          Uri.encodeComponent(conversationId),
+        ),
+        body: {'seq': marked},
+        retryAuthentication: false,
+      );
+    } catch (_) {
+      // Silent by design: a read receipt must not surface an error, retry, or
+      // change the local position that already succeeded.
+    }
+  }
+
 
   @override
   void updateDraft(String value) {
@@ -2082,6 +2195,12 @@ class _AttachmentDraft {
 
 class _SyncInterrupted implements Exception {
   const _SyncInterrupted();
+}
+
+/// Cancels a local read-position advance that lost its session, lock or
+/// selection before its checkpoint started.
+class _ReadPositionInterrupted implements Exception {
+  const _ReadPositionInterrupted();
 }
 
 class _PreparedSnapshot {
