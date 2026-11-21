@@ -1,6 +1,9 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../features/inbox/foreground_message_activity.dart';
 import '../net/attachment_api.dart';
+import '../net/chat_pins_api.dart';
+import '../net/host_connection.dart' show HostReadCancellation;
 import '../net/favorites_api.dart' show FavoriteSaveOutcome;
 import '../net/message_operations_api.dart'
     show MessageWriteOutcome, MessageWriteCancelled;
@@ -19,6 +22,10 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get locked;
   bool get online;
   String? get error;
+
+  /// Optional live UI signal, never notification history or an OS capability.
+  ForegroundMessageActivity? get foregroundMessageActivity => null;
+
   // Defaults keep older read-only view-model doubles source-compatible. The
   // runtime overrides all of these.
   List<ShellOwnedAi> get ownAiAccounts => const <ShellOwnedAi>[];
@@ -139,6 +146,24 @@ abstract class ShellViewModel extends ChangeNotifier {
   /// Opaque session/selection epoch. A control must pass the context it was
   /// rendered with; the runtime refuses a stale confirmation.
   Object? get messageOperationsContext => null;
+
+  bool get supportsChatPins => false;
+
+  /// Host-confirmed pin IDs intersected with this selection's live history.
+  Future<ChatPinsRead> readChatPins({
+    required String conversationId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+    HostReadCancellation? cancellation,
+  }) async => const ChatPinsUnavailable();
+
+  Future<ChatPinWrite> setMessagePinned({
+    required String conversationId,
+    required String messageId,
+    required bool pinned,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async => ChatPinWrite.cancelled;
 
   /// Replaces one own message body. The runtime validates the current session,
   /// selection and canonical row again before any request.

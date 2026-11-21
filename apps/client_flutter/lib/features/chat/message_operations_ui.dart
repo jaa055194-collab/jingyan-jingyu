@@ -4,8 +4,9 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
 import '../../net/message_operations_api.dart';
+import 'chat_pins_dialog.dart';
 
-enum _Action { copy, edit, recall }
+enum _Action { copy, edit, recall, pin }
 
 void _notice(BuildContext context, String message) {
   ScaffoldMessenger.of(context)
@@ -78,6 +79,14 @@ Future<void> openMessageActions(
                           ? () => Navigator.of(sheet).pop(_Action.edit)
                           : null,
                     ),
+                  if (model.supportsChatPins && message.operationEligible)
+                    ListTile(
+                      key: const Key('message-action-pin'),
+                      leading: const Icon(Icons.push_pin_outlined),
+                      title: const Text('管理置顶'),
+                      subtitle: const Text('查看并更改本会话的置顶状态'),
+                      onTap: () => Navigator.of(sheet).pop(_Action.pin),
+                    ),
                   if (message.outgoing && message.operationEligible)
                     ListTile(
                       key: const Key('message-action-recall'),
@@ -114,6 +123,18 @@ Future<void> openMessageActions(
     } on PlatformException {
       if (context.mounted && sameRow()) _notice(context, '无法访问系统剪贴板');
     }
+    return;
+  }
+  if (choice == _Action.pin) {
+    if (!model.supportsChatPins || !message.operationEligible) return;
+    await openChatPins(
+      context,
+      model: model,
+      conversationId: conversationId,
+      expectedContext: expectedContext,
+      viewIsCurrent: viewIsCurrent,
+      targetId: message.id,
+    );
     return;
   }
   final editing = choice == _Action.edit;

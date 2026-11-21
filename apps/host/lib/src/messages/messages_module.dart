@@ -414,11 +414,6 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'pins unavailable'),
       );
     }
-    if (!await _members.canPost(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
     final result = await pins.pin(
       conversationId: conversationId,
       messageId: messageId,
@@ -445,14 +440,10 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'pins unavailable'),
       );
     }
-    if (!await _members.canPost(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
     final result = await pins.unpin(
       conversationId: conversationId,
       messageId: messageId,
+      accountId: principal.accountId,
     );
     return HostResponse.fromResult(result, (_) => {'pinned': false});
   }
@@ -473,12 +464,10 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'pins unavailable'),
       );
     }
-    if (!await _members.canRead(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
-    final result = await pins.list(conversationId: conversationId);
+    final result = await pins.list(
+      conversationId: conversationId,
+      accountId: principal.accountId,
+    );
     return HostResponse.fromResult(result, (items) => {'pins': items});
   }
 

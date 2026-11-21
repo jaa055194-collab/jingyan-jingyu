@@ -108,7 +108,12 @@ class _ImageFixture {
 
   Future<void> open() async {
     await runtime.initialize();
+    runtime.reconnect?.cancel();
     await runtime.refreshConversations();
+    // Image previews do not depend on unread state. Start in an already-read
+    // chat so the runtime's background read checkpoint cannot race fixture
+    // deletion on Windows after the last preview assertion.
+    await runtime.shell.markRead('group', runtime.shell.lastSeqFor('group'));
     await runtime.selectConversation('group');
   }
 }

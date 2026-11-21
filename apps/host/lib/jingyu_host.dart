@@ -62,6 +62,7 @@ import 'src/social/private_conversation_migration.dart';
 import 'src/social/owner_ai_direct_migration.dart';
 import 'src/social/social_module.dart';
 import 'src/storage/migrations.dart';
+import 'src/storage/sqlite_audit_log.dart';
 import 'src/storage/storage_module.dart';
 import 'src/config.dart';
 import 'src/http_server.dart' show maxJsonBodyBytes;
@@ -184,7 +185,6 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     store: messages,
     blind: blindIndex,
   );
-  final pins = PinsService(database: storage.database, clock: clock);
   final favoriteBlindIndex = FavoriteBlindIndexService(
     database: storage.database,
     cipher: storage.cipher,
@@ -217,6 +217,15 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     group: conversations,
     direct: direct,
     groupHistoryInTransaction: conversations.firstVisibleSeqInTransaction,
+    // Group posting already uses the same active-member/history policy.
+    groupPostingHistoryInTransaction:
+        conversations.firstVisibleSeqInTransaction,
+  );
+  final pins = PinsService(
+    database: storage.database,
+    historyAccess: membership.firstVisibleSeqInTransaction,
+    writeAudit: SqliteAuditLog.recordInTransaction,
+    clock: clock,
   );
   final chatExport = ExportService(
     clock: clock,
