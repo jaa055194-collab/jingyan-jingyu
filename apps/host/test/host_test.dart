@@ -221,6 +221,7 @@ void main() {
         'social_level',
         'group_rules',
         'owner_ai_reply_status',
+        'owner_reply_preferences',
         'persona',
         'creative_authorization',
         'creative_reports',

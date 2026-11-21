@@ -11,6 +11,18 @@ import 'usage_meter.dart';
 /// Conversation facts resolved by the trusted host caller.
 enum ChatConversationKind { private, group }
 
+/// Trusted owner-reply admission. Use the live Tx supplied by the gateway;
+/// no further asynchronous preflight is run before transport handoff.
+typedef ChatDispatchAdmission =
+    Future<bool> Function(
+      Tx tx, {
+      required AiId ai,
+      required String requestId,
+      required String providerId,
+      required String model,
+      required String baseUrl,
+    });
+
 /// Trusted host API only: derive initiator from the authenticated caller and
 /// kind from canonical conversation state. Never construct this from arbitrary
 /// HTTP body fields or expose an ownerPrivate override. This manual gateway
@@ -20,6 +32,7 @@ final class TrustedChatContext {
     required this.initiator,
     required this.conversationKind,
     this.scopeKey,
+    this.dispatchAdmission,
   });
 
   final AccountId initiator;
@@ -27,6 +40,10 @@ final class TrustedChatContext {
 
   /// Trusted canonical conversation identity, never sourced from request bodies.
   final String? scopeKey;
+
+  /// Optional final dispatch fence. Final reply publication has its own fence
+  /// inside the append transaction, after usage settlement.
+  final ChatDispatchAdmission? dispatchAdmission;
 }
 
 /// Owner-configured, single-call chat pipeline for B1 and B2 only.
@@ -164,8 +181,18 @@ final class ModelGateway {
     }
     final endpoint = await _guard.check(credential.value.baseUrl);
     if (endpoint case Err<Uri>(:final failure)) return Err(failure);
-    // The injected adapter must use guarded transport for DNS pinning and every
-    // redirect. This preflight prevents known blocked URLs from creating pending.
+    // Keep the same immutable transport inputs across any later awaits. The
+    // production adapter rejects redirects and independently checks DNS/TLS.
+    final recipient = credential.value;
+    final requestTurns = List<ChatTurn>.unmodifiable(turns);
+    Future<Result<MeteredChatResponse>> dispatch() => _adapter.chatWithUsage(
+      baseUrl: endpoint.value,
+      apiKey: recipient.apiKey,
+      model: model,
+      messages: requestTurns,
+      maxTokens: maxTokens,
+    );
+
     final begun = await _usage.beginRequest(
       ai,
       requestId: requestId,
@@ -175,13 +202,56 @@ final class ModelGateway {
     );
     if (begun case Err<UsageRequest>(:final failure)) return Err(failure);
     if (begun.value.replayed) return _replay();
-    final response = await _adapter.chatWithUsage(
-      baseUrl: endpoint.value,
-      apiKey: credential.value.apiKey,
-      model: binding.value.model,
-      messages: List.unmodifiable(turns),
-      maxTokens: maxTokens,
-    );
+
+    final admission = context.dispatchAdmission;
+    final Result<MeteredChatResponse> response;
+    if (admission == null) {
+      response = await dispatch();
+    } else {
+      // Linearize authorization at handoff: after all guard/budget awaits,
+      // re-read source/grants/recipient and START (never await) transport in the
+      // same serialized transaction. This is not a claim that an authorized
+      // request can be recalled once handed off (including worker startup).
+      Future<Result<MeteredChatResponse>>? flight;
+      await _db.transaction((tx) async {
+        if (await admission(
+          tx,
+          ai: ai,
+          requestId: requestId,
+          providerId: recipient.providerId,
+          model: model,
+          baseUrl: recipient.baseUrl,
+        )) {
+          flight = dispatch();
+        } else {
+          // No request handed off: remove only our exact pending reservation,
+          // not a fabricated zero-token settlement or an in-flight request.
+          await tx.execute(
+            '''
+DELETE FROM usage_ledger WHERE owner_id=? AND ai_id=? AND request_id=?
+ AND layer=? AND capability=? AND budget_day=? AND offset_minutes=?
+ AND source_usage_unknown=1 AND total_tokens IS NULL
+ AND input_tokens IS NULL AND output_tokens IS NULL''',
+            [
+              _ownerId,
+              ai.value,
+              requestId,
+              layer.name,
+              capability.name,
+              begun.value.day.date,
+              begun.value.day.offsetMinutes,
+            ],
+          );
+        }
+      });
+      if (flight == null) {
+        return err(
+          FailureCode.conflict,
+          'Reply preference or recipient changed',
+        );
+      }
+      response = await flight!;
+    }
     if (response case Err<MeteredChatResponse>(:final failure)) {
       return err(
         failure.code,

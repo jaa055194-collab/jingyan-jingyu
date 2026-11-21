@@ -186,6 +186,10 @@ abstract final class Routes {
   /// 记忆管理。
   static const String memories = '$prefix/memories';
 
+  /// Separate, default-off consent to use fixed owner-only reply preferences.
+  static const String aiOwnerReplyPreferences =
+      '$prefix/ai-profiles/{aiId}/owner-reply-preferences';
+
   /// 模型接入配置。
   static const String modelProviders = '$prefix/model-providers';
   static const String modelProvider = '$prefix/model-providers/{providerId}';

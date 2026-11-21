@@ -5,15 +5,18 @@ import '../../app/shell_view_model.dart';
 import '../../net/ai_config_write_api.dart';
 import '../../net/host_connection.dart';
 import '../../net/model_diagnostics_api.dart';
+import '../../net/owner_reply_preferences_api.dart';
 import '../../net/persona_history_api.dart';
+import 'owner_reply_preferences_section.dart';
 import 'persona_card_import.dart';
 import 'persona_file_picker.dart';
 import 'persona_history_screen.dart';
 
 /// Read-write "AI 运行配置" hub for one owned AI.
 ///
-/// It only performs the four explicit host writes (persona init/edit, provider
-/// save, chat binding, budget) through an injected [AiConfigWriter]. The API key
+/// Existing persona, provider, binding and budget writes use [AiConfigWriter].
+/// Owner reply preferences use their own explicit, scoped authorization route.
+/// The API key
 /// is entered through an obscured field and is never echoed; provider responses
 /// only show the host-masked `key_mask`. No secrets are logged or rendered.
 class AiConfigEditor extends StatefulWidget {
@@ -23,6 +26,7 @@ class AiConfigEditor extends StatefulWidget {
     this.resolveProfileId,
     this.readCatalog,
     this.readPersonaHistory,
+    this.replyPreferences,
     this.personaFilePicker,
     this.session,
     this.ownedAiAccountIds = const <String>[],
@@ -34,6 +38,8 @@ class AiConfigEditor extends StatefulWidget {
 
   /// Read-only persona history for a profile already resolved by this editor.
   final PersonaHistoryLoader? readPersonaHistory;
+
+  final OwnerReplyPreferencesApi? replyPreferences;
 
   /// Explicit local persona-card file read. Null disables the file entry only;
   /// pasted JSON remains available. Import always fills the form and never
@@ -167,6 +173,28 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     if (mounted && !_sessionLost && !_sessionMatches) {
       setState(_invalidateSession);
     }
+  }
+
+  Widget? _ownerReplyPreferences(int generation) {
+    final api = widget.replyPreferences;
+    final selected = _selected;
+    final profile = _profileId;
+    final session = _session;
+    if (api == null || selected == null || profile == null || session == null) {
+      return null;
+    }
+    return ListenableBuilder(
+      listenable: session.model,
+      builder: (_, _) => OwnerReplyPreferencesSection(
+        key: ValueKey((api, generation, selected, profile)),
+        api: api,
+        profile: profile,
+        isCurrent: () => mounted && !_sessionLost && _sessionMatches &&
+            identical(api, widget.replyPreferences) && _selected == selected &&
+            _profileId == profile && _profileGeneration == generation,
+        canContactHost: () => session.model.online && !_busy,
+      ),
+    );
   }
 
   bool _checkSession() {
@@ -575,6 +603,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
               ),
             ),
           const Divider(height: 32),
+          ?_ownerReplyPreferences(profileGeneration),
           _section(
             '人格',
             [

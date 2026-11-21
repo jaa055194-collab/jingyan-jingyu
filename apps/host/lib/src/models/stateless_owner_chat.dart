@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:jingyu_core/jingyu_core.dart';
 
+import '../ai/memory/owner_reply_preferences.dart';
 import '../ai/persona/persona_service.dart';
 import '../storage/cipher.dart';
 import '../storage/database.dart';
@@ -29,10 +30,11 @@ typedef StatelessChatPort =
 /// Trusted callers authenticate the owner, resolve the canonical direct ID and
 /// enforce live relationship/visibility/consent checks. This helper rechecks the
 /// active owner/persona identity and canonical direct pair, not friendship/block
-/// policy. No HTTP, observer, history, memory, group data, persistence or retry.
+/// policy. The optional typed reply style requires an independent predispatch
+/// grant fence; there is no history, general memory, group data, or retry.
 ///
 /// Caps are slice engineering limits, not spec/tokenizer/model-window values.
-/// Input cap counts both message contents including the separator/persona JSON;
+/// The input cap includes the persona, user text and optional style data;
 /// encoded cap counts the complete OpenAI-compatible JSON request shape. Output
 /// is checked AFTER runtime completion/usage settlement, never rolled back.
 final class StatelessOwnerChat {
@@ -89,6 +91,8 @@ final class StatelessOwnerChat {
     required String expectedProviderId,
     required String expectedModel,
     required int maxTokens,
+    OwnerReplyChoices? preferenceChoices,
+    ChatDispatchAdmission? dispatchAdmission,
   }) async {
     Result<ChatCompletion> invalid() => err(
       FailureCode.invalidArgument,
@@ -106,7 +110,9 @@ final class StatelessOwnerChat {
         value.trim() == value &&
         !RegExp(r'[\x00-\x1f\x7f]').hasMatch(value) &&
         _wellFormed(value);
-    if (maxInputBytes <= 0 ||
+    if ((preferenceChoices == null) != (dispatchAdmission == null) ||
+        preferenceChoices?.isEmpty == true ||
+        maxInputBytes <= 0 ||
         maxOutputBytes <= 0 ||
         maxEncodedRequestBytes <= 0 ||
         maxAllowedTokens <= 0 ||
@@ -158,12 +164,36 @@ WHERE d.id=? AND ((d.account_low=h.id AND d.account_high=a.id)
     }
     final combined =
         '$system\n\nSaved persona (JSON):\n${jsonEncode(layers.toJson())}';
+    // Shape and role are fixed by the trusted host, never by the HTTP caller.
+    // Keep the current owner message separate and last; do not label the style
+    // preferences as system instructions or carry any provenance/identity IDs.
+    final style = preferenceChoices == null
+        ? null
+        : jsonEncode({
+            'kind': 'untrusted_owner_reply_preferences',
+            'choices': preferenceChoices.toJson(),
+            'instruction': [
+              if (preferenceChoices.length == OwnerReplyLength.brief)
+                'Keep the reply brief.'
+              else if (preferenceChoices.length == OwnerReplyLength.detailed)
+                'Provide a detailed reply.',
+              if (preferenceChoices.format == OwnerReplyFormat.paragraphs)
+                'Use paragraphs.'
+              else if (preferenceChoices.format == OwnerReplyFormat.bullets)
+                'Use bullet points.',
+            ].join(' '),
+          });
+    if (style != null && utf8.encode(style).length > 512) return invalid();
     final turns = List<ChatTurn>.unmodifiable([
       ChatTurn(role: 'system', content: combined),
+      if (style != null) ChatTurn(role: 'user', content: style),
       ChatTurn(role: 'user', content: input),
     ]);
-    if (utf8.encode(combined).length + utf8.encode(input).length >
-        maxInputBytes) {
+    final totalBytes = turns.fold<int>(
+      0,
+      (sum, turn) => sum + utf8.encode(turn.content).length,
+    );
+    if (totalBytes > maxInputBytes) {
       return invalid();
     }
     final payload = jsonEncode({
@@ -185,6 +215,7 @@ WHERE d.id=? AND ((d.account_low=h.id AND d.account_high=a.id)
         initiator: AccountId.parse(ownerId),
         conversationKind: ChatConversationKind.private,
         scopeKey: conversationId,
+        dispatchAdmission: dispatchAdmission,
       ),
       maxTokens: maxTokens,
       expectedProviderId: expectedProviderId,

@@ -25,6 +25,9 @@ import 'src/social/group_ai_policy.dart';
 import 'src/messages/message_store.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
+import 'src/ai/memory/owner_reply_preferences.dart';
+import 'src/ai/memory/owner_reply_preferences_migration.dart';
+import 'src/ai/memory/owner_reply_preferences_module.dart';
 import 'src/ai/persona/persona_migrations.dart';
 import 'src/ai/persona/persona_module.dart';
 import 'src/ai/social_level/social_level_migrations.dart';
@@ -154,6 +157,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       budgetTimezoneMigration,
       ...personaMigrations,
       socialLevelMigration,
+      ownerReplyPreferencesMigration,
       ...creativeMigrations,
       ...voiceMigrations,
       ...worldMigrations,
@@ -332,6 +336,11 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
     return gate.valueOrNull?.day;
   }
 
+  final ownerReplyPreferences = OwnerReplyPreferences(
+    database: storage.database,
+    cipher: storage.cipher,
+    clock: clock,
+  );
   final ownerReplies = OwnerAiDirectReplyObserver(
     database: storage.database,
     cipher: storage.cipher,
@@ -349,6 +358,7 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
       grant.ownerAccountId,
       storage.database,
     ).resolve(AiId.parse(grant.aiProfileId), ProviderCapability.chat),
+    preferences: ownerReplyPreferences,
     chat: runtime == null
         ? null
         : StatelessOwnerChat.fromRuntime(
@@ -498,6 +508,10 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
     ),
     groupRules,
     OwnerAiReplyStatusModule(database: storage.database),
+    OwnerReplyPreferencesModule(
+      ownerReplyPreferences,
+      DbAuthenticator(accounts).call,
+    ),
     PersonaModule(
       database: storage.database,
       cipher: storage.cipher,
