@@ -177,12 +177,6 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     database: storage.database,
     messages: messages,
   );
-  final scheduledMessages = ScheduledMessageService(
-    database: storage.database,
-    cipher: storage.cipher,
-    store: messages,
-    clock: clock,
-  );
   final blindIndex = BlindIndexService(
     database: storage.database,
     cipher: storage.cipher,
@@ -227,6 +221,25 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     // Group posting already uses the same active-member/history policy.
     groupPostingHistoryInTransaction:
         conversations.firstVisibleSeqInTransaction,
+  );
+  final scheduledMessages = ScheduledMessageService(
+    database: storage.database,
+    cipher: storage.cipher,
+    store: messages,
+    historyAccess: membership.firstVisibleSeqInTransaction,
+    attachmentCheck:
+        (
+          tx, {
+          required ownerAccountId,
+          required attachmentId,
+          required conversationId,
+        }) => attachments.assertSendableInTransaction(
+          tx,
+          ownerAccountId: ownerAccountId,
+          attachmentId: attachmentId,
+          conversationId: conversationId,
+        ),
+    clock: clock,
   );
   final pins = PinsService(
     database: storage.database,

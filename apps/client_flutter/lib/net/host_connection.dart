@@ -61,6 +61,27 @@ class HostConnection {
     return List<Object?>.unmodifiable(decoded);
   }
 
+  /// One explicit request with a response byte limit and exact HTTP success
+  /// status. No redirect, auth renewal or retry; a write may already be applied
+  /// when its response fails validation or times out.
+  Future<Map<String, Object?>> requestBoundedObject(
+    String method,
+    String path, {
+    Map<String, Object?>? body,
+    Map<String, String>? query,
+    required int maxResponseBytes,
+    required int expectedStatus,
+    HostReadCancellation? cancellation,
+  }) => _getBoundedJson(
+    path,
+    method: method,
+    body: body,
+    query: query,
+    maxResponseBytes: maxResponseBytes,
+    expectedStatus: expectedStatus,
+    cancellation: cancellation,
+  );
+
   /// A one-shot GET with a wire-body limit, before UTF-8 or JSON decoding.
   /// Explicit media reads never renew/replay authentication or follow redirects.
   Future<Map<String, Object?>> getBoundedJson(
@@ -88,8 +109,11 @@ class HostConnection {
 
   Future<Map<String, Object?>> _getBoundedJson(
     String path, {
+    String method = 'GET',
+    Map<String, Object?>? body,
     Map<String, String>? query,
     required int maxResponseBytes,
+    int? expectedStatus,
     HostReadCancellation? cancellation,
   }) async {
     if (maxResponseBytes < 1) {
@@ -104,11 +128,13 @@ class HostConnection {
       final decoded =
           await Future.any<Object?>([
             _requestJson(
-              'GET',
+              method,
               path,
+              body: body,
               query: query,
               retryAuthentication: false,
               maxResponseBytes: maxResponseBytes,
+              expectedStatus: expectedStatus,
               cancellation: stop,
             ),
             signal.future.then<Object?>(
@@ -140,6 +166,7 @@ class HostConnection {
     bool retryAuthentication = true,
     bool allowEmptySuccess = false,
     int? maxResponseBytes,
+    int? expectedStatus,
     HostReadCancellation? cancellation,
   }) async {
     final attemptedToken = _token;
@@ -220,6 +247,9 @@ class HostConnection {
               : const {},
         ),
       );
+    }
+    if (expectedStatus != null && response.statusCode != expectedStatus) {
+      throw const FormatException('宿主响应状态未知');
     }
     if (allowEmptySuccess && text.isEmpty) return <String, Object?>{};
     return jsonDecode(text);
