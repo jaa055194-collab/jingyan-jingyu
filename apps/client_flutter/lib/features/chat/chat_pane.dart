@@ -5,6 +5,7 @@ import 'package:jingyu_core/jingyu_core.dart';
 
 import '../../app/shell_view_model.dart';
 import '../favorites/favorites_screen.dart';
+import 'chat_pins_dialog.dart';
 import 'message_favorite_action.dart';
 import 'message_operations_ui.dart';
 import 'voice_message_playback.dart';
@@ -594,6 +595,39 @@ class _ChatPaneState extends State<ChatPane> {
     final voice = showVoice ? model.voicePlayback : null;
     final voiceActive = voice?.phase == ShellVoicePhase.loading ||
         voice?.phase == ShellVoicePhase.playing;
+    final chatActions = <Widget>[
+      if (model.supportsChatPins && operationsContext != null)
+        IconButton(
+          key: const Key('open-chat-pins'),
+          tooltip: '置顶消息',
+          icon: const Icon(Icons.push_pin_outlined),
+          onPressed: () {
+            if (!_isVoiceViewCurrent() || !operationsViewIsCurrent()) return;
+            openChatPins(
+              context,
+              model: model,
+              conversationId: conversationId,
+              expectedContext: operationsContext,
+              viewIsCurrent: operationsViewIsCurrent,
+            );
+          },
+        ),
+      if (model.canAddMembersToSelectedGroup)
+        IconButton(
+          key: const Key('add-group-member'),
+          tooltip: '添加成员',
+          icon: const Icon(Icons.person_add_outlined),
+          onPressed: !model.busy && model.online && !model.locked
+              ? () => showDialog<void>(
+                  context: context,
+                  builder: (_) => _GroupActionDialog(
+                    model: model,
+                    groupId: model.selectedConversationId,
+                  ),
+                )
+              : null,
+        ),
+    ];
     return Column(
       children: [
         ListTile(
@@ -606,22 +640,9 @@ class _ChatPaneState extends State<ChatPane> {
                 ),
           title: Text(title),
           subtitle: Text(model.online ? '已连接' : '离线 · 消息将加入待发送队列'),
-          trailing: model.canAddMembersToSelectedGroup
-              ? IconButton(
-                  key: const Key('add-group-member'),
-                  tooltip: '添加成员',
-                  icon: const Icon(Icons.person_add_outlined),
-                  onPressed: !model.busy && model.online && !model.locked
-                      ? () => showDialog<void>(
-                          context: context,
-                          builder: (_) => _GroupActionDialog(
-                            model: model,
-                            groupId: model.selectedConversationId,
-                          ),
-                        )
-                      : null,
-                )
-              : null,
+          trailing: chatActions.isEmpty
+              ? null
+              : Row(mainAxisSize: MainAxisSize.min, children: chatActions),
         ),
         const Divider(height: 1),
         if (model.queuedCount > 0)
@@ -735,7 +756,9 @@ class _ChatPaneState extends State<ChatPane> {
                                     if (operationsContext != null &&
                                         (message.canCopy ||
                                             message.canEdit ||
-                                            message.canRecall))
+                                            message.canRecall ||
+                                            (model.supportsChatPins &&
+                                                message.operationEligible)))
                                       IconButton(
                                         key: Key('message-actions-${message.id}'),
                                         tooltip: '消息操作',

@@ -11,15 +11,19 @@ class CombinedMembership implements HistoryMembershipCheck {
     required HistoryMembershipCheck group,
     required PrivateConversations direct,
     Future<int?> Function(Tx, String, String)? groupHistoryInTransaction,
+    Future<int?> Function(Tx, String, String)? groupPostingHistoryInTransaction,
   }) : _db = db,
        _group = group,
        _direct = direct,
-       _groupHistoryInTransaction = groupHistoryInTransaction;
+       _groupHistoryInTransaction = groupHistoryInTransaction,
+       _groupPostingHistoryInTransaction = groupPostingHistoryInTransaction;
 
   final Database _db;
   final HistoryMembershipCheck _group;
   final PrivateConversations _direct;
   final Future<int?> Function(Tx, String, String)? _groupHistoryInTransaction;
+  final Future<int?> Function(Tx, String, String)?
+  _groupPostingHistoryInTransaction;
 
   Future<String?> _kind(Tx tx, String conversationId) async {
     final kinds = await tx.query(
@@ -38,6 +42,43 @@ SELECT 'direct' AS kind FROM direct_conversations WHERE id=?
         final kind = await _kind(tx, conversationId);
         return kind == null ? null : (kind == 'direct' ? _direct : _group);
       });
+
+  /// Reuse the conversation policy inside a caller-owned transaction.
+  /// A missing transaction policy fails closed; a direct conversation has a
+  /// separate posting gate.
+  Future<int?> firstVisibleSeqInTransaction(
+    Tx tx,
+    String accountId,
+    String conversationId, {
+    bool requirePost = false,
+  }) async {
+    switch (await _kind(tx, conversationId)) {
+      case 'group':
+        final policy = requirePost
+            ? _groupPostingHistoryInTransaction
+            : _groupHistoryInTransaction;
+        return policy == null
+            ? null
+            : await policy(tx, accountId, conversationId);
+      case 'direct':
+        if (requirePost) {
+          return await _direct.canPostInTransaction(
+                tx,
+                accountId,
+                conversationId,
+              )
+              ? 1
+              : null;
+        }
+        return _direct.firstVisibleSeqInTransaction(
+          tx,
+          accountId,
+          conversationId,
+        );
+      default:
+        return null;
+    }
+  }
 
   /// Observe all candidate visibility bounds together. Null means denied.
   Future<Map<String, int?>> historySnapshot(

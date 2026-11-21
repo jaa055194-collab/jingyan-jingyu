@@ -9,8 +9,18 @@ final class SqliteAuditLog implements AuditLog {
   final Database database;
 
   @override
-  Future<void> record(AuditEntry entry) async {
-    await database.execute(
+  Future<void> record(AuditEntry entry) => _write(database.execute, entry);
+
+  /// Appends to the log in the caller's transaction, so a failed audit can
+  /// roll back the mutation it records.
+  static Future<void> recordInTransaction(Tx tx, AuditEntry entry) =>
+      _write(tx.execute, entry);
+
+  static Future<void> _write(
+    Future<int> Function(String, List<Object?>) execute,
+    AuditEntry entry,
+  ) async {
+    await execute(
       'INSERT INTO audit_log (at, actor_id, action, target_kind, target_id, meta) VALUES (?, ?, ?, ?, ?, ?)',
       [
         entry.at.toUtc().toIso8601String(),

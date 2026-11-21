@@ -12,6 +12,7 @@ import '../features/settings/settings_screen.dart';
 import '../features/world/world_screen.dart';
 import '../features/contacts/contacts_screen.dart';
 import '../net/friends_api.dart';
+import '../features/inbox/foreground_message_notice.dart';
 import '../features/inbox/inbox_screen.dart';
 import '../features/creative/creative_screen.dart';
 import '../features/share/shared_text_panel.dart';
@@ -391,11 +392,17 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
+  int? _noticeViewGeneration() =>
+      mounted && !settings && (destination == 1 || destination == 3)
+      ? widget.navigation.generation
+      : null;
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final wide = constraints.maxWidth >= 720;
       final model = widget.model;
+      final activity = model.foregroundMessageActivity;
       final showChat = destination == 0 && mobileChat && !settings;
       final content = settings
           ? SettingsScreen(
@@ -522,6 +529,17 @@ class _ShellHomeState extends State<_ShellHome> {
                             ],
                           ),
                         ),
+                      ),
+                    if (activity != null &&
+                        model.authenticated &&
+                        !model.locked &&
+                        _noticeViewGeneration() != null)
+                      ForegroundMessageNotice(
+                        key: ValueKey(destination),
+                        model: model,
+                        activity: activity,
+                        navigation: widget.navigation,
+                        activeViewGeneration: _noticeViewGeneration,
                       ),
                     Expanded(child: content),
                   ],

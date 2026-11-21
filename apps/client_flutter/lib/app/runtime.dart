@@ -10,10 +10,12 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 import '../data/file_persistence.dart';
 import '../data/account_snapshots.dart';
 import '../attachments/attachment_content.dart';
+import '../features/inbox/foreground_message_activity.dart';
 import '../net/account_auth.dart';
 import '../net/attachment_api.dart';
 import '../net/attachment_send_flow.dart';
 import '../net/attachment_upload_api.dart';
+import '../net/chat_pins_api.dart';
 import '../net/favorites_api.dart';
 import '../net/host_connection.dart';
 import '../net/group_api.dart';
@@ -26,6 +28,11 @@ import 'conversation_mapping.dart';
 import 'shell_view_model.dart';
 
 class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
+  @override
+  final foregroundMessageActivity = Platform.isWindows
+      ? ForegroundMessageActivity()
+      : null;
+
   final native = NativePlatform();
   final authenticator = AccountAuthenticator();
   late Directory _dataRoot;
@@ -598,6 +605,80 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       messageOperationsContext != null && _online && !_busy;
 
   @override
+  bool get supportsChatPins => true;
+
+  bool _currentPinView(String conversationId, Object expectedContext) =>
+      _selected == conversationId &&
+      messageOperationsContext == expectedContext;
+
+  @override
+  Future<ChatPinsRead> readChatPins({
+    required String conversationId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+    HostReadCancellation? cancellation,
+  }) async {
+    final transport = connection;
+    bool current() =>
+        identical(connection, transport) &&
+        _online &&
+        _currentPinView(conversationId, expectedContext) &&
+        viewIsCurrent();
+    if (transport == null || !current()) return const ChatPinsUnavailable();
+    final result = await ChatPinsApi(transport).read(
+      conversationId,
+      cancellation: cancellation,
+    );
+    if (result is! ChatPinsLoaded || !current()) {
+      return const ChatPinsUnavailable();
+    }
+    // Pin metadata may precede the joined-history floor (older hosts), name a
+    // tombstone, or refer to a row this device hasn't synced. Only current
+    // visible canonical rows may leave this runtime boundary.
+    final visible = {
+      for (final row in shell.messagesFor(conversationId))
+        if (_favoriteSource(row)) row.messageId,
+    };
+    return ChatPinsLoaded(result.ids.where(visible.contains));
+  }
+
+  @override
+  Future<ChatPinWrite> setMessagePinned({
+    required String conversationId,
+    required String messageId,
+    required bool pinned,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async {
+    final transport = connection;
+    bool current() =>
+        identical(connection, transport) &&
+        _currentPinView(conversationId, expectedContext) &&
+        viewIsCurrent();
+    if (transport == null || !messageOperationsAvailable || !current()) {
+      return ChatPinWrite.cancelled;
+    }
+    bool visible() => shell.messagesFor(conversationId).any(
+      (row) => row.messageId == messageId && _favoriteSource(row),
+    );
+    if (!visible()) return ChatPinWrite.cancelled;
+    // Pins are shared by the conversation. Author/pinner IDs are not proof
+    // of permission; the host applies canPost and the source visibility rule.
+    final key = (shell, conversationId, messageId);
+    if (!_messageWrites.add(key)) return ChatPinWrite.cancelled;
+    try {
+      final result = await ChatPinsApi(transport).setPinned(
+        conversationId,
+        messageId,
+        pinned: pinned,
+      );
+      return current() && visible() ? result : ChatPinWrite.cancelled;
+    } finally {
+      _messageWrites.remove(key);
+    }
+  }
+
+  @override
   Future<MessageWriteOutcome> editMessage({
     required String conversationId,
     required String messageId,
@@ -941,6 +1022,9 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     final generation = _generation;
     final lifecycle = WidgetsBinding.instance.lifecycleState;
     _voiceFlutterResumed = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    foregroundMessageActivity?.setForeground(
+      lifecycle == AppLifecycleState.resumed,
+    );
     WidgetsBinding.instance.addObserver(this);
     _registerNativeHandler();
     try {
@@ -1316,6 +1400,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_disposed) return;
     _voiceFlutterResumed = state == AppLifecycleState.resumed;
+    foregroundMessageActivity?.setForeground(_voiceFlutterResumed);
     final voiceStopped = !_voiceFlutterResumed && _discardVoice();
     if (_controllersReady && shouldLockForLifecycle(state)) {
       appLock.lock();
@@ -1376,8 +1461,11 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     ClientShellController sessionShell,
     SyncRequestFrame frame,
     int generation,
-    int epoch,
-  ) async {
+    int epoch, {
+    ForegroundMessageRefresh? activity,
+  }) async {
+    var incoming = false;
+    var floor = 1;
     void checkActive() {
       if (!_canSync(generation, epoch)) throw const _SyncInterrupted();
     }
@@ -1386,17 +1474,28 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       await transport.sync(
         frame,
         (message) async {
-          await sessionShell.acceptMessage(message, checkActive: checkActive);
+          final outcome = await sessionShell.acceptMessage(
+            message,
+            checkActive: checkActive,
+          );
+          if (!incoming &&
+              outcome == MergeOutcome.applied &&
+              activity?.isIncoming(message) == true) {
+            incoming = true;
+          }
         },
-        applyHistoryFloor: (firstVisibleSeq) =>
-            sessionShell.applySyncHistoryFloor(
-              frame.conversationId,
-              firstVisibleSeq,
-              checkActive: checkActive,
-            ),
+        applyHistoryFloor: (firstVisibleSeq) {
+          if (firstVisibleSeq > floor) floor = firstVisibleSeq;
+          return sessionShell.applySyncHistoryFloor(
+            frame.conversationId,
+            firstVisibleSeq,
+            checkActive: checkActive,
+          );
+        },
         checkActive: checkActive,
       );
       checkActive();
+      activity?.observe(frame.conversationId, floor, incoming: incoming);
       return true;
     } on _SyncInterrupted {
       return false;
@@ -1409,6 +1508,15 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     int generation,
     int epoch,
   ) async {
+    final activity = foregroundMessageActivity;
+    final self = connectedAccountId;
+    final notice = self == null
+        ? null
+        : activity?.begin(
+            session: (generation, epoch),
+            self: self,
+            wasOnline: _online,
+          );
     try {
       // `/host` is administrator-only on the current host. A friend client
       // legitimately receives 403; that must mean isHostMachine=false rather
@@ -1462,8 +1570,16 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           ),
           generation,
           epoch,
+          activity: notice,
         );
         if (!completed) return;
+      }
+      if (notice != null &&
+          _canSync(generation, epoch) &&
+          authenticated &&
+          identical(connection, sessionConnection) &&
+          identical(shell, sessionShell)) {
+        activity?.complete(notice);
       }
       if (_canSync(generation, epoch) && Platform.isAndroid) {
         await native.invoke<bool>('setForegroundService', {'enabled': true});
@@ -2615,6 +2731,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _pendingRenewal = null;
     reconnect?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    foregroundMessageActivity?.dispose();
     NativePlatform.channel.setMethodCallHandler(null);
     unawaited(connection?.close());
     unawaited(_submissionTransport?.close());
