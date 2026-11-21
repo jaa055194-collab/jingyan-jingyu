@@ -402,15 +402,21 @@ Future<Uint8List> _readIdentity() async {
     8 * 1024,
     'one_native_age_identity_required',
   );
+  // Windows PowerShell 5.1 may prefix redirected native stdin with a
+  // UTF-8 BOM. Strip exactly one leading marker; the identity remains ASCII.
+  final identity =
+      raw.length >= 3 && raw[0] == 0xef && raw[1] == 0xbb && raw[2] == 0xbf
+      ? Uint8List.sublistView(raw, 3)
+      : raw;
   try {
-    final lines = const LineSplitter().convert(ascii.decode(raw));
+    final lines = const LineSplitter().convert(ascii.decode(identity));
     final identities = lines
         .where((line) => line.isNotEmpty && !line.startsWith('#'))
         .toList();
     if (identities.length != 1 || !_secretKey.hasMatch(identities.single)) {
       throw const RecoveryFailure('one_native_age_identity_required');
     }
-    return raw;
+    return identity;
   } catch (_) {
     raw.fillRange(0, raw.length, 0);
     throw const RecoveryFailure('one_native_age_identity_required');

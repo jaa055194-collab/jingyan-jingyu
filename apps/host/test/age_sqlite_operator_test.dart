@@ -412,6 +412,45 @@ void main() {
         [...beforeRejections, 'fresh restore']..sort(),
       );
       expect(await _pairDigests(target), original);
+
+      // Windows PowerShell's native stdin pipeline can prefix UTF-8 with a
+      // BOM. Accept one that frames this one native identity, not arbitrary
+      // non-ASCII data or more than one identity.
+      final bom = [0xef, 0xbb, 0xbf];
+      final framed = Uint8List.fromList([...bom, ...identity]);
+      final malformedFrame = Uint8List.fromList([...bom, ...framed]);
+      try {
+        final extraBomTarget = Directory('${root.path}/refused extra BOM');
+        _rejected(
+          await _operator(
+            _restoreArguments(
+              age: age,
+              archive: archive,
+              target: extraBomTarget,
+              digest: digest,
+            ),
+            input: malformedFrame,
+          ),
+          'one_native_age_identity_required',
+        );
+        expect(await extraBomTarget.exists(), isFalse);
+        final psTarget = Directory('${root.path}/fresh PowerShell restore');
+        final psRestore = await _operator(
+          _restoreArguments(
+            age: age,
+            archive: archive,
+            target: psTarget,
+            digest: digest,
+          ),
+          input: framed,
+        );
+        expect(psRestore.exitCode, 0, reason: psRestore.report);
+        expect(psRestore.text, contains('integrity_check=ok'));
+        expect(await _pairDigests(psTarget), original);
+      } finally {
+        framed.fillRange(0, framed.length, 0);
+        malformedFrame.fillRange(0, malformedFrame.length, 0);
+      }
       final restored = await buildHost(
         config: HostConfig(dataDir: target.path),
         clock: h.clock,

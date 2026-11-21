@@ -29,7 +29,7 @@ if ($LASTEXITCODE -ne 0) { throw '备份未成功，保留源目录' }
 
 ## 恢复：仅发布到从未存在的目录
 
-仍在同一 Windows 用户、同一电脑操作，不把目标设为现有数据目录。用离线保管的身份文件经 PowerShell 管道提供内容（不要单独运行 `Get-Content` 或把内容输出到屏幕）。只提供一个 age-keygen 原生身份，允许其注释行。
+仍在同一 Windows 用户、同一电脑操作，不把目标设为现有数据目录。用离线保管的身份文件经 PowerShell 管道提供内容（不要单独运行 `Get-Content` 或把内容输出到屏幕）。只提供一个 age-keygen 原生身份，允许其 ASCII 注释行及 PowerShell 管道可能添加的一个开头 UTF-8 BOM。
 
 ```powershell
 $target = 'D:\JingyuRecovery\verified-001'
