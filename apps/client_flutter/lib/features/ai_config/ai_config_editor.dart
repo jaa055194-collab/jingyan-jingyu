@@ -6,6 +6,8 @@ import '../../net/ai_config_write_api.dart';
 import '../../net/host_connection.dart';
 import '../../net/model_diagnostics_api.dart';
 import '../../net/persona_history_api.dart';
+import 'persona_card_import.dart';
+import 'persona_file_picker.dart';
 import 'persona_history_screen.dart';
 
 /// Read-write "AI 运行配置" hub for one owned AI.
@@ -21,6 +23,7 @@ class AiConfigEditor extends StatefulWidget {
     this.resolveProfileId,
     this.readCatalog,
     this.readPersonaHistory,
+    this.personaFilePicker,
     this.session,
     this.ownedAiAccountIds = const <String>[],
   });
@@ -31,6 +34,11 @@ class AiConfigEditor extends StatefulWidget {
 
   /// Read-only persona history for a profile already resolved by this editor.
   final PersonaHistoryLoader? readPersonaHistory;
+
+  /// Explicit local persona-card file read. Null disables the file entry only;
+  /// pasted JSON remains available. Import always fills the form and never
+  /// writes to the host.
+  final PersonaFilePicker? personaFilePicker;
 
   /// The Settings route captures the original account, epoch and connection.
   final ({ShellViewModel model, bool Function() isCurrent})? session;
@@ -55,6 +63,10 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
   String? _catalogNotice;
   List<String> _catalogModels = const [];
   String? _copiedModel;
+  String? _importNotice;
+  String? _importError;
+  bool _importing = false;
+  int _importGeneration = 0;
 
   final _p0 = TextEditingController();
   final _p1 = TextEditingController();
@@ -140,6 +152,10 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     _profileId = null;
     _status = null;
     _copiedModel = null;
+    _importNotice = null;
+    _importError = null;
+    _importing = false;
+    _importGeneration++;
     _resetCatalog();
     for (final controller in _controllers) {
       controller.clear();
@@ -211,6 +227,14 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
       _profileId = null;
       _resetCatalog();
       _clearCopiedModel();
+      // Imported or typed persona text belongs to one AI only; never carry it
+      // into another AI where it could be written by the next explicit click.
+      _p0.clear();
+      _p1.clear();
+      _p2.clear();
+      _importNotice = null;
+      _importError = null;
+      _importGeneration++;
     });
     _resolve();
   }
@@ -341,6 +365,81 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
       if (mounted && !_sessionLost) setState(() => _busy = false);
     }
   }
+
+  Future<void> _importPersonaFile() async {
+    final picker = widget.personaFilePicker;
+    if (picker == null || !_checkSession() || !_ready || _importing) return;
+    final generation = ++_importGeneration;
+    setState(() {
+      _importing = true;
+      _importError = null;
+    });
+    PersonaFileImport? result;
+    PersonaFileProblem? problem;
+    try {
+      result = await picker.pick();
+    } on PersonaFileImportException catch (error) {
+      problem = error.problem;
+    } catch (_) {
+      problem = PersonaFileProblem.unreadable;
+    }
+    if (!mounted || _sessionLost || generation != _importGeneration) return;
+    if (problem != null) {
+      setState(() {
+        _importing = false;
+        _importNotice = null;
+        _importError = _fileProblemText(problem!);
+      });
+      return;
+    }
+    setState(() => _importing = false);
+    if (result == null) return; // User cancelled: no change, no error.
+    _applyPersonaImport(result.card, '文件「${result.name}」');
+  }
+
+  Future<void> _openPastePersona() async {
+    if (!_checkSession() || !_ready || _importing) return;
+    final card = await showDialog<PersonaCard>(
+      context: context,
+      builder: (_) => const _PersonaPasteDialog(),
+    );
+    if (card == null || !mounted || !_checkSession()) return;
+    _applyPersonaImport(card, '粘贴内容');
+  }
+
+  /// Fills the existing persona text fields only. No writer is called here.
+  void _applyPersonaImport(PersonaCard card, String source) {
+    final String p0;
+    final String p1;
+    final String p2;
+    try {
+      p0 = card.formP0;
+      p1 = card.formP1;
+      p2 = card.formP2;
+    } on FormatException catch (error) {
+      setState(() {
+        _importNotice = null;
+        _importError = error.message;
+      });
+      return;
+    }
+    setState(() {
+      _importError = null;
+      _status = null;
+      _p0.text = p0;
+      _p1.text = p1;
+      _p2.text = p2;
+      _importNotice =
+          '已导入：$source · ${card.summary} · '
+          '仅填充表单，尚未写入宿主；请确认后点击“初始化人格”或“保存人格修改”。';
+    });
+  }
+
+  String _fileProblemText(PersonaFileProblem problem) => switch (problem) {
+    PersonaFileProblem.tooLarge => '所选文件超过 64 KiB；未读取、未改动表单。',
+    PersonaFileProblem.invalid => '所选文件不是有效的人格卡 JSON；未改动表单。',
+    PersonaFileProblem.unreadable => '无法读取所选文件；未改动表单。',
+  };
 
   Map<String, String> _pairs(String raw) {
     final result = <String, String>{};
@@ -479,6 +578,46 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
           _section(
             '人格',
             [
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    key: const Key('persona-import-file'),
+                    onPressed:
+                        !_ready ||
+                            _importing ||
+                            widget.personaFilePicker == null
+                        ? null
+                        : _importPersonaFile,
+                    icon: const Icon(Icons.upload_file_outlined),
+                    label: Text(_importing ? '正在读取文件…' : '导入人格文件'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('persona-import-paste'),
+                    onPressed: !_ready || _importing ? null : _openPastePersona,
+                    icon: const Icon(Icons.content_paste_outlined),
+                    label: const Text('粘贴人格 JSON'),
+                  ),
+                ],
+              ),
+              if (_importNotice != null)
+                Padding(
+                  key: const Key('persona-import-status'),
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(_importNotice!),
+                ),
+              if (_importError != null)
+                Padding(
+                  key: const Key('persona-import-error'),
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    _importError!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 8),
               _field('persona-p0', _p0, 'P0（key=value，每行一条）', lines: 3),
               _field('persona-p1', _p1, 'P1（key=value，每行一条）', lines: 3),
               _field('persona-p2', _p2, 'P2（key=value，每行一条）', lines: 3),
@@ -843,4 +982,99 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     '预算已保存',
     profileGeneration: profileGeneration,
   );
+}
+
+/// Local validation only: the dialog returns a parsed card; the editor fills
+/// the existing form. Nothing here calls the writer or the host.
+class _PersonaPasteDialog extends StatefulWidget {
+  const _PersonaPasteDialog();
+
+  @override
+  State<_PersonaPasteDialog> createState() => _PersonaPasteDialogState();
+}
+
+class _PersonaPasteDialogState extends State<_PersonaPasteDialog> {
+  final _input = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _input.dispose();
+    super.dispose();
+  }
+
+  void _apply() {
+    final PersonaCard card;
+    try {
+      card = PersonaCard.parseText(_input.text);
+    } on FormatException catch (error) {
+      setState(() => _error = error.message);
+      return;
+    }
+    Navigator.of(context).pop(card);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Dialog(
+      key: const Key('persona-import-paste-dialog'),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('粘贴人格卡 JSON', style: text.titleMedium),
+              const SizedBox(height: 4),
+              Text(
+                '格式固定为 PRIVATE_AI_PERSONA_1，顶层仅 format/p0/p1/p2；'
+                'UTF-8 且不超过 64 KiB。导入只填充表单，不写入宿主。',
+                style: text.bodySmall,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('persona-import-paste-input'),
+                controller: _input,
+                minLines: 6,
+                maxLines: 10,
+                decoration: const InputDecoration(
+                  labelText: '人格卡 JSON',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              if (_error != null)
+                Padding(
+                  key: const Key('persona-import-paste-error'),
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    _error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    key: const Key('persona-import-paste-cancel'),
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton(
+                    key: const Key('persona-import-paste-apply'),
+                    onPressed: _apply,
+                    child: const Text('校验并填入'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

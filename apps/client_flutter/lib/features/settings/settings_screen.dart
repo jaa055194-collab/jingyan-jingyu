@@ -20,6 +20,7 @@ import '../../net/world_api.dart';
 import '../ai_config/ai_config_editor.dart';
 import '../ai_config/ai_config_panel.dart';
 import '../ai_config/model_diagnostics_screen.dart';
+import '../ai_config/persona_file_picker.dart';
 import '../attachments/attachments_list_screen.dart';
 import '../attachments/attachments_screen.dart';
 import '../diagnostics/module_test_panel.dart';
@@ -637,6 +638,9 @@ class SettingsScreen extends StatelessWidget {
                               retryAuthentication: false,
                             ),
                       readPersonaHistory: history?.read,
+                      personaFilePicker: connection == null
+                          ? null
+                          : NativePersonaFilePicker(),
                       session: connection == null
                           ? null
                           : (model: shell, isCurrent: sessionCurrent),
