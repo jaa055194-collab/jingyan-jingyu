@@ -12,6 +12,7 @@ import '../../net/ai_config_write_api.dart';
 import '../../net/model_diagnostics_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
+import '../../net/owner_reply_preferences_api.dart';
 import '../../net/persona_history_api.dart';
 import '../../net/search_api.dart';
 import '../../net/voice_api.dart';
@@ -626,6 +627,9 @@ class SettingsScreen extends StatelessWidget {
                 final history = connection == null
                     ? null
                     : PersonaHistoryApi(connection);
+                final replyPreferences = connection == null
+                    ? null
+                    : OwnerReplyPreferencesApi(connection);
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => AiConfigEditor(
@@ -638,6 +642,7 @@ class SettingsScreen extends StatelessWidget {
                               retryAuthentication: false,
                             ),
                       readPersonaHistory: history?.read,
+                      replyPreferences: replyPreferences,
                       personaFilePicker: connection == null
                           ? null
                           : NativePersonaFilePicker(),
