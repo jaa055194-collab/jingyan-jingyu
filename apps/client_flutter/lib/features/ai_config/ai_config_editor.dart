@@ -5,6 +5,8 @@ import '../../app/shell_view_model.dart';
 import '../../net/ai_config_write_api.dart';
 import '../../net/host_connection.dart';
 import '../../net/model_diagnostics_api.dart';
+import '../../net/persona_history_api.dart';
+import 'persona_history_screen.dart';
 
 /// Read-write "AI 运行配置" hub for one owned AI.
 ///
@@ -18,6 +20,7 @@ class AiConfigEditor extends StatefulWidget {
     this.writer,
     this.resolveProfileId,
     this.readCatalog,
+    this.readPersonaHistory,
     this.session,
     this.ownedAiAccountIds = const <String>[],
   });
@@ -25,6 +28,9 @@ class AiConfigEditor extends StatefulWidget {
   final AiConfigWriter? writer;
   final Future<String> Function(String aiAccountId)? resolveProfileId;
   final Future<DiagnosticsRead<ModelCatalog>> Function(String)? readCatalog;
+
+  /// Read-only persona history for a profile already resolved by this editor.
+  final PersonaHistoryLoader? readPersonaHistory;
 
   /// The Settings route captures the original account, epoch and connection.
   final ({ShellViewModel model, bool Function() isCurrent})? session;
@@ -543,6 +549,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
                   ),
                 ],
               ),
+              _personaHistory(profileGeneration),
             ],
             helpKey: 'help-persona',
             help:
@@ -716,6 +723,28 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _personaHistory(int profileGeneration) {
+    final profile = _profileId;
+    final read = widget.readPersonaHistory;
+    bool isCurrent() =>
+        !_sessionLost &&
+        _sessionMatches &&
+        profile != null &&
+        _profileId == profile &&
+        _profileGeneration == profileGeneration;
+    return PersonaHistorySection(
+      key: ValueKey('persona-history-$profileGeneration-$profile'),
+      isCurrent: isCurrent,
+      readPage: profile == null || read == null
+          ? null
+          : (afterVersion, cancellation) => read(
+              profile,
+              afterVersion: afterVersion,
+              cancellation: cancellation,
+            ),
     );
   }
 

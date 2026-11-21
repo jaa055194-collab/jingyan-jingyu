@@ -12,6 +12,7 @@ import '../../net/ai_config_write_api.dart';
 import '../../net/model_diagnostics_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
+import '../../net/persona_history_api.dart';
 import '../../net/search_api.dart';
 import '../../net/voice_api.dart';
 import '../../net/voice_call_api.dart';
@@ -207,7 +208,8 @@ class SettingsScreen extends StatelessWidget {
                     final runtime = model;
                     final connection =
                         runtime is ClientRuntime &&
-                            runtime.authenticated && !runtime.locked
+                            runtime.authenticated &&
+                            !runtime.locked
                         ? runtime.connection
                         : null;
                     final api = connection == null
@@ -492,8 +494,10 @@ class SettingsScreen extends StatelessWidget {
                 MaterialPageRoute<void>(
                   builder: (_) {
                     final runtime = model;
-                    final connection = runtime is ClientRuntime &&
-                            runtime.authenticated && !runtime.locked
+                    final connection =
+                        runtime is ClientRuntime &&
+                            runtime.authenticated &&
+                            !runtime.locked
                         ? runtime.connection
                         : null;
                     final api = connection == null
@@ -547,8 +551,10 @@ class SettingsScreen extends StatelessWidget {
                 MaterialPageRoute<void>(
                   builder: (_) {
                     final runtime = model;
-                    final connection = runtime is ClientRuntime &&
-                            runtime.authenticated && !runtime.locked
+                    final connection =
+                        runtime is ClientRuntime &&
+                            runtime.authenticated &&
+                            !runtime.locked
                         ? runtime.connection
                         : null;
                     return SearchScreen(
@@ -616,6 +622,9 @@ class SettingsScreen extends StatelessWidget {
                 final catalog = connection == null
                     ? null
                     : ModelDiagnosticsApi(connection);
+                final history = connection == null
+                    ? null
+                    : PersonaHistoryApi(connection);
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => AiConfigEditor(
@@ -627,6 +636,7 @@ class SettingsScreen extends StatelessWidget {
                               providerId,
                               retryAuthentication: false,
                             ),
+                      readPersonaHistory: history?.read,
                       session: connection == null
                           ? null
                           : (model: shell, isCurrent: sessionCurrent),
