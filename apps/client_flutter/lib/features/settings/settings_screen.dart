@@ -13,6 +13,7 @@ import '../../net/model_diagnostics_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
 import '../../net/owner_reply_preferences_api.dart';
+import '../../net/owner_rule_greeting_api.dart';
 import '../../net/persona_history_api.dart';
 import '../../net/search_api.dart';
 import '../../net/voice_api.dart';
@@ -34,6 +35,7 @@ import '../voice/voice_call_list_screen.dart';
 import '../voice/voice_screen.dart';
 import '../world/world_status_screen.dart';
 import 'device_sessions_screen.dart';
+import 'owner_rule_greeting_settings_panel.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
@@ -104,6 +106,40 @@ class SettingsScreen extends StatelessWidget {
         platform: platform,
         expectedOwnerAccountId: owner,
         isCurrent: isCurrent,
+      ),
+    );
+  }
+
+  void _openGreetingStop(BuildContext context) {
+    final shell = model;
+    final runtime = shell is ClientRuntime ? shell : null;
+    final connection = runtime?.connection;
+    final owner = shell.connectedAccountId;
+    final session = shell.ownAiSessionContext;
+    final lock = shell.ownAiDirectContext;
+    if (connection == null ||
+        owner == null ||
+        session == null ||
+        lock == null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('解锁并连接宿主后才能管理账户级停止。')));
+      return;
+    }
+    bool isCurrent() =>
+        shell.authenticated &&
+        !shell.locked &&
+        shell.connectedAccountId == owner &&
+        shell.ownAiSessionContext == session &&
+        identical(shell.ownAiDirectContext, lock) &&
+        identical(runtime?.connection, connection);
+    if (!isCurrent()) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => OwnerRuleGreetingStopScreen(
+          api: OwnerRuleGreetingApi(connection),
+          session: shell,
+          isCurrent: isCurrent,
+        ),
       ),
     );
   }
@@ -226,6 +262,12 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ),
             ),
+            if (model is ClientRuntime)
+              OwnerRuleGreetingSettingsPanel(
+                onOpen: model.authenticated && !model.locked
+                    ? () => _openGreetingStop(context)
+                    : null,
+              ),
             const Divider(height: 32),
             Text('通用', style: Theme.of(context).textTheme.titleMedium),
             SwitchListTile(
@@ -643,6 +685,9 @@ class SettingsScreen extends StatelessWidget {
                             ),
                       readPersonaHistory: history?.read,
                       replyPreferences: replyPreferences,
+                      ruleGreeting: connection == null
+                          ? null
+                          : OwnerRuleGreetingApi(connection),
                       personaFilePicker: connection == null
                           ? null
                           : NativePersonaFilePicker(),

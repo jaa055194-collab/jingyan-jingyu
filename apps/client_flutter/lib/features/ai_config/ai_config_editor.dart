@@ -6,8 +6,10 @@ import '../../net/ai_config_write_api.dart';
 import '../../net/host_connection.dart';
 import '../../net/model_diagnostics_api.dart';
 import '../../net/owner_reply_preferences_api.dart';
+import '../../net/owner_rule_greeting_api.dart';
 import '../../net/persona_history_api.dart';
 import 'owner_reply_preferences_section.dart';
+import 'owner_rule_greeting_card.dart';
 import 'persona_card_import.dart';
 import 'persona_file_picker.dart';
 import 'persona_history_screen.dart';
@@ -27,6 +29,7 @@ class AiConfigEditor extends StatefulWidget {
     this.readCatalog,
     this.readPersonaHistory,
     this.replyPreferences,
+    this.ruleGreeting,
     this.personaFilePicker,
     this.session,
     this.ownedAiAccountIds = const <String>[],
@@ -40,6 +43,7 @@ class AiConfigEditor extends StatefulWidget {
   final PersonaHistoryLoader? readPersonaHistory;
 
   final OwnerReplyPreferencesApi? replyPreferences;
+  final OwnerRuleGreetingApi? ruleGreeting;
 
   /// Explicit local persona-card file read. Null disables the file entry only;
   /// pasted JSON remains available. Import always fills the form and never
@@ -192,6 +196,39 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
         isCurrent: () => mounted && !_sessionLost && _sessionMatches &&
             identical(api, widget.replyPreferences) && _selected == selected &&
             _profileId == profile && _profileGeneration == generation,
+        canContactHost: () => session.model.online && !_busy,
+      ),
+    );
+  }
+
+  Widget? _ownerRuleGreeting(int generation) {
+    final api = widget.ruleGreeting;
+    final selected = _selected;
+    final profile = _profileId;
+    final session = _session;
+    if (api == null || selected == null || profile == null || session == null) {
+      return null;
+    }
+    return ListenableBuilder(
+      listenable: session.model,
+      builder: (_, _) => OwnerRuleGreetingCard(
+        key: ValueKey((api, generation, selected, profile)),
+        api: api,
+        profileId: profile,
+        aiLabel:
+            session.model.ownAiAccounts
+                .where((ai) => ai.accountId == selected)
+                .firstOrNull
+                ?.displayName ??
+            selected,
+        isCurrent: () =>
+            mounted &&
+            !_sessionLost &&
+            _sessionMatches &&
+            identical(api, widget.ruleGreeting) &&
+            _selected == selected &&
+            _profileId == profile &&
+            _profileGeneration == generation,
         canContactHost: () => session.model.online && !_busy,
       ),
     );
@@ -604,6 +641,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
             ),
           const Divider(height: 32),
           ?_ownerReplyPreferences(profileGeneration),
+          ?_ownerRuleGreeting(profileGeneration),
           _section(
             '人格',
             [
