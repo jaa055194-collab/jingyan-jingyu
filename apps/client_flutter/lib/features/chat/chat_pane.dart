@@ -6,6 +6,7 @@ import 'package:jingyu_core/jingyu_core.dart';
 import '../../app/shell_view_model.dart';
 import '../favorites/favorites_screen.dart';
 import 'message_favorite_action.dart';
+import 'message_operations_ui.dart';
 import 'voice_message_playback.dart';
 
 class ConversationList extends StatelessWidget {
@@ -426,6 +427,22 @@ class _ChatPaneState extends State<ChatPane> {
     );
   }
 
+  Future<void> _openMessageActions(
+    ShellMessage message, {
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async {
+    if (!_isVoiceViewCurrent() || !viewIsCurrent()) return;
+    await openMessageActions(
+      context,
+      model: widget.model,
+      message: message,
+      conversationId: widget.model.selectedConversationId!,
+      expectedContext: expectedContext,
+      viewIsCurrent: viewIsCurrent,
+    );
+  }
+
   /// Explicit, bounded image open. Nothing is fetched until the user taps.
   Future<void> _openImage(ShellMessage message) async {
     final model = widget.model;
@@ -547,6 +564,18 @@ class _ChatPaneState extends State<ChatPane> {
         model.selectedConversationId == conversationId &&
         model.messageFavoriteContext == favoriteContext;
 
+    final operationsContext = model.messageOperationsContext;
+    // Our own sheet/confirmation routes cover this pane, so they use the
+    // session and selection pins rather than requiring the pane's route on top.
+    bool operationsViewIsCurrent() =>
+        mounted &&
+        _paneActive &&
+        identical(widget.model, model) &&
+        model.authenticated &&
+        !model.locked &&
+        model.selectedConversationId == conversationId &&
+        model.messageOperationsContext == operationsContext;
+
     if (composer.text != model.draft) {
       composer.value = TextEditingValue(
         text: model.draft,
@@ -631,8 +660,17 @@ class _ChatPaneState extends State<ChatPane> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              SelectableText(message.text),
-                              if (message.imageAttachment &&
+                              if (message.recalled)
+                                Text(
+                                  '消息已撤回',
+                                  key: Key('message-recalled-${message.id}'),
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(fontStyle: FontStyle.italic),
+                                )
+                              else
+                                SelectableText(message.text),
+                              if (!message.recalled &&
+                                  message.imageAttachment &&
                                   message.attachmentId != null)
                                 Align(
                                   alignment: Alignment.centerLeft,
@@ -648,7 +686,9 @@ class _ChatPaneState extends State<ChatPane> {
                                     label: const Text('查看图片'),
                                   ),
                                 ),
-                              if (showVoice && message.voiceAttachment)
+                              if (!message.recalled &&
+                                  showVoice &&
+                                  message.voiceAttachment)
                                 VoiceMessagePlaybackControl(
                                   messageId: message.id,
                                   phase: voice?.messageId == message.id
@@ -659,7 +699,8 @@ class _ChatPaneState extends State<ChatPane> {
                                       : null,
                                   onStop: _stopVoice,
                                 ),
-                              if (message.favoriteEligible &&
+                              if (!message.recalled &&
+                                  message.favoriteEligible &&
                                   favoriteContext != null &&
                                   favoriteViewIsCurrent())
                                 MessageFavoriteAction(
@@ -675,11 +716,39 @@ class _ChatPaneState extends State<ChatPane> {
                                   expectedContext: favoriteContext,
                                   viewIsCurrent: favoriteViewIsCurrent,
                                 ),
-                              const SizedBox(height: 4),
-                              Text(
-                                message.status,
-                                style: Theme.of(context).textTheme.labelSmall,
-                              ),
+                              if (!message.recalled) ...[
+                                const SizedBox(height: 4),
+                                Wrap(
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  spacing: 8,
+                                  children: [
+                                    Text(
+                                      message.status,
+                                      style: Theme.of(context).textTheme.labelSmall,
+                                    ),
+                                    if (message.edited)
+                                      Text(
+                                        '已编辑',
+                                        key: Key('message-edited-${message.id}'),
+                                        style: Theme.of(context).textTheme.labelSmall,
+                                      ),
+                                    if (operationsContext != null &&
+                                        (message.canCopy ||
+                                            message.canEdit ||
+                                            message.canRecall))
+                                      IconButton(
+                                        key: Key('message-actions-${message.id}'),
+                                        tooltip: '消息操作',
+                                        onPressed: () => _openMessageActions(
+                                          message,
+                                          expectedContext: operationsContext,
+                                          viewIsCurrent: operationsViewIsCurrent,
+                                        ),
+                                        icon: const Icon(Icons.more_horiz, size: 20),
+                                      ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
                         ),

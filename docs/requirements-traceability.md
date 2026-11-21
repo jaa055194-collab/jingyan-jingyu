@@ -197,3 +197,16 @@ M14 附件列表后续复核见 [验收 §F.3](acceptance.md#f3-汇总与限制)
 | REQ-R2-04 | FR-09/FR-13，AC-16/32 局部；#131 B | 已授权局部 | Android 冷启动或运行中收到纯文本分享时，不覆盖当前草稿、不自动发消息；登录/解锁后才显示待处理文本；显式选择当前可见且草稿为空的会话并再次确认后才写入草稿，仍需普通“发送”才外发；取消/丢弃无写入；URI、二进制或非纯文本不被导为正文 | `ClientRuntime` 单一路径文本暂存/确认，`ClientShellController.saveDraft(checkActive)`，`ShellViewModel`+`SharedTextPanel` 目标确认界面 | Windows Dart/Flutter：[运行时](../apps/client_flutter/test/runtime_share_intake_test.dart) 9 项、[确认界面](../apps/client_flutter/test/share_target_confirmation_test.dart) 10 项、[draft 检查点](../packages/jingyu_client_kit/test/shell_controller_test.dart) 19 项；匹配 Before/After 见 PR/证据 | 自动化验证通过（合成原生事件/回环宿主）；内存态重启会丢失、不加二进制作导入，未跑 Android 原生 Intent/真机，也不声明完整 AC-16 |
 | REQ-R2-05 | FR-65 / AC-29 子集；#131 C | 已授权局部 | 一次显式导出成功后，用户可再次显式选择本地位置把同一 chat-only 版本1包保存为 JSON；取消/失败不改变宿主或界面状态，不自动重试；只显示文件名/大小，不显示路径或聊天明文；明确提示文件为明文且当前宿主导入不持久 | `LifecycleExportBundle.exportFileContents`、`BackupFileStore`/`NativeBackupFileStore`、`NativePlatform.saveBackupFile`；Windows/Android 原生保存对话框 | Windows Dart/Flutter：[文件包往返/上限](../apps/client_flutter/test/lifecycle_export_file_test.dart)、[桥接边界](../apps/client_flutter/test/native_platform_save_test.dart)、[保存交互](../apps/client_flutter/test/backup_quota_actions_test.dart)；[应用 Before/After](../apps/client_flutter/evidence/export-save.md) | 合成导出包和回环宿主自动化验证通过；Windows/Android debug 构建和原生对话框真机/覆盖写未验收，不覆盖文件选入、持久导入、加密备份或完整 AC-29 |
 | REQ-008A | C-1 / FR-14 / AC-18 局部；#131 A | 已授权局部 | 仅入群后可见时，客户端接收当前成员有权看的首条消息并持续分页；空页确认边界，重开仍从已存游标同步；重新加入按新下限移除活动缓存中的旧消息；真实缺口、异会话或坏页不写入 | 宿主 HTTP 差集的可选 `firstVisibleSeq`；`HostConnection.sync` 与 `ClientShellController.applySyncHistoryFloor` | 基线 `4d08323`，Windows Dart/Flutter：[host](../apps/host/test/host_test.dart) 的认证 SQLite 验证、[shell](../packages/jingyu_client_kit/test/shell_controller_test.dart) 的检查点和失败回归、[runtime](../apps/client_flutter/test/runtime_joined_group_sync_test.dart) 的回环 HTTP/真实文件快照回归 | 自动化验证通过（群聊差集子集）；不改变既有宿主访问判定，不代表离线缓存安全擦除、全量 ACK/未读一致性、WebSocket 或设备验收 |
+
+## 第一期候选：本人 AI 私聊、人格导入和聊天内消息操作
+
+基线 `d9dc55d`（同树 `38cd86c`）。以下状态区分局部证据与整条 AC；不改动前述历史记录。
+
+| ID | 规格范围 | 可观察验收 | 验证与证据 | 状态与未覆盖 |
+|---|---|---|---|---|
+| REQ-P1-01 | FR-10 / FR-46 / AC-31、AC-33 局部 | 文档化源码入口既未设置两个覆盖变量，也能注册和启动配套 worker；两者显式成对时保持优先；缺文件时不启动模型；本人文本在已授权配置下可收到一条回复并重启读回 | [默认装配与启动](phase-one/runtime.md)、[隔离宿主基线对照](phase-one/release-verification-plan.md#a-用户报告缺陷的基线复现redgreen) | 局部验证；模型调用的回复证据为合成 worker，实际生产 worker 验证启动与原有出站拒绝，不将两段证据说成真实 Provider 验收 |
+| REQ-P1-02 | FR-41 / 已合入 #174 人格卡编辑 | 从文件或粘贴读合规 JSON，仅填入表单；用户显式初始化/保存才写；取消或错误不改表单 | [格式与限制](persona-card-format.md)、[客户端流程测试](../apps/client_flutter/test/persona_import_ui_test.dart) | 保留既有实现；不包含记忆或原生选择器真机验收 |
+| REQ-P1-03 | FR-15 / AC-19 子集 | 复制可见文本；本人文本编辑保留其余字段；本人允许撤回的消息经确认后显示墓碑；未知回执不重放或误报成功；游标/ACK 不变 | [客户端及宿主回归](phase-one/msgops.md)、[同场景 Flutter 前后对照](../apps/client_flutter/evidence/message-operations.md) | 本机可用切片；不声称已缓存的其他端收到变更，不含完整 FR-15 |
+| REQ-P1-04 | FR-09/11、AC-16/30 子集 | 当前账号可读待处理邀请、确认处理并刷新；已拉取会话显示未读数 | [通知证据与缺口](phase-one/notify-gap.md) | 基线定向回归通过；系统通知、消息点击定位和锁屏通知正文隐私未实现 |
+| REQ-P1-05 | FR-42–44/49/50、AC-04/05/09 | 记忆需独立确认后方可注入；撤权停止；主动联系需独立许可、静默时段与预算 | [记忆与主动联系审计](phase-one/memory-proactive-gap.md) | 未实现；内部仓储和心跳验证不替代生产授权和端到端验收 |
+| REQ-P1-06 | FR-64/65、AC-15/29 | 聊天明文导出只取本人可读取数据；生产加密备份另需轮转和干净宿主恢复验证 | [导出与恢复审计](phase-one/backup-restore.md) | 仅导出及预览定向回归；历史恢复演练非生产备份，完整恢复、轮转未实现 |

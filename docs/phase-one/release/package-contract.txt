@@ -1,0 +1,35 @@
+PASS staging reports PACKAGE_STAGED
+PASS layout contains windows/client_flutter.exe
+PASS layout contains windows/data/app.so
+PASS layout contains windows/data/flutter_assets/AssetManifest.bin
+PASS layout contains android/jingyu-debug.apk
+PASS layout contains host/apps/host/bin/server.dart
+PASS layout contains host/tool/init_host.ps1
+PASS layout contains start-host.ps1
+PASS layout contains persona-sample.json
+PASS layout contains README.md
+PASS layout contains VERIFICATION.md
+PASS layout contains HOST-SOURCE.txt
+PASS layout contains SHA256SUMS
+PASS layout contains jingyu-windows-phase-one-211878a.zip
+PASS HOST-SOURCE records commit and archive method
+PASS README has no unresolved tokens
+PASS README names the source commit
+PASS README embeds the verification note
+PASS README points first-time init at bundled host
+PASS README shows concrete budget format
+PASS VERIFICATION copied verbatim
+PASS SHA256SUMS covers every staged file
+PASS SHA256SUMS matches recomputed hashes
+PASS verify_package accepts staged package
+PASS verify_package rejects a modified release file
+PASS launcher -CheckOnly binds bundled host by default
+PASS launcher reports data dir and default port
+PASS launcher rejects a missing host root
+PASS launcher rejects an uninitialized data dir
+PASS existing output directory is never overwritten
+PASS source HEAD mismatch is rejected
+PASS host snapshot with Git metadata is rejected
+PASS host snapshot with local dependency state is rejected
+PASS Windows bundle without executable is rejected
+PACKAGE_CONTRACT_PASSED

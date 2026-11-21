@@ -1,0 +1,9 @@
+MODE=base-explicit ISOLATED_DATA=true LAUNCH=dart run bin/server.dart
+INITIALIZE exit=0
+WORKER_EXECUTABLE=set WORKER_PATH=set
+jingyu host 0.1.0 listening on 127.0.0.1:57562
+PROVIDER_LOOPBACK http=403 error=forbidden fixtureCalls=0
+HTTP_SETUP login=200 ai=200 profile=200 provider=200 binding=200 budget=200 persona=200 level=L0 consent=ownerTextOnly
+AUTO_REPLY status=completed failure=- syncRows=2 fixtureCalls=1 recordedTokens=7
+jingyu host 0.1.0 listening on 127.0.0.1:63253
+BASE_EXPLICIT_GREEN canonical=true reopened=true fixtureCalls=1

@@ -24,7 +24,7 @@ tool/check.ps1              全仓分析与测试
 
 需要 Dart 3.9 及以上（本机 Flutter 3.50 自带 Dart 3.14）。
 
-首次部署、同机登录和跨设备访问见[Windows 宿主启动与连接](docs/host-setup.md)。开发检查：
+首次部署、同机登录和跨设备访问见[Windows 宿主启动与连接](docs/host-setup.md)。第一期包的范围及验证入口见[第一期候选包](docs/phase-one/README.md)。开发检查：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tool/check.ps1 # pub get + analyze + test

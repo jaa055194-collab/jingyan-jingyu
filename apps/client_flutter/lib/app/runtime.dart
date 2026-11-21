@@ -17,6 +17,7 @@ import '../net/attachment_upload_api.dart';
 import '../net/favorites_api.dart';
 import '../net/host_connection.dart';
 import '../net/group_api.dart';
+import '../net/message_operations_api.dart';
 import '../net/own_ai_api.dart';
 import '../net/owner_ai_direct_api.dart';
 import '../net/voice_message_api.dart';
@@ -102,6 +103,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   String? _error, _selectedConversation, _preview;
   int _favoriteSelectionRevision = 0;
   final _submittedMessageFavorites = <(String, String)>{};
+  final _messageWrites = <(ClientShellController, String, String)>{};
+  final _unconfirmedMessageWrites = <(ClientShellController, String, String)>{};
   String? get _selected => _selectedConversation;
   set _selected(String? value) {
     if (_selectedConversation != value) _favoriteSelectionRevision++;
@@ -373,43 +376,71 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   }
 
   @override
-  List<ShellMessage> get messages => _selected == null
-      ? []
-      : [
-          for (final message in shell.messagesFor(_selected!))
-            ShellMessage(
-              id: message.messageId,
-              text: _messageLabel(message.kind, message.body),
-              attachmentId: message.body['attachmentId'] is String
-                  ? message.body['attachmentId'] as String
-                  : null,
-              attachmentName: _attachmentName(message.kind, message.body),
-              imageAttachment:
-                  message.kind == MessageKind.image &&
-                  message.body['attachmentId'] is String &&
-                  message.body['recalled'] != true,
-              voiceAttachment: _voiceAttachmentOf(message) != null,
-              favoriteEligible: _favoriteSource(message),
-            ),
-          for (final item in shell.outbox.items.where(
-            (e) => e.conversationId == _selected,
-          ))
-            ShellMessage(
-              id: item.clientMsgId,
-              text: _messageLabel(item.kind, item.body),
-              outgoing: true,
-              status: '等待补传',
-            ),
-          for (final drop in shell.dropped.where(
-            (e) => e.item.conversationId == _selected,
-          ))
-            ShellMessage(
-              id: drop.item.clientMsgId,
-              text: _messageLabel(drop.item.kind, drop.item.body, fallback: ''),
-              outgoing: true,
-              status: '发送失败',
-            ),
-        ];
+  List<ShellMessage> get messages {
+    if (_selected == null) return [];
+    final selected = _selected!;
+    return [
+      for (final message in shell.messagesFor(selected))
+        _canonicalShellMessage(message),
+      for (final item in shell.outbox.items.where(
+        (e) => e.conversationId == selected,
+      ))
+        ShellMessage(
+          id: item.clientMsgId,
+          text: _messageLabel(item.kind, item.body),
+          outgoing: true,
+          status: '等待补传',
+        ),
+      for (final drop in shell.dropped.where(
+        (e) => e.item.conversationId == selected,
+      ))
+        ShellMessage(
+          id: drop.item.clientMsgId,
+          text: _messageLabel(drop.item.kind, drop.item.body, fallback: ''),
+          outgoing: true,
+          status: '发送失败',
+        ),
+    ];
+  }
+
+  ShellMessage _canonicalShellMessage(MessageEventFrame message) {
+    final recalled = message.body['recalled'] == true;
+    return ShellMessage(
+      id: message.messageId,
+      text: recalled
+          ? '消息已撤回'
+          : _messageLabel(message.kind, message.body),
+      outgoing: message.senderId == connectedAccountId,
+      attachmentId: !recalled && message.body['attachmentId'] is String
+          ? message.body['attachmentId'] as String
+          : null,
+      attachmentName: recalled ? null : _attachmentName(message.kind, message.body),
+      imageAttachment:
+          message.kind == MessageKind.image &&
+          message.body['attachmentId'] is String &&
+          !recalled,
+      voiceAttachment: _voiceAttachmentOf(message) != null,
+      favoriteEligible: _favoriteSource(message),
+      operationEligible: _favoriteSource(message),
+      copyText: _favoriteSource(message)
+          ? _liveText(message.kind, message.body)
+          : null,
+      sentAt: message.sentAt,
+      edited: !recalled && shell.isMessageEdited(
+        message.conversationId,
+        message.messageId,
+      ),
+      recalled: recalled,
+    );
+  }
+
+  static String? _liveText(MessageKind kind, Map<String, Object?> body) {
+    if (kind != MessageKind.text || body['recalled'] == true) return null;
+    if (body['attachmentId'] is String) return null;
+    final text = body['text'];
+    if (text is! String || text.trim().isEmpty) return null;
+    return text;
+  }
   static String? _attachmentName(MessageKind kind, Map<String, Object?> body) {
     if (kind != MessageKind.image && kind != MessageKind.file) return null;
     if (body['attachmentId'] is! String) return null;
@@ -556,6 +587,133 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     final outcome = await FavoritesApi(transport)
         .saveMessage(conversationId: conversationId, messageId: messageId);
     return current() ? outcome : FavoriteSaveOutcome.cancelled;
+  }
+
+  // Same authenticated, unlocked, visible selection as the favorite action.
+  @override
+  Object? get messageOperationsContext => messageFavoriteContext;
+
+  @override
+  bool get messageOperationsAvailable =>
+      messageOperationsContext != null && _online && !_busy;
+
+  @override
+  Future<MessageWriteOutcome> editMessage({
+    required String conversationId,
+    required String messageId,
+    required String expectedText,
+    required String text,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) => _mutateOwnMessage(
+    conversationId: conversationId,
+    messageId: messageId,
+    expectedContext: expectedContext,
+    viewIsCurrent: viewIsCurrent,
+    edit: (expectedText: expectedText, text: text),
+  );
+
+  @override
+  Future<MessageWriteOutcome> recallMessage({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) => _mutateOwnMessage(
+    conversationId: conversationId,
+    messageId: messageId,
+    expectedContext: expectedContext,
+    viewIsCurrent: viewIsCurrent,
+  );
+
+  Future<MessageWriteOutcome> _mutateOwnMessage({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+    ({String expectedText, String text})? edit,
+  }) async {
+    final transport = connection;
+    bool currentView() =>
+        viewIsCurrent() &&
+        _selected == conversationId &&
+        messageOperationsContext == expectedContext;
+    if (transport == null || !messageOperationsAvailable || !currentView()) {
+      return const MessageWriteCancelled();
+    }
+    final sessionShell = shell;
+    final generation = _generation;
+    final epoch = _historySyncEpoch;
+    bool currentSession() =>
+        _canSync(generation, epoch) &&
+        authenticated &&
+        identical(shell, sessionShell) &&
+        identical(connection, transport);
+    final source = sessionShell.messagesFor(conversationId)
+        .where((row) => row.messageId == messageId).firstOrNull;
+    if (source == null ||
+        !_favoriteSource(source) ||
+        source.senderId != connectedAccountId) {
+      return const MessageWriteRejected();
+    }
+    if (edit != null) {
+      if (_liveText(source.kind, source.body) != edit.expectedText) {
+        return const MessageWriteCancelled();
+      }
+    } else if (DateTime.now().difference(source.sentAt) > const Duration(hours: 24)) {
+      return const MessageWriteRejected();
+    }
+
+    final key = (sessionShell, conversationId, messageId);
+    if (_unconfirmedMessageWrites.contains(key)) return const MessageWriteUnknown();
+    if (!_messageWrites.add(key)) return const MessageWriteCancelled();
+    try {
+      final api = MessageOperationsApi(transport);
+      final result = edit == null
+          ? await api.recallMessage(conversationId: conversationId, messageId: messageId)
+          : await api.editMessage(source: source, text: edit.text);
+      if (!currentSession()) return const MessageWriteCancelled();
+      final body = switch (result) {
+        EditAccepted(:final body) => body,
+        MessageWriteAccepted() => const <String, Object?>{'recalled': true},
+        _ => null,
+      };
+      if (body == null) {
+        if (result is MessageWriteUnknown) _unconfirmedMessageWrites.add(key);
+        return currentView() ? result : const MessageWriteCancelled();
+      }
+      try {
+        await sessionShell.applyMessageRevisions(
+          conversationId,
+          [MessageEventFrame(
+            id: source.id,
+            at: source.at,
+            conversationId: source.conversationId,
+            seq: source.seq,
+            messageId: source.messageId,
+            senderId: source.senderId,
+            kind: source.kind,
+            body: body,
+            sentAt: source.sentAt,
+          )],
+          markEdited: edit == null ? null : messageId,
+          checkActive: () {
+            if (!currentSession()) throw const _SyncInterrupted();
+          },
+        );
+      } on _SyncInterrupted {
+        return const MessageWriteCancelled();
+      } catch (_) {
+        if (!currentSession()) return const MessageWriteCancelled();
+        _unconfirmedMessageWrites.add(key);
+        return currentView() ? const MessageWriteUnknown() : const MessageWriteCancelled();
+      }
+      if (!currentSession()) return const MessageWriteCancelled();
+      notifyListeners();
+      return currentView() ? const MessageWriteAccepted() : const MessageWriteCancelled();
+    } finally {
+      _messageWrites.remove(key);
+    }
   }
 
   @override
@@ -1089,6 +1247,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   void _publishSnapshot(_PreparedSnapshot prepared) {
     _submissionTransport = prepared.transport;
     storage = prepared.storage;
+    _unconfirmedMessageWrites.clear();
     shell = prepared.shell;
     consent = prepared.consent;
     _chatEntered = prepared.chatEntered;

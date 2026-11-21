@@ -4,6 +4,8 @@
 /// 不得写进仓库（NFR-06）。
 library;
 
+import 'dart:io';
+
 /// 宿主配置。
 class HostConfig {
   const HostConfig({
@@ -36,6 +38,49 @@ class HostConfig {
   /// 未配置任一项时，不授予宿主机能力；不从地址、平台或请求参数推断。
   final String? hostAccountId;
   final String? hostDeviceId;
+
+  /// Source-server startup only. The entry point supplies [script] and
+  /// [resolvedExecutable] from `Platform`; neither comes from a request.
+  /// An explicit override never mixes with inferred paths. Failure to infer a
+  /// usable pair is reported, but does not prevent non-model host features.
+  factory HostConfig.forServer(
+    Map<String, String> env, {
+    required Uri script,
+    required String resolvedExecutable,
+    required void Function(String) onWorkerUnavailable,
+  }) {
+    final config = HostConfig.fromEnvironment(env);
+    if (config.modelWorkerExecutable != null ||
+        config.modelWorkerPath != null) {
+      return config;
+    }
+
+    // Don't infer a worker for snapshots, compiled executables, or other entry
+    // points. Never search the current directory or PATH for a launch target.
+    if (script.scheme != 'file' || !script.path.endsWith('/bin/server.dart')) {
+      onWorkerUnavailable('Default model worker requires bin/server.dart.');
+      return config;
+    }
+    final executable = File(resolvedExecutable);
+    if (!executable.isAbsolute || !executable.existsSync()) {
+      onWorkerUnavailable(
+        'Default model worker requires the running Dart SDK executable.',
+      );
+      return config;
+    }
+    final worker = File.fromUri(script.resolve('http_worker.dart'));
+    if (!worker.isAbsolute || !worker.existsSync()) {
+      onWorkerUnavailable(
+        'Default model worker file not found: bin/http_worker.dart.',
+      );
+      return config;
+    }
+    return HostConfig.fromEnvironment({
+      ...env,
+      'JINGYU_MODEL_WORKER_EXECUTABLE': resolvedExecutable,
+      'JINGYU_MODEL_WORKER_PATH': worker.path,
+    });
+  }
 
   /// 从环境变量读取：`JINGYU_BIND`、`JINGYU_PORT`、`JINGYU_DATA_DIR`，
   /// 可选的模型工作进程路径，以及 `JINGYU_HOST_ACCOUNT_ID` /
