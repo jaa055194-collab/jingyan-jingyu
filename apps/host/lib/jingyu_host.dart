@@ -179,7 +179,6 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
     store: messages,
     clock: clock,
   );
-  final reactions = ReactionsService(database: storage.database, clock: clock);
   final blindIndex = BlindIndexService(
     database: storage.database,
     cipher: storage.cipher,
@@ -226,6 +225,12 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
         conversations.firstVisibleSeqInTransaction,
   );
   final pins = PinsService(
+    database: storage.database,
+    historyAccess: membership.firstVisibleSeqInTransaction,
+    writeAudit: SqliteAuditLog.recordInTransaction,
+    clock: clock,
+  );
+  final reactions = ReactionsService(
     database: storage.database,
     historyAccess: membership.firstVisibleSeqInTransaction,
     writeAudit: SqliteAuditLog.recordInTransaction,

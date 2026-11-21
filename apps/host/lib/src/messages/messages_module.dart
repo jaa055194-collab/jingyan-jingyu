@@ -601,11 +601,6 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'reactions unavailable'),
       );
     }
-    if (!await _members.canPost(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
     final body = request.jsonObject();
     if (body is Err<Map<String, Object?>> || body.value['emoji'] is! String) {
       return HostResponse.failure(
@@ -639,14 +634,10 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'reactions unavailable'),
       );
     }
-    if (!await _members.canRead(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
     final result = await reactions.list(
       conversationId: conversationId,
       messageId: messageId,
+      accountId: principal.accountId,
     );
     return HostResponse.fromResult(
       result,
