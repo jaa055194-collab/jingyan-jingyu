@@ -20,6 +20,7 @@ import '../net/favorites_api.dart';
 import '../net/host_connection.dart';
 import '../net/group_api.dart';
 import '../net/message_operations_api.dart';
+import '../net/message_reactions_api.dart';
 import '../net/own_ai_api.dart';
 import '../net/owner_ai_direct_api.dart';
 import '../net/voice_message_api.dart';
@@ -673,6 +674,74 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         pinned: pinned,
       );
       return current() && visible() ? result : ChatPinWrite.cancelled;
+    } finally {
+      _messageWrites.remove(key);
+    }
+  }
+
+  @override
+  bool get supportsMessageReactions => true;
+
+  bool _currentReactionMessage(
+    HostConnection transport,
+    String conversationId,
+    String messageId,
+    Object expectedContext,
+    bool Function() viewIsCurrent,
+  ) =>
+      identical(connection, transport) &&
+      _online &&
+      _selected == conversationId &&
+      messageOperationsContext == expectedContext &&
+      viewIsCurrent() &&
+      shell.messagesFor(conversationId).any(
+        (row) => row.conversationId == conversationId &&
+            row.messageId == messageId && _favoriteSource(row),
+      );
+
+  @override
+  Future<ReactionRead> readMessageReactions({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+    HostReadCancellation? cancellation,
+  }) async {
+    final transport = connection;
+    final owner = connectedAccountId;
+    bool current() => transport != null && _currentReactionMessage(
+      transport, conversationId, messageId, expectedContext, viewIsCurrent,
+    );
+    if (owner == null || !current()) return const ReactionsUnavailable();
+    final result = await MessageReactionsApi(transport!).read(
+      conversationId,
+      messageId,
+      ownAccountId: owner,
+      cancellation: cancellation,
+    );
+    return current() ? result : const ReactionsUnavailable();
+  }
+
+  @override
+  Future<ReactionWrite> toggleMessageReaction({
+    required String conversationId,
+    required String messageId,
+    required ChatReaction choice,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async {
+    final transport = connection;
+    bool current() => transport != null && _currentReactionMessage(
+      transport, conversationId, messageId, expectedContext, viewIsCurrent,
+    );
+    if (!messageOperationsAvailable || !current()) return const ReactionCancelled();
+    final key = (shell, conversationId, messageId);
+    if (!_messageWrites.add(key)) return const ReactionCancelled();
+    try {
+      final result = await MessageReactionsApi(transport!).toggle(
+        conversationId, messageId, choice,
+      );
+      return current() ? result : const ReactionCancelled();
     } finally {
       _messageWrites.remove(key);
     }

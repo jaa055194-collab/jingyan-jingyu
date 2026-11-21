@@ -5,8 +5,9 @@ import 'package:material_ui/material_ui.dart';
 import '../../app/shell_view_model.dart';
 import '../../net/message_operations_api.dart';
 import 'chat_pins_dialog.dart';
+import 'message_reactions_sheet.dart';
 
-enum _Action { copy, edit, recall, pin }
+enum _Action { copy, edit, recall, pin, reactions }
 
 void _notice(BuildContext context, String message) {
   ScaffoldMessenger.of(context)
@@ -79,6 +80,13 @@ Future<void> openMessageActions(
                           ? () => Navigator.of(sheet).pop(_Action.edit)
                           : null,
                     ),
+                  if (model.supportsMessageReactions && message.operationEligible)
+                    ListTile(
+                      key: const Key('message-action-reactions'),
+                      leading: const Icon(Icons.emoji_emotions_outlined),
+                      title: const Text('表情回应'),
+                      onTap: () => Navigator.of(sheet).pop(_Action.reactions),
+                    ),
                   if (model.supportsChatPins && message.operationEligible)
                     ListTile(
                       key: const Key('message-action-pin'),
@@ -123,6 +131,18 @@ Future<void> openMessageActions(
     } on PlatformException {
       if (context.mounted && sameRow()) _notice(context, '无法访问系统剪贴板');
     }
+    return;
+  }
+  if (choice == _Action.reactions) {
+    if (!model.supportsMessageReactions || !message.operationEligible) return;
+    await openMessageReactions(
+      context,
+      model: model,
+      conversationId: conversationId,
+      messageId: message.id,
+      expectedContext: expectedContext,
+      viewIsCurrent: sameRow,
+    );
     return;
   }
   if (choice == _Action.pin) {

@@ -7,6 +7,7 @@ import '../net/host_connection.dart' show HostReadCancellation;
 import '../net/favorites_api.dart' show FavoriteSaveOutcome;
 import '../net/message_operations_api.dart'
     show MessageWriteOutcome, MessageWriteCancelled;
+import '../net/message_reactions_api.dart';
 
 /// UI-only contract. The runtime owns persistence, network and platform access.
 abstract class ShellViewModel extends ChangeNotifier {
@@ -164,6 +165,26 @@ abstract class ShellViewModel extends ChangeNotifier {
     required Object expectedContext,
     required bool Function() viewIsCurrent,
   }) async => ChatPinWrite.cancelled;
+
+  bool get supportsMessageReactions => false;
+
+  /// Only fixed aggregate counts and the current account's active state cross
+  /// into the view. The selection, row and route must all still be current.
+  Future<ReactionRead> readMessageReactions({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+    HostReadCancellation? cancellation,
+  }) async => const ReactionsUnavailable();
+
+  Future<ReactionWrite> toggleMessageReaction({
+    required String conversationId,
+    required String messageId,
+    required ChatReaction choice,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async => const ReactionCancelled();
 
   /// Replaces one own message body. The runtime validates the current session,
   /// selection and canonical row again before any request.

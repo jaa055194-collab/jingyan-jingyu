@@ -757,8 +757,9 @@ class _ChatPaneState extends State<ChatPane> {
                                         (message.canCopy ||
                                             message.canEdit ||
                                             message.canRecall ||
-                                            (model.supportsChatPins &&
-                                                message.operationEligible)))
+                                            (message.operationEligible &&
+                                                (model.supportsChatPins ||
+                                                    model.supportsMessageReactions))))
                                       IconButton(
                                         key: Key('message-actions-${message.id}'),
                                         tooltip: '消息操作',

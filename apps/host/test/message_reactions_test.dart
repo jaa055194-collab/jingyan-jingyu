@@ -15,6 +15,7 @@ import 'package:jingyu_host/src/social/private_conversations.dart';
 import 'package:jingyu_host/src/social/social_migrations.dart';
 import 'package:jingyu_host/src/storage/cipher.dart';
 import 'package:jingyu_host/src/storage/migrations.dart';
+import 'package:jingyu_host/src/storage/sqlite_audit_log.dart';
 import 'package:jingyu_host/src/storage/sqlite_database.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
@@ -156,6 +157,9 @@ void main() {
       db: db,
       group: conversations,
       direct: PrivateConversations(db: db, clock: clock),
+      groupHistoryInTransaction: conversations.firstVisibleSeqInTransaction,
+      groupPostingHistoryInTransaction:
+          conversations.firstVisibleSeqInTransaction,
     );
     final router = Router();
     final services = HostServices()
@@ -164,7 +168,12 @@ void main() {
     final module = MessagesModule(
       store: messages,
       authenticate: DbAuthenticator(accounts).call,
-      reactions: ReactionsService(database: db, clock: clock),
+      reactions: ReactionsService(
+        database: db,
+        historyAccess: membership.firstVisibleSeqInTransaction,
+        writeAudit: SqliteAuditLog.recordInTransaction,
+        clock: clock,
+      ),
       clock: clock,
     );
     await module.configure(services);
