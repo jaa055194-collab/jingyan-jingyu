@@ -23,6 +23,7 @@ import '../net/message_operations_api.dart';
 import '../net/message_reactions_api.dart';
 import '../net/own_ai_api.dart';
 import '../net/owner_ai_direct_api.dart';
+import '../net/scheduled_messages_scope.dart';
 import '../net/voice_message_api.dart';
 import '../platform/native_platform.dart';
 import 'conversation_mapping.dart';
@@ -595,6 +596,33 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     final outcome = await FavoritesApi(transport)
         .saveMessage(conversationId: conversationId, messageId: messageId);
     return current() ? outcome : FavoriteSaveOutcome.cancelled;
+  }
+
+  @override
+  ScheduledMessagesScope? scheduledMessagesScope(String conversationId) {
+    final transport = connection;
+    final context = messageOperationsContext;
+    if (transport == null ||
+        context == null ||
+        _selected != conversationId ||
+        !_online ||
+        _busy ||
+        !_conversations.any((row) => row.id == conversationId && row.kind == 'group')) {
+      return null;
+    }
+    bool current() =>
+        !_disposed &&
+        identical(connection, transport) &&
+        _selected == conversationId &&
+        messageOperationsContext == context &&
+        _online &&
+        !_busy;
+    return ScheduledMessagesScope(
+      transport: transport,
+      conversationId: conversationId,
+      isCurrent: current,
+      canContactHost: current,
+    );
   }
 
   // Same authenticated, unlocked, visible selection as the favorite action.

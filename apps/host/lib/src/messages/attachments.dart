@@ -866,7 +866,34 @@ class AttachmentService {
     } on FormatException {
       return err(FailureCode.invalidArgument, 'invalid id');
     }
-    final rows = await _database.query(
+    return _assertSendable(
+      (sql, args) => _database.query(sql, args),
+      ownerAccountId: ownerAccountId,
+      attachmentId: attachmentId,
+      conversationId: conversationId,
+    );
+  }
+
+  /// Same sendability rule for an already-owned transaction.
+  Future<Result<void>> assertSendableInTransaction(
+    Tx tx, {
+    required String ownerAccountId,
+    required String attachmentId,
+    required String conversationId,
+  }) => _assertSendable(
+    tx.query,
+    ownerAccountId: ownerAccountId,
+    attachmentId: attachmentId,
+    conversationId: conversationId,
+  );
+
+  Future<Result<void>> _assertSendable(
+    Future<List<Map<String, Object?>>> Function(String, List<Object?>) query, {
+    required String ownerAccountId,
+    required String attachmentId,
+    required String conversationId,
+  }) async {
+    final rows = await query(
       'SELECT owner_account_id, conversation_id FROM attachments WHERE id = ?',
       [attachmentId],
     );

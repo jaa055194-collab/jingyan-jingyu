@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:jingyu_core/jingyu_core.dart';
@@ -10,15 +11,58 @@ import 'package:jingyu_host/src/messages/scheduled.dart';
 import 'package:jingyu_host/src/messages/sqlite_message_store.dart';
 import 'package:jingyu_host/src/social/combined_membership.dart';
 import 'package:jingyu_host/src/social/conversation_service.dart';
+import 'package:jingyu_host/src/social/friendship_migrations.dart';
 import 'package:jingyu_host/src/social/private_conversation_migration.dart';
 import 'package:jingyu_host/src/social/private_conversations.dart';
 import 'package:jingyu_host/src/social/social_migrations.dart';
 import 'package:jingyu_host/src/storage/cipher.dart';
+import 'package:jingyu_host/src/storage/database.dart';
 import 'package:jingyu_host/src/storage/migrations.dart';
 import 'package:jingyu_host/src/storage/sqlite_database.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 import 'package:test/test.dart';
+
+class _ScheduledReadGate implements Database {
+  _ScheduledReadGate(this.inner);
+
+  final Database inner;
+  final observed = Completer<List<Map<String, Object?>>>();
+  final release = Completer<void>();
+  bool _armed = false;
+
+  void arm() => _armed = true;
+
+  @override
+  Future<T> transaction<T>(Future<T> Function(Tx tx) body) =>
+      inner.transaction(body);
+
+  @override
+  Future<int> execute(String sql, [List<Object?> args = const []]) =>
+      inner.execute(sql, args);
+
+  @override
+  Future<int> schemaVersion() => inner.schemaVersion();
+
+  @override
+  Future<String> integrityCheck() => inner.integrityCheck();
+
+  @override
+  Future<List<Map<String, Object?>>> query(
+    String sql, [
+    List<Object?> args = const [],
+  ]) async {
+    final rows = await inner.query(sql, args);
+    if (_armed &&
+        sql.contains('FROM scheduled_messages') &&
+        sql.contains('pending')) {
+      _armed = false;
+      observed.complete(rows);
+      await release.future;
+    }
+    return rows;
+  }
+}
 
 class _FastHasher extends PasswordHasher {
   @override
@@ -37,6 +81,7 @@ void main() {
   late SqliteMessageStore messages;
   late ScheduledMessageService scheduled;
   late ConversationService conversations;
+  late CombinedMembership membership;
   late Pipeline pipeline;
   late FakeClock clock;
   late Map<String, AccountId> ids;
@@ -74,6 +119,22 @@ void main() {
     ),
   );
 
+  Future<HostResponse> readScheduled(
+    String conversationId,
+    String bearer,
+    Map<String, String> query,
+  ) => pipeline.handle(
+    HostRequest(
+      method: 'GET',
+      path: Routes.scheduledMessages.replaceFirst(
+        '{conversationId}',
+        conversationId,
+      ),
+      query: query,
+      headers: {'authorization': 'Bearer $bearer'},
+    ),
+  );
+
   Future<List<Map<String, Object?>>> syncMessages(
     String conversationId,
     String bearer,
@@ -102,6 +163,7 @@ void main() {
         ...accountsMigrations,
         ...messagesMigrations,
         ...socialMigrations,
+        friendshipMigration,
         privateConversationMigration,
       ],
     );
@@ -143,13 +205,6 @@ void main() {
       refreshTokens[name] = login.refreshToken;
     }
     messages = SqliteMessageStore(database: db, cipher: cipher, clock: clock);
-    scheduled = ScheduledMessageService(
-      database: db,
-      cipher: cipher,
-      store: messages,
-      clock: clock,
-      newId: () => 'scheduled-${DateTime.now().microsecondsSinceEpoch}',
-    );
     conversations = ConversationService(
       database: db,
       clock: clock,
@@ -165,10 +220,27 @@ void main() {
         [id],
       )).isNotEmpty,
     );
-    final membership = CombinedMembership(
+    membership = CombinedMembership(
       db: db,
       group: conversations,
       direct: PrivateConversations(db: db, clock: clock),
+      groupHistoryInTransaction: conversations.firstVisibleSeqInTransaction,
+      groupPostingHistoryInTransaction:
+          conversations.firstVisibleSeqInTransaction,
+    );
+    scheduled = ScheduledMessageService(
+      database: db,
+      cipher: cipher,
+      store: messages,
+      historyAccess: (tx, account, conversation, {required requirePost}) =>
+          membership.firstVisibleSeqInTransaction(
+            tx,
+            account,
+            conversation,
+            requirePost: requirePost,
+          ),
+      clock: clock,
+      newId: () => 'scheduled_${clock.now().microsecondsSinceEpoch}',
     );
     final router = Router();
     final services = HostServices()
@@ -211,6 +283,79 @@ void main() {
     'deliverAt': deliverAt.toUtc().toIso8601String(),
   });
 
+  test(
+    'sender-only scheduled status readback is bounded and never scans a missing conversation',
+    () async {
+      final group = await createGroup();
+      final other = (await conversations.createGroup(
+        ownerAccountId: ids['other']!.value,
+        name: 'Other owner group',
+      )).value.id;
+      final created = await scheduleText(
+        group,
+        'private scheduled body',
+        clock.now().add(const Duration(hours: 1)),
+      );
+      final id = (created.json! as Map)['id'] as String;
+      final ownList = await readScheduled(group, tokens['member']!, const {});
+      expect(ownList.status, 200);
+      expect(ownList.json, {
+        'scheduledMessages': [
+          {
+            'id': id,
+            'conversationId': group,
+            'deliverAt': (created.json! as Map)['deliverAt'],
+            'status': 'pending',
+          },
+        ],
+        'hasMore': false,
+      });
+      final ownStatus = await readScheduled(group, tokens['member']!, {
+        'scheduledId': id,
+      });
+      expect(ownStatus.json, {
+        'scheduledMessages': [
+          {
+            'id': id,
+            'conversationId': group,
+            'deliverAt': (created.json! as Map)['deliverAt'],
+            'status': 'pending',
+          },
+        ],
+        'hasMore': false,
+      });
+      final noOwnRows = await readScheduled(other, tokens['member']!, const {});
+      expect(noOwnRows.status, 200);
+      expect((noOwnRows.json! as Map)['scheduledMessages'], isEmpty);
+      final absent = await readScheduled(
+        'syntactically-valid-absent-conversation',
+        tokens['member']!,
+        const {},
+      );
+      expect(absent.status, 200);
+      expect((absent.json! as Map)['scheduledMessages'], isEmpty);
+      final otherList = await readScheduled(group, tokens['other']!, const {});
+      expect(otherList.status, 200);
+      expect((otherList.json! as Map)['scheduledMessages'], isEmpty);
+      expect(
+        (await readScheduled(group, tokens['other']!, {
+          'scheduledId': id,
+        })).status,
+        404,
+      );
+      expect(
+        (await readScheduled(group, tokens['member']!, {'other': 'x'})).status,
+        400,
+      );
+      expect(
+        (await readScheduled(group, tokens['member']!, {
+          'scheduledId': 'missing',
+        })).status,
+        404,
+      );
+    },
+  );
+
   test('a due scheduled message is delivered exactly once', () async {
     final group = await createGroup();
     final created = await scheduleText(
@@ -236,6 +381,28 @@ void main() {
     expect(await scheduled.deliverDue(), 0);
     expect(await syncMessages(group, refreshed.accessToken), hasLength(1));
   });
+
+  test(
+    'legacy non-text scheduled kinds remain accepted and delivered',
+    () async {
+      final group = await createGroup();
+      final created = await postSchedule(group, tokens['member'], {
+        'kind': 'card',
+        'body': {'title': 'legacy card'},
+        'deliverAt': clock
+            .now()
+            .add(const Duration(minutes: 1))
+            .toUtc()
+            .toIso8601String(),
+      });
+      expect(created.status, 200);
+      clock.advance(const Duration(minutes: 1));
+      expect(await scheduled.deliverDue(), 1);
+      final delivered = await syncMessages(group, tokens['member']!);
+      expect(delivered.single['kind'], 'card');
+      expect(delivered.single['body'], {'title': 'legacy card'});
+    },
+  );
 
   test('cancelling a pending scheduled message prevents delivery', () async {
     final group = await createGroup();
@@ -313,6 +480,112 @@ void main() {
       );
       final id = (created.json! as Map)['id'] as String;
       expect((await deleteScheduled(group, id, tokens['other'])).status, 403);
+    },
+  );
+
+  test(
+    'removed sender is terminally withheld and rejoin does not revive the due job',
+    () async {
+      final group = await createGroup();
+      await conversations.addMember(
+        actorAccountId: ids['member']!.value,
+        conversationId: group,
+        memberAccountId: ids['other']!.value,
+      );
+      final created = await postSchedule(group, tokens['other'], {
+        'kind': 'text',
+        'body': {'text': 'withheld after removal'},
+        'deliverAt': clock
+            .now()
+            .add(const Duration(minutes: 1))
+            .toUtc()
+            .toIso8601String(),
+      });
+      final id = (created.json! as Map)['id'] as String;
+      await conversations.removeMember(
+        actorId: ids['member']!.value,
+        conversationId: group,
+        targetId: ids['other']!.value,
+      );
+      clock.advance(const Duration(minutes: 1));
+
+      expect(await scheduled.deliverDue(), 0);
+      expect(await syncMessages(group, tokens['member']!), isEmpty);
+      expect(
+        (await db.query('SELECT status FROM scheduled_messages WHERE id=?', [
+          id,
+        ])).single['status'],
+        'cancelled',
+      );
+      final status = await readScheduled(group, tokens['other']!, {
+        'scheduledId': id,
+      });
+      expect(status.status, 200);
+      expect(
+        ((status.json! as Map)['scheduledMessages']! as List).single['status'],
+        'cancelled',
+      );
+
+      await conversations.addMember(
+        actorAccountId: ids['member']!.value,
+        conversationId: group,
+        memberAccountId: ids['other']!.value,
+      );
+      expect(await scheduled.deliverDue(), 0);
+      expect(await syncMessages(group, tokens['member']!), isEmpty);
+      final readback = await readScheduled(group, tokens['other']!, const {});
+      expect(readback.status, 200);
+      expect((readback.json! as Map)['scheduledMessages'], hasLength(1));
+    },
+  );
+
+  test(
+    'cancel committed after a due-row scan prevents stale-snapshot delivery',
+    () async {
+      final group = await createGroup();
+      final created = await scheduleText(
+        group,
+        'cancel race',
+        clock.now().add(const Duration(seconds: 1)),
+      );
+      final id = (created.json! as Map)['id'] as String;
+      clock.advance(const Duration(seconds: 1));
+
+      final gate = _ScheduledReadGate(db);
+      scheduled = ScheduledMessageService(
+        database: gate,
+        cipher: cipher,
+        store: messages,
+        historyAccess: (tx, account, conversation, {required requirePost}) =>
+            membership.firstVisibleSeqInTransaction(
+              tx,
+              account,
+              conversation,
+              requirePost: requirePost,
+            ),
+        clock: clock,
+      );
+      gate.arm();
+      final dispatch = scheduled.deliverDue();
+      int? dispatchResult;
+      try {
+        final candidates = await gate.observed.future;
+        expect(candidates.map((row) => row['id']), contains(id));
+
+        final cancel = await deleteScheduled(group, id, tokens['member']);
+        expect(cancel.status, 200);
+      } finally {
+        if (!gate.release.isCompleted) gate.release.complete();
+      }
+      dispatchResult = await dispatch;
+      expect(dispatchResult, 0);
+      expect(await syncMessages(group, tokens['member']!), isEmpty);
+      expect(
+        (await db.query('SELECT status FROM scheduled_messages WHERE id=?', [
+          id,
+        ])).single['status'],
+        'cancelled',
+      );
     },
   );
 

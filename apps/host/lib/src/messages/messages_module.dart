@@ -133,6 +133,7 @@ class MessagesModule extends HostModule {
     router.post(Routes.messageEdit, _edit);
     router.get(Routes.messageEdits, _editHistory, access: Access.admin);
     router.post(Routes.scheduledMessages, _schedule);
+    router.get(Routes.scheduledMessages, _listScheduled);
     router.delete(Routes.scheduledMessage, _cancelScheduled);
     router.post(Routes.messageReactions, _react);
     router.get(Routes.messageReactions, _reactionsList);
@@ -688,14 +689,70 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.invalidArgument, 'bad body'),
       );
     }
+    final scheduledBody = content.cast<String, Object?>();
+    final attachments = _attachments;
     final result = await scheduled.schedule(
       conversationId: conversationId,
       senderId: principal.accountId,
       kind: kind,
-      body: content.cast<String, Object?>(),
+      body: scheduledBody,
       deliverAt: deliverAt,
+      attachmentCheck: attachments == null
+          ? null
+          : (
+              tx, {
+              required ownerAccountId,
+              required attachmentId,
+              required conversationId,
+            }) => attachments.assertSendableInTransaction(
+              tx,
+              ownerAccountId: ownerAccountId,
+              attachmentId: attachmentId,
+              conversationId: conversationId,
+            ),
     );
     return HostResponse.fromResult(result);
+  }
+
+  Future<HostResponse> _listScheduled(HostRequest request) async {
+    final scheduled = _scheduled;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (scheduled == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'scheduled messages unavailable'),
+      );
+    }
+    if (request.query.keys.any((key) => key != 'scheduledId') ||
+        request.query.length > 1) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad query'),
+      );
+    }
+    final scheduledId = request.query['scheduledId'];
+    if (scheduledId != null) {
+      try {
+        validateId(scheduledId, kind: 'scheduledMessage');
+      } on FormatException {
+        return HostResponse.failure(
+          const Failure(FailureCode.invalidArgument, 'bad id'),
+        );
+      }
+    }
+    return HostResponse.fromResult(
+      await scheduled.readOwn(
+        conversationId: conversationId,
+        senderId: principal.accountId,
+        scheduledId: scheduledId,
+      ),
+    );
   }
 
   Future<HostResponse> _cancelScheduled(HostRequest request) async {

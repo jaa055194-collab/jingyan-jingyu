@@ -8,6 +8,7 @@ import '../net/favorites_api.dart' show FavoriteSaveOutcome;
 import '../net/message_operations_api.dart'
     show MessageWriteOutcome, MessageWriteCancelled;
 import '../net/message_reactions_api.dart';
+import '../net/scheduled_messages_scope.dart';
 
 /// UI-only contract. The runtime owns persistence, network and platform access.
 abstract class ShellViewModel extends ChangeNotifier {
@@ -104,6 +105,10 @@ abstract class ShellViewModel extends ChangeNotifier {
 
   /// The persisted/visible draft for a conversation, without changing selection.
   String draftFor(String conversationId) => '';
+
+  /// Present only for an authenticated, online, unlocked current group chat.
+  /// Captured at route open; every read and write rechecks this same scope.
+  ScheduledMessagesScope? scheduledMessagesScope(String conversationId) => null;
 
   /// A transient OS-shared text value; never includes native intent fields.
   ShellIncomingShare? get incomingSharedText => null;

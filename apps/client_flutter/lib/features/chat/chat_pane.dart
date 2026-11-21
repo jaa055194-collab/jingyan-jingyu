@@ -8,6 +8,7 @@ import '../favorites/favorites_screen.dart';
 import 'chat_pins_dialog.dart';
 import 'message_favorite_action.dart';
 import 'message_operations_ui.dart';
+import 'scheduled_messages_dialog.dart';
 import 'voice_message_playback.dart';
 
 class ConversationList extends StatelessWidget {
@@ -595,7 +596,23 @@ class _ChatPaneState extends State<ChatPane> {
     final voice = showVoice ? model.voicePlayback : null;
     final voiceActive = voice?.phase == ShellVoicePhase.loading ||
         voice?.phase == ShellVoicePhase.playing;
+    final scheduleScope = model.scheduledMessagesScope(conversationId);
     final chatActions = <Widget>[
+      if (scheduleScope != null)
+        IconButton(
+          key: const Key('open-scheduled-messages'),
+          tooltip: '定时消息',
+          icon: const Icon(Icons.schedule_send_outlined),
+          onPressed: () {
+            if (!_isVoiceViewCurrent() || !scheduleScope.isCurrent()) return;
+            openScheduledMessages(
+              context,
+              model: model,
+              conversationId: conversationId,
+              scope: scheduleScope,
+            );
+          },
+        ),
       if (model.supportsChatPins && operationsContext != null)
         IconButton(
           key: const Key('open-chat-pins'),
