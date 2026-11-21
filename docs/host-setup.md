@@ -38,6 +38,12 @@ Set-Location .\apps\host
 dart run bin/server.dart
 ```
 
+源码启动默认用当前 Dart SDK 和配套的 `bin/http_worker.dart`，不必手工设置
+`JINGYU_MODEL_WORKER_EXECUTABLE` 和 `JINGYU_MODEL_WORKER_PATH`。两项成对显式设置时优先；不要只设置其中一项。
+入口按脚本位置查找 worker，也可从仓库根运行 `dart run apps/host/bin/server.dart`。
+`Model runtime registered (worker: ...)` 只表示模型运行时已装配，不表示 Provider 可用。
+默认 worker 或 SDK 路径缺失时，宿主打印 `Model runtime disabled: <原因>`，仍能提供非模型功能。
+
 保留宿主窗口。在另一窗口运行 `Invoke-RestMethod http://127.0.0.1:<宿主端口>/api/v1/health`，确认返回 `status: ok`。**同一台电脑的客户端**可填 `http://127.0.0.1:<宿主端口>`。停止时在宿主窗口按 Ctrl+C；下次启动沿用同一数据目录、地址和端口。
 
 ## 2. 可选：让 Android 或另一台电脑访问

@@ -2,6 +2,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../net/attachment_api.dart';
 import '../net/favorites_api.dart' show FavoriteSaveOutcome;
+import '../net/message_operations_api.dart'
+    show MessageWriteOutcome, MessageWriteCancelled;
 
 /// UI-only contract. The runtime owns persistence, network and platform access.
 abstract class ShellViewModel extends ChangeNotifier {
@@ -130,6 +132,33 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get supportsVoicePlayback => false;
   ShellVoicePlayback? get voicePlayback => null;
 
+  /// True when host-backed message operations (edit/recall) can be issued for the
+  /// current authenticated, unlocked, online chat session.
+  bool get messageOperationsAvailable => false;
+
+  /// Opaque session/selection epoch. A control must pass the context it was
+  /// rendered with; the runtime refuses a stale confirmation.
+  Object? get messageOperationsContext => null;
+
+  /// Replaces one own message body. The runtime validates the current session,
+  /// selection and canonical row again before any request.
+  Future<MessageWriteOutcome> editMessage({
+    required String conversationId,
+    required String messageId,
+    required String expectedText,
+    required String text,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async => const MessageWriteCancelled();
+
+  /// Recalls one own message inside the host's 24h window.
+  Future<MessageWriteOutcome> recallMessage({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async => const MessageWriteCancelled();
+
   /// Starts one explicit play for a visible, sent voice message. The pane
   /// supplies its current-route check and, when present, its frame barrier.
   Future<void> playVoiceMessage(
@@ -234,6 +263,11 @@ class ShellMessage {
     this.imageAttachment = false,
     this.voiceAttachment = false,
     this.favoriteEligible = false,
+    this.copyText,
+    this.sentAt,
+    this.edited = false,
+    this.recalled = false,
+    this.operationEligible = false,
   });
   final String id;
   final String text;
@@ -248,4 +282,30 @@ class ShellMessage {
 
   /// Set only for a canonical synced row without a recall marker.
   final bool favoriteEligible;
+
+  /// Exact text of a live canonical text message; never a display label.
+  final String? copyText;
+  final DateTime? sentAt;
+
+  /// Locally confirmed edit by this device for a canonical row.
+  final bool edited;
+
+  /// Recalled rows render a placeholder only; their body has no plaintext.
+  final bool recalled;
+
+  /// Runtime says this canonical row is visible and actionable in the current
+  /// session. UI still checks the per-action preconditions.
+  final bool operationEligible;
+
+  bool get canEdit => operationEligible && outgoing && canCopy;
+
+  /// Client-side preview of the host's 24h window; the host stays authoritative.
+  bool get canRecall =>
+      operationEligible &&
+      outgoing &&
+      !recalled &&
+      sentAt != null &&
+      DateTime.now().difference(sentAt!) <= const Duration(hours: 24);
+
+  bool get canCopy => !recalled && copyText?.trim().isNotEmpty == true;
 }

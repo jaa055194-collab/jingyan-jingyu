@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert' show jsonEncode;
+
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 import 'outbox.dart';
@@ -33,6 +35,8 @@ class ClientShellController {
   final _messages = <String, List<MessageEventFrame>>{};
   final _drafts = <String, String>{};
   final _readSeq = <String, int>{};
+  /// Device-local confirmed edit markers, conversationId -> message ids.
+  final _edited = <String, Set<String>>{};
   final _dropped = <DroppedMessage>[];
   bool _initialized = false;
   int _requestId = 0;
@@ -91,6 +95,19 @@ class ClientShellController {
       if (!data.containsKey('readSeq')) {
         for (final entry in _cursors.entries) {
           _readSeq[entry.key] = entry.value.lastSeq;
+        }
+      }
+      final edited = data['edited'];
+      if (edited is Map) {
+        for (final entry in edited.entries) {
+          final value = entry.value;
+          if (entry.key is String && value is List) {
+            final ids = {
+              for (final id in value)
+                if (id is String && id.isNotEmpty) id,
+            };
+            if (ids.isNotEmpty) _edited[entry.key as String] = ids;
+          }
         }
       }
       _dropped.addAll(failures);
@@ -305,12 +322,120 @@ class ClientShellController {
     return outcome;
   }
 
+  /// Applies an explicit edit or recall receipt for messages the cache already
+  /// holds under the same seq.
+  ///
+  /// Edits and recalls keep the message seq, so an incremental sync does not
+  /// replay them; this method replaces the cached row only after the host
+  /// confirmed the mutation and echoed the same canonical identity. A recalled
+  /// row is terminal and is always stored as the bare tombstone: an older page
+  /// or a leftover plaintext body can never resurrect the removed text. Rows
+  /// for an unknown seq are ignored, never invented into the cache, and the
+  /// cursor/ACK state is never touched. [markEdited] records the locally
+  /// confirmed edit marker in the same atomic checkpoint. Returns the number of
+  /// replaced rows; a failed checkpoint leaves body, marker and cursor
+  /// unchanged.
+  Future<int> applyMessageRevisions(
+    String conversationId,
+    Iterable<MessageEventFrame> rows, {
+    String? markEdited,
+    void Function()? checkActive,
+  }) => _serial.run(() async {
+    _requireInitialized();
+    checkActive?.call();
+    final next = <MessageEventFrame>[...?_messages[conversationId]];
+    final bySeq = {for (var i = 0; i < next.length; i++) next[i].seq: i};
+    var changed = 0;
+    for (final row in rows) {
+      if (row.conversationId != conversationId || row.seq < 1) {
+        throw const FormatException(
+          'revision row does not match the cached conversation',
+        );
+      }
+      final index = bySeq[row.seq];
+      if (index == null) continue;
+      final current = next[index];
+      if (current.messageId != row.messageId ||
+          current.senderId != row.senderId ||
+          current.kind != row.kind ||
+          current.sentAt != row.sentAt) {
+        throw const FormatException('conflicting sequence identity');
+      }
+      if (current.body['recalled'] == true) continue;
+      final replacement = row.body['recalled'] == true
+          ? _tombstone(row)
+          : row;
+      if (_sameBody(replacement.body, current.body)) {
+        continue;
+      }
+      next[index] = replacement;
+      changed++;
+    }
+    final marks = {...?_edited[conversationId]};
+    var marksChanged = false;
+    if (markEdited != null &&
+        next.any((row) => row.messageId == markEdited && row.body['recalled'] != true)) {
+      marksChanged = marks.add(markEdited);
+    }
+    for (final row in next) {
+      if (row.body['recalled'] == true && marks.remove(row.messageId)) {
+        marksChanged = true;
+      }
+    }
+    final edited = !marksChanged ? null : {..._edited};
+    if (edited != null) {
+      if (marks.isEmpty) {
+        edited.remove(conversationId);
+      } else {
+        edited[conversationId] = marks;
+      }
+    }
+    if (changed == 0 && edited == null) return 0;
+    checkActive?.call();
+    await _persist(
+      messages: {..._messages, conversationId: next},
+      edited: edited,
+      checkActive: checkActive,
+    );
+    _messages[conversationId] = next;
+    if (edited != null) {
+      _edited
+        ..clear()
+        ..addAll(edited);
+    }
+    return changed;
+  });
+
+  /// A locally confirmed edit marker for one message. It is device-local: the
+  /// wire body is left exactly as the host stored it.
+  bool isMessageEdited(String conversationId, String messageId) =>
+      _edited[conversationId]?.contains(messageId) ?? false;
+
+  static MessageEventFrame _tombstone(MessageEventFrame row) =>
+      MessageEventFrame(
+        id: row.id,
+        at: row.at,
+        conversationId: row.conversationId,
+        seq: row.seq,
+        messageId: row.messageId,
+        senderId: row.senderId,
+        kind: row.kind,
+        body: const {'recalled': true},
+        sentAt: row.sentAt,
+      );
+
+  static bool _sameBody(
+    Map<String, Object?> left,
+    Map<String, Object?> right,
+  ) => jsonEncode(left) == jsonEncode(right);
+
   Future<void> _persist({
     OutboxItem? pendingItem,
     Map<String, String>? drafts,
     Map<String, SyncCursor>? cursors,
     Map<String, int>? readSeq,
     Map<String, List<MessageEventFrame>>? messages,
+    Map<String, Set<String>>? edited,
     MessageEventFrame? pendingMessage,
     void Function()? checkActive,
   }) => writeClientSection(persistence, 'shell', {
@@ -331,6 +456,11 @@ class ClientShellController {
       for (final e in (cursors ?? _cursors).entries) e.key: e.value.lastSeq,
     },
     'readSeq': {...(readSeq ?? _readSeq)},
+    if ((edited ?? _edited).isNotEmpty)
+      'edited': {
+        for (final entry in (edited ?? _edited).entries)
+          entry.key: (entry.value.toList()..sort()),
+      },
     'messages': [
       for (final list in (messages ?? _messages).values)
         for (final m in list) m.toEnvelope(),
