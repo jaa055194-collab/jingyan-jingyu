@@ -67,6 +67,30 @@ class HostConnection {
     String path, {
     required int maxResponseBytes,
     HostReadCancellation? cancellation,
+  }) => _getBoundedJson(
+    path,
+    maxResponseBytes: maxResponseBytes,
+    cancellation: cancellation,
+  );
+
+  /// The same one-shot bounded read with separately encoded query parameters.
+  Future<Map<String, Object?>> getBoundedJsonWithQuery(
+    String path, {
+    required Map<String, String> query,
+    required int maxResponseBytes,
+    HostReadCancellation? cancellation,
+  }) => _getBoundedJson(
+    path,
+    query: query,
+    maxResponseBytes: maxResponseBytes,
+    cancellation: cancellation,
+  );
+
+  Future<Map<String, Object?>> _getBoundedJson(
+    String path, {
+    Map<String, String>? query,
+    required int maxResponseBytes,
+    HostReadCancellation? cancellation,
   }) async {
     if (maxResponseBytes < 1) {
       throw ArgumentError.value(maxResponseBytes, 'maxResponseBytes');
@@ -77,21 +101,30 @@ class HostConnection {
     final signal = Completer<void>();
     stop._signal = signal;
     try {
-      final decoded = await Future.any<Object?>([
-        _requestJson(
-          'GET',
-          path,
-          retryAuthentication: false,
-          maxResponseBytes: maxResponseBytes,
-          cancellation: stop,
-        ),
-        signal.future.then<Object?>((_) => throw HostReadCancellation._error),
-      ]).timeout(const Duration(seconds: 15), onTimeout: () {
-        stop.cancel();
-        throw TimeoutException('宿主响应超时');
-      });
+      final decoded =
+          await Future.any<Object?>([
+            _requestJson(
+              'GET',
+              path,
+              query: query,
+              retryAuthentication: false,
+              maxResponseBytes: maxResponseBytes,
+              cancellation: stop,
+            ),
+            signal.future.then<Object?>(
+              (_) => throw HostReadCancellation._error,
+            ),
+          ]).timeout(
+            const Duration(seconds: 15),
+            onTimeout: () {
+              stop.cancel();
+              throw TimeoutException('宿主响应超时');
+            },
+          );
       stop._check();
-      if (decoded is! Map<String, Object?>) throw const FormatException('宿主响应无效');
+      if (decoded is! Map<String, Object?>) {
+        throw const FormatException('宿主响应无效');
+      }
       return decoded;
     } finally {
       stop._abort = null;
@@ -134,7 +167,10 @@ class HostConnection {
         ? await closing.timeout(const Duration(seconds: 15))
         : await closing;
     final text = maxResponseBytes == null
-        ? await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 15))
+        ? await response
+              .transform(utf8.decoder)
+              .join()
+              .timeout(const Duration(seconds: 15))
         : await _boundedText(response, maxResponseBytes, cancellation!);
     var renewalFailed = false;
     if (response.statusCode == 401 &&
@@ -285,7 +321,8 @@ class HostConnection {
       final floor = page['firstVisibleSeq'];
       final rows = page['messages'];
       final hasMore = page['hasMore'];
-      if ((page.containsKey('firstVisibleSeq') && (floor is! int || floor < 1)) ||
+      if ((page.containsKey('firstVisibleSeq') &&
+              (floor is! int || floor < 1)) ||
           rows is! List ||
           hasMore is! bool ||
           (hasMore && rows.isEmpty)) {
