@@ -222,6 +222,7 @@ void main() {
         'group_rules',
         'owner_ai_reply_status',
         'owner_reply_preferences',
+        'owner_rule_greeting',
         'persona',
         'creative_authorization',
         'creative_reports',

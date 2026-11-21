@@ -25,6 +25,9 @@ import 'src/social/group_ai_policy.dart';
 import 'src/messages/message_store.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
+import 'src/ai/life/owner_rule_greeting.dart';
+import 'src/ai/life/owner_rule_greeting_migration.dart';
+import 'src/ai/life/owner_rule_greeting_module.dart';
 import 'src/ai/memory/owner_reply_preferences.dart';
 import 'src/ai/memory/owner_reply_preferences_migration.dart';
 import 'src/ai/memory/owner_reply_preferences_module.dart';
@@ -158,6 +161,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       ...personaMigrations,
       socialLevelMigration,
       ownerReplyPreferencesMigration,
+      ownerRuleGreetingMigration,
       ...creativeMigrations,
       ...voiceMigrations,
       ...worldMigrations,
@@ -516,6 +520,13 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
     OwnerReplyPreferencesModule(
       ownerReplyPreferences,
       DbAuthenticator(accounts).call,
+    ),
+    OwnerRuleGreetingModule(
+      OwnerRuleGreeting(
+        database: storage.database,
+        messages: messages,
+        clock: clock,
+      ),
     ),
     PersonaModule(
       database: storage.database,

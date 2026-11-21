@@ -34,6 +34,10 @@ abstract final class Routes {
   /// Current human operator's AI accounts; no implicit friendship or profile.
   static const String ownAiAccounts = '$prefix/accounts/me/ai';
 
+  /// Account-wide stop for local owner rule greetings, not a dispatch route.
+  static const String ownerRuleGreetingStop =
+      '$prefix/accounts/me/owner-rule-greetings';
+
   /// 管理员账号元数据与账号创建。
   static const String adminAccounts = '$prefix/admin/accounts';
   static const String adminUsage = '$prefix/admin/usage';
@@ -65,6 +69,10 @@ abstract final class Routes {
   /// Current human's explicit ownerTextOnly consent (GET/POST/DELETE), no dispatch.
   static const String ownerAiDirectConsent =
       '$prefix/ai-profiles/{aiId}/direct-conversation';
+
+  /// Separate, default-off settings for a local rule greeting to the owner.
+  static const String aiOwnerRuleGreeting =
+      '$prefix/ai-profiles/{aiId}/owner-rule-greeting';
 
   /// Current human's owner-scoped contacts list (friends/pending/blocked).
   /// Read-only; never accepts an owner or actor from the request.

@@ -178,6 +178,80 @@ ON CONFLICT(owner_id, ai_id) DO UPDATE SET daily_tokens=excluded.daily_tokens,
     return _inspect(tx, ai, layer, capability, _dayForClock(_clock));
   });
 
+  /// Read-only hard stop for a local rule greeting. The caller already owns a
+  /// short dispatch Tx and must append in it; no provider usage is reserved or
+  /// invented. Since no provider/capability will be contacted, any unresolved
+  /// usage for this AI conservatively blocks the proactive message.
+  Future<BudgetDay?> ruleGreetingDayInTx(
+    Tx tx,
+    AiId ai,
+    DateTime instant,
+  ) async {
+    if (!await _owns(tx, ai)) return null;
+    final config = (await tx.query(
+      'SELECT * FROM usage_budget WHERE owner_id=? AND ai_id=?',
+      [_ownerId, ai.value],
+    )).singleOrNull;
+    final offset = config?['offset_minutes'];
+    if (config == null || offset is! int || offset < -840 || offset > 840) {
+      return null;
+    }
+    if ((await tx.query(
+      '''
+SELECT 1 FROM usage_ledger WHERE owner_id=? AND ai_id=? AND source_usage_unknown=1 LIMIT 1''',
+      [_ownerId, ai.value],
+    )).isNotEmpty) {
+      return null;
+    }
+    try {
+      final layers = jsonDecode(config['layer_limits']! as String) as Map;
+      final capabilities =
+          jsonDecode(config['capability_limits']! as String) as Map;
+      final valid = UsageBudget(
+        dailyTokens: int.parse(config['daily_tokens']! as String),
+        layerLimits: {
+          for (final layer in BudgetLayer.values)
+            layer: int.parse(layers[layer.name] as String),
+        },
+        capabilityLimits: {
+          for (final cap in ProviderCapability.values)
+            cap: int.parse(capabilities[cap.name] as String),
+        },
+      );
+      if (layers.length != BudgetLayer.values.length ||
+          capabilities.length != ProviderCapability.values.length ||
+          !valid.isValid) {
+        return null;
+      }
+      final day = BudgetDay(
+        date: dayKey(instant.toUtc().add(Duration(minutes: offset))),
+        offsetMinutes: offset,
+      );
+      final allowed = await _inspect(
+        tx,
+        ai,
+        BudgetLayer.b3Proactive,
+        ProviderCapability.chat,
+        day,
+      );
+      final gate = allowed.valueOrNull;
+      return gate != null &&
+              !gate.dailyUsed.isNegative &&
+              !gate.layerUsed.isNegative &&
+              !gate.capabilityUsed.isNegative &&
+              (gate.degradeLevel == DegradeLevel.normal ||
+                  gate.degradeLevel == DegradeLevel.warn)
+          ? day
+          : null;
+    } on FormatException {
+      return null;
+    } on TypeError {
+      return null;
+    } on ArgumentError {
+      return null;
+    }
+  }
+
   Future<Result<UsageGate>> _inspect(
     Tx tx,
     AiId ai,
