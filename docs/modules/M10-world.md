@@ -21,8 +21,10 @@ apps/host/lib/src/world/
 - 本地 profile 元数据校验位于 `packages/jingyu_client_kit/lib/src/live2d_profile.dart`，只在设备本地校验配置，不检查数据库或参数名是否真实存在。
 - `validateLive2DPackage` 是本地字节预检，不是解包器。它拒绝常见不安全的 ZIP 路径与可执行扩展名；检查识别到的 model3 引用是否使用规范相对路径及对应后缀（例如 `avatar.physics3.json`，不接受 `./` 路径别名）。清单、MOC3 和纹理的选定条目按声明长度限制解压输出，并检查 ZIP 校验和；PNG 检查首块 IHDR 与累计像素数。预检不覆盖完整 ZIP/DEFLATE 语法、所有可选载荷或图片解码，也不能作为安全落盘或渲染的依据。
 - 静态预览准备与暂存接口：从通过检查的 ZIP 仅选取 MOC3 与引用的 PNG，以固定文件名重建清单，写入设备私有临时目录。暂存失败时清理本次文件，清理失败可重试。
+- 渲染桥接与首帧状态机：client kit 的 `Live2DRendererBridge` 定义 Flutter↔WebView 的 `load`/`setParam`/`setExpression`/`setMotion`/`dispose` 与 `ready`/`error` 协议；`Live2DPreviewController` 把桥接接到平台 WebView 宿主，负责 loading→ready/error、首帧超时、重试与释放。只有查看器报告“渲染器已 prepare 且首帧 draw 未抛错”才算 ready；核心 `update()` 不算已绘制。
+- WebView 查看器资源：`packages/jingyu_live2d_web` 提供 `live2d_viewer.html/js`（与实际桥接一致的协议层）、`live2d_renderer_webgl.js`（WebGL2/WebGL 绘制适配器；单层 stencil 掩码近似、部分混合，物理/动作/表情/眨眼不驱动）与 `tool/fetch_purismcore.ps1`（固定版本与 SHA-256 拉取 MIT 运行时，不入库）。Node 行为测试覆盖首帧成功才 ready、首帧失败/缺适配器/缺 core 只报 error、重复 load 拒绝与 dispose 释放；Dart 资产测试覆盖无远程模型 URL、运行时不入库。
 - 客户端的“世界与形象”页已接入本机选包入口：Android 用系统文档选择器、Windows 用系统打开对话框选取 `.zip`，随后在后台 isolate 里按 160 MiB 上限流式读取、预检并暂存；界面只声明“已准备临时预览文件”，可手工清理。Android 会把所选内容流式复制进应用私有缓存（同样 160 MiB 上限，超出即拒绝并删除半成品），Windows 只读取用户自己的文件、不复制。应用锁开启时该入口禁用，避免切走系统选择器触发上锁后结果被丢弃。
-- 上述链路的验证边界：Flutter 侧单测与控件测试覆盖取消、重复点击占用、准备失败与清理路径；原生选择器仅做过 Windows 原生通道契约与 Android Kotlin 编译/流式拷贝检查，**未在真机或真实桌面会话上人工点选**。它不证明 PNG 可完整解码、模型可绘制或设备能承受纹理开销；应用内渲染预览、持久化、热切换和回退尚未接入。
+- 上述链路的验证边界：Flutter 侧单测与控件测试覆盖取消、重复点击占用、准备失败与清理路径；原生选择器仅做过 Windows 原生通道契约与 Android Kotlin 编译/流式拷贝检查，**未在真机或真实桌面会话上人工点选**。它不证明 PNG 可完整解码、模型可绘制或设备能承受纹理开销；应用内渲染预览、持久化、热切换和回退尚未接入。Android WebView / Windows WebView2 宿主与本地资源投递仍未实现：`webview_flutter` 可离线接入 Android，Windows 仍需 WebView2 SDK 或自研宿主。
 - Live2D 选择/导入由每位用户在自己的设备执行；不使用 `hostOnly` 插件门控。各设备独立保存模型文件与 profile，**不做跨端同步、不广播单一 model_id/profile_rev**；同一账号的手机与电脑可各自使用不同模型（如手机 B、电脑 C）。设备缺少本地模型或有效映射时回退 VRM，不下载他端模型。
 
 ## 规则
@@ -30,7 +32,7 @@ apps/host/lib/src/world/
 1. 每个设备独立选取用户自行取得的 Live2D 模型；默认目录/模型包不由应用提供。VRM 保持默认 fallback。形象选择按设备隔离，不做双端一致；同账号各设备互不影响。
 2. profile 只保存相对 model3 manifest 路径、稳定 model_id、profile_rev 与语义 param_map，不保存模型字节、绝对路径、URL、API key 或 Cubism/Core 文件；模型字节不得进入服务端附件、同步、导出或共享备份。
 3. 模型包与档案分别做预检；应用接入前仍须实现受限解包和资源隔离，不能把预检结果当作安全落盘许可。缺口型、左右眨眼、表情或动作映射禁止启用，不许猜参数；档案检查不证明映射目标存在于模型。
-4. 热切换须离屏预载 → 句边界/口型≈0 的一帧原子替换 → 新模型首帧成功后销毁旧实例；不中断音频；失败回滚。当前仅定义 profile metadata，runtime 与热切换尚未实现。
+4. 热切换须离屏预载 → 句边界/口型≈0 的一帧原子替换 → 新模型首帧成功后销毁旧实例；不中断音频；失败回滚。当前仅有 profile metadata、查看器协议与首帧状态机；热切换尚未实现。
 5. 拜访：好友可进小院；室内需邀请；单户访客 ≤4；被拉黑方无法拜访（口径 C-5）。
 6. 宿主离线时位置冻结，恢复后继续，不补造路上经历（FR-36）。
 7. 性能：同屏 ≤8 人，中端安卓室内目标 30fps，空闲降帧（NFR-04）。形象/Live2D 渲染以骁龙 888 稳定 30–60fps 为目标；暂无真机时先实现，整体完成后再实测，不把估算当实测。
