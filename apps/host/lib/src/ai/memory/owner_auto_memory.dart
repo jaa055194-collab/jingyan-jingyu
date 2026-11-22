@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 
+import '../../messages/accepted_message_observer.dart';
 import '../../messages/message_store.dart';
 import '../../social/owner_ai_direct_consent.dart';
 import '../../storage/cipher.dart';
@@ -37,11 +38,27 @@ final class OwnerAutoMemoryEntry {
 
 /// Immutable snapshot carried into one accepted owner text. The live
 /// `isFreshInTx` check is what authorizes the later B2 injection.
+///
+/// Composition root wiring (feature A): pass [kind] as the user-role segment
+/// label and [entries] as its bounded contents. Never merge this segment with
+/// the system prompt, persona, `untrusted_owner_memory_notes`, or another AI.
 final class OwnerAutoMemoryUse {
   const OwnerAutoMemoryUse._(this._target, this._settingsRevision, this.entries);
+
+  /// User-role memory segment kind for the owner's own B2 direct reply.
+  static const kind = 'untrusted_owner_memory';
+
   final OwnerAutoMemoryTarget _target;
   final int _settingsRevision;
   final List<String> entries;
+
+  /// Recommended B2 user-role segment. The composition root must emit this as
+  /// its own `user` turn after the system prompt and before the live owner
+  /// text, never merged with the persona or the notes segment.
+  Map<String, Object?> toJson() => {
+    'kind': kind,
+    'entries': entries,
+  };
 
   bool matchesRecipient(String providerId, String model, String baseUrl) =>
       providerId == _target.providerId &&
@@ -54,7 +71,12 @@ final class OwnerAutoMemoryUse {
 /// length becomes active T0, every other owner text becomes pending T1. Never
 /// T2, never group or third-party content, and entries live in the shared
 /// encrypted store (`MemoryStore.capture`) with no body in audit.
-final class OwnerAutoMemory {
+///
+/// Composition root: register this instance as an [AcceptedMessageObserver]
+/// (post-commit capture), mount `OwnerAutoMemoryModule` for management, and
+/// inject [OwnerAutoMemoryUse] via [forSourceInTx]/[isFreshInTx] in the B2
+/// owner-DM reply path.
+final class OwnerAutoMemory implements AcceptedMessageObserver {
   OwnerAutoMemory({
     required this.database,
     required this.cipher,
@@ -176,7 +198,10 @@ final class OwnerAutoMemory {
     if (write == null) {
       return Ok(_renderSettings(revision, saved, target));
     }
-    if (write.expectedRevision < 0 || write.expectedRevision != revision) {
+    if (write.expectedRevision < 0) {
+      return err(FailureCode.invalidArgument, 'Invalid auto memory revision');
+    }
+    if (write.expectedRevision != revision) {
       return err(FailureCode.conflict, 'Auto memory revision changed');
     }
     final enabled = write.enabled;
@@ -221,7 +246,10 @@ revision=excluded.revision,enabled=excluded.enabled,target_token=excluded.target
     if (write == null) {
       return _renderEntries(tx, owner, ai.value, revision);
     }
-    if (write.expectedRevision < 0 || write.expectedRevision != revision) {
+    if (write.expectedRevision < 0) {
+      return err(FailureCode.invalidArgument, 'Invalid auto memory revision');
+    }
+    if (write.expectedRevision != revision) {
       return err(FailureCode.conflict, 'Auto memory revision changed');
     }
     final entries = await _listEntries(tx, owner, ai.value);
@@ -230,10 +258,14 @@ revision=excluded.revision,enabled=excluded.enabled,target_token=excluded.target
     if (write.kind == _WriteKind.delete) {
       final entry = entries.where((e) => e.id == write.memoryId).firstOrNull;
       if (entry == null) return _entryNotFound();
-      await _transitionEntry(tx, owner, ai.value, entry, now);
+      if (!await _transitionEntry(tx, owner, ai.value, entry, now)) {
+        return err(FailureCode.conflict, 'Auto memory entry changed');
+      }
     } else {
       for (final entry in entries) {
-        await _transitionEntry(tx, owner, ai.value, entry, now);
+        if (!await _transitionEntry(tx, owner, ai.value, entry, now)) {
+          return err(FailureCode.conflict, 'Auto memory entry changed');
+        }
       }
     }
     final next = revision + 1;
@@ -266,6 +298,11 @@ revision=excluded.revision,enabled=excluded.enabled,target_token=excluded.target
       // Ignore: capture is best-effort and the source append already committed.
     }
   }
+
+  /// `AcceptedMessageObserver` adapter so the composition root can register the
+  /// service in the existing post-commit fanout without another class.
+  @override
+  Future<void> onAccepted(StoredMessage message) => captureAccepted(message);
 
   Future<MemoryCandidate?> _prepareCandidate(
     Tx tx,
@@ -498,7 +535,10 @@ ORDER BY created_at DESC,id DESC''',
     return result;
   }
 
-  Future<void> _transitionEntry(
+  /// Removes one entry from the injectable set. Returns false when the policy
+  /// state machine forbids the transition (unreachable for the active/pending
+  /// rows this manager lists, but never silently forced).
+  Future<bool> _transitionEntry(
     Tx tx,
     String owner,
     String ai,
@@ -510,10 +550,16 @@ ORDER BY created_at DESC,id DESC''',
     final to = entry.status == MemoryStatus.active
         ? MemoryStatus.deleted
         : MemoryStatus.rejected;
-    await tx.execute(
-      'UPDATE encrypted_memory SET status=? WHERE id=? AND owning_operator_id=? AND ai_profile_id=? AND scope_key=?',
-      [to.name, entry.id, owner, ai, _scopeKey(owner, ai)],
+    // This path runs inside the caller's transaction (MemoryStore.transition
+    // would open a nested one), so the same state machine is enforced here and
+    // the store's "model cannot confirm" rule holds by construction: this
+    // service only ever moves entries *out* of the injectable set.
+    if (!const MemoryPolicy().canTransition(entry.status, to)) return false;
+    final updated = await tx.execute(
+      'UPDATE encrypted_memory SET status=? WHERE id=? AND owning_operator_id=? AND ai_profile_id=? AND scope_key=? AND status=?',
+      [to.name, entry.id, owner, ai, _scopeKey(owner, ai), entry.status.name],
     );
+    if (updated != 1) return false;
     await tx.execute(
       '''
 INSERT INTO audit_log(at,actor_id,action,target_kind,target_id,meta)
@@ -525,6 +571,7 @@ VALUES(?,?,'memory.transition','memory',?,?)''',
         jsonEncode({'from': entry.status.name, 'to': to.name}),
       ],
     );
+    return true;
   }
 
   Future<Map<String, Object?>?> _sourceStamp(

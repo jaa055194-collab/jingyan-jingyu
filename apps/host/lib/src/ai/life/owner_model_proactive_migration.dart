@@ -4,10 +4,7 @@ import '../../storage/migrations.dart';
 /// watermark and global stop; no grants, history or timing slots are backfilled.
 /// Unlike the fixed rule greeting this invokes the model under B3, so provider
 /// and binding changes must also invalidate an enabled grant.
-const ownerModelProactiveMigration = Migration(
-  608,
-  'owner model proactive',
-  '''
+const ownerModelProactiveMigration = Migration(608, 'owner model proactive', '''
 CREATE TABLE owner_model_proactive_stops (
   owner_id TEXT PRIMARY KEY NOT NULL REFERENCES account(id) ON DELETE CASCADE,
   revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0),
@@ -120,5 +117,4 @@ BEGIN
     AND owner_id=NEW.owner_id AND ai_profile_id IN
       (SELECT ai_profile_id FROM model_bindings WHERE owner_id=NEW.owner_id AND provider_id=NEW.id AND capability='chat');
 END;
-''',
-);
+''');

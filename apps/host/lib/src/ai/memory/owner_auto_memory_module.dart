@@ -12,6 +12,10 @@ final class OwnerAutoMemoryModule extends HostModule {
   final OwnerAutoMemory autoMemory;
   final Authenticator authenticate;
 
+  /// Bounded opaque token shape. Exact equality with the host-issued token is
+  /// still enforced inside the service transaction, never here.
+  static final _tokenPattern = RegExp(r'^[A-Za-z0-9_-]{1,128}$');
+
   @override
   String get name => 'owner_auto_memory';
 
@@ -21,6 +25,11 @@ final class OwnerAutoMemoryModule extends HostModule {
   HostResponse _invalid() => HostResponse.failure(
     const Failure(FailureCode.invalidArgument, 'Invalid auto memory input'),
   );
+
+  static bool _validRevision(Object? value) => value is int && value >= 0;
+
+  static bool _validTargetToken(Object? value) =>
+      value == null || (value is String && _tokenPattern.hasMatch(value));
 
   Future<HostResponse> _handle(
     HostRequest request, {
@@ -75,10 +84,8 @@ final class OwnerAutoMemoryModule extends HostModule {
     if (kind == 'settingsWrite') {
       if (body.length != 3 ||
           body['enabled'] is! bool ||
-          body['expectedRevision'] is! int ||
-          (body['expectedTargetToken'] != null &&
-              (body['expectedTargetToken'] is! String ||
-                  (body['expectedTargetToken'] as String).length > 128))) {
+          !_validRevision(body['expectedRevision']) ||
+          !_validTargetToken(body['expectedTargetToken'])) {
         return _invalid();
       }
       return _response(
@@ -97,7 +104,7 @@ final class OwnerAutoMemoryModule extends HostModule {
       final memoryId = request.pathParams['memoryId'];
       if (body.length != 1 ||
           memoryId == null ||
-          body['expectedRevision'] is! int) {
+          !_validRevision(body['expectedRevision'])) {
         return _invalid();
       }
       return _response(
@@ -112,7 +119,7 @@ final class OwnerAutoMemoryModule extends HostModule {
       );
     }
     if (kind == 'clear') {
-      if (body.length != 1 || body['expectedRevision'] is! int) {
+      if (body.length != 1 || !_validRevision(body['expectedRevision'])) {
         return _invalid();
       }
       return _response(

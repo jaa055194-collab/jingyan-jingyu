@@ -290,12 +290,51 @@ void main() {
     connection.entries['profile-a'] = _list(entries: [_entry()]);
     await pumpSection(t);
     await tap(t, 'auto-memory-read');
-    // A revision change between read and write must never be guessed.
+    // A revision change between read and confirm must never be guessed: the
+    // pre-enable re-read retires the action before any second confirmation.
     connection.settings['profile-a'] = _settings(revision: 3, target: _target);
     connection.entries['profile-a'] = _list(revision: 3, entries: [_entry()]);
     await tap(t, 'auto-memory-enabled');
-    await tap(t, 'auto-memory-enable-confirm');
+    expect(key('auto-memory-enable-dialog'), findsNothing);
     expect(key('auto-memory-unknown'), findsOneWidget);
-    expect(connection.calls.where((c) => c.$1 == 'PUT'), hasLength(1));
+    expect(key('auto-memory-read'), findsOneWidget);
+    expect(connection.calls.where((c) => c.$1 == 'PUT'), isEmpty);
+  });
+
+  testWidgets('host 409 on a write is reported and never retried', (t) async {
+    connection.entries['profile-a'] = _list(entries: [_entry()]);
+    await pumpSection(t);
+    await tap(t, 'auto-memory-read');
+    connection.writeStatus = 409;
+    await tap(t, 'auto-memory-delete-mem-a');
+    await tap(t, 'auto-memory-delete-confirm');
+    expect(key('auto-memory-unknown'), findsOneWidget);
+    expect(connection.calls.where((c) => c.$1 == 'DELETE'), hasLength(1));
+  });
+
+  testWidgets('offline section refuses to read or write', (t) async {
+    t.view.physicalSize = const Size(390, 844);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: OwnerAutoMemorySection(
+              api: api,
+              profile: 'profile-a',
+              aiLabel: '示例 A',
+              isCurrent: () => true,
+              canContactHost: () => false,
+            ),
+          ),
+        ),
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(key('auto-memory-offline'), findsOneWidget);
+    await tap(t, 'auto-memory-read');
+    expect(connection.calls, isEmpty);
   });
 }

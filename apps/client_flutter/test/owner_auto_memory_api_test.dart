@@ -168,19 +168,37 @@ void main() {
     ));
   });
 
-  test('enable requires a current target and disable keeps entries', () async {
+  test('enable requires a current target and disable sends a null token', () async {
+    final withTarget = (await api.readSettings(_profile)).state!;
+    expect(withTarget.target, isNotNull);
     response = settingsState(target: null);
-    final emptyTarget = (await api.readSettings(_profile)).state!;
+    final noTarget = (await api.readSettings(_profile)).state!;
+    expect(noTarget.target, isNull);
+    // A refused enable must never reach the host.
     expect(
-      await api.setEnabled(_profile, current: emptyTarget, enabled: true),
-      isA<OwnerAutoMemoryResult<OwnerAutoMemorySettings>>(),
-    );
-    expect(
-      (await api.setEnabled(_profile, current: emptyTarget, enabled: true))
-          .problem,
+      (await api.setEnabled(_profile, current: noTarget, enabled: true)).problem,
       OwnerAutoMemoryProblem.refused,
     );
     expect(requests, hasLength(2));
+
+    response = settingsState(revision: 1, enabled: true);
+    final enabled = (await api.readSettings(_profile)).state!;
+    response = settingsState(revision: 2, enabled: false);
+    final disabled = await api.setEnabled(
+      _profile,
+      current: enabled,
+      enabled: false,
+    );
+    expect(disabled.state!.enabled, isFalse);
+    expect(requests.last, (
+      'PUT',
+      _settings,
+      jsonEncode({
+        'expectedRevision': 1,
+        'enabled': false,
+        'expectedTargetToken': null,
+      }),
+    ));
   });
 
   test('malformed and wrong-status mutations map to distinct problems', () async {

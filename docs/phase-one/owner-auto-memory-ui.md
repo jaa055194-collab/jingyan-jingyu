@@ -19,6 +19,22 @@
 
 ## 验证
 
-- `flutter analyze --no-pub` 无问题。
-- 新增 API 测试与 UI 测试全部通过；覆盖默认未读取、严格状态解码、开关二次确认/撤回/保留条目、删除单条/清空、无 target、修订冲突。
+- `flutter analyze` 无问题。
+- 新增 API 测试与 UI 测试全部通过；覆盖默认未读取、严格状态解码、开关二次确认/撤回/保留条目、删除单条/清空、无 target、修订冲突（读后变更会在二次确认前作废旧动作）、宿主 409 不重试、离线不读写。
 - 真实手机、真实账号、宿主网络和全量套件不在本切片声明范围。
+
+## 接线（给 Lead）
+
+`settings_screen.dart` / `ai_config_editor.dart` 里按现有 memory notes section 的方式挂载即可：
+
+```dart
+OwnerAutoMemorySection(
+  api: OwnerAutoMemoryApi(connection),
+  profile: <canonical AiId>,
+  aiLabel: <显示名>,
+  isCurrent: () => <当前 profile 且会话未失效>,
+  canContactHost: () => <宿主连接可用>,
+)
+```
+
+section 自身管理读取/写入状态、二次确认与 CAS 校验，不需要额外回调；切换 profile 或会话失效时由 `isCurrent` 使其隐藏并作废旧确认。

@@ -344,10 +344,7 @@ void main() {
         )).failureOrNull?.details['configurationRequired'],
         true,
       );
-      for (final layer in [
-        BudgetLayer.b0Life,
-        BudgetLayer.b4Maintenance,
-      ]) {
+      for (final layer in [BudgetLayer.b0Life, BudgetLayer.b4Maintenance]) {
         expect(
           (await chat(
             'unsupported-${layer.name}',
@@ -363,10 +360,7 @@ void main() {
     'B3 proactive uses the chat capability and degraded is silent',
     () async {
       await configure(b3: 50);
-      expect(
-        (await chat('b3-ok', layer: BudgetLayer.b3Proactive)).isOk,
-        true,
-      );
+      expect((await chat('b3-ok', layer: BudgetLayer.b3Proactive)).isOk, true);
       expect(models, ['S2']);
       expect(calls, 1);
       await configure(b3: 0);

@@ -72,7 +72,8 @@ class _ProactiveConnection extends HostConnection {
     if (path == _globalPath) {
       if (method == 'GET') return global;
       expect(method, 'PUT');
-      if (body!['expectedRevision'] != global['revision']) throw conflict;
+      writes.add((path, Map.unmodifiable(body!)));
+      if (body['expectedRevision'] != global['revision']) throw conflict;
       global = {
         'revision': (global['revision']! as int) + 1,
         'blocked': body['blocked'],
@@ -223,26 +224,32 @@ void main() {
       });
       expect(find.text('未授权模型主动联系'), findsOneWidget);
       expect(
-        t.widget<TextField>(_key('owner-model-proactive-interval')).controller!.text,
+        t
+            .widget<TextField>(_key('owner-model-proactive-interval'))
+            .controller!
+            .text,
         '720',
       );
     },
   );
 
-  testWidgets(
-    'invalid offset and interval cannot open review',
-    (t) async {
-      await _pump(t, host);
-      await _tap(t, 'owner-model-proactive-read');
-      await _enter(t, 'owner-model-proactive-offset', '+14:01');
-      expect(t.widget<FilledButton>(_key('owner-model-proactive-review')).onPressed, isNull);
-      await _enter(t, 'owner-model-proactive-offset', '+00:00');
-      await _enter(t, 'owner-model-proactive-interval', '59');
-      expect(t.widget<FilledButton>(_key('owner-model-proactive-review')).onPressed, isNull);
-      expect(_key('owner-model-proactive-confirm'), findsNothing);
-      expect(host.writes, isEmpty);
-    },
-  );
+  testWidgets('invalid offset and interval cannot open review', (t) async {
+    await _pump(t, host);
+    await _tap(t, 'owner-model-proactive-read');
+    await _enter(t, 'owner-model-proactive-offset', '+14:01');
+    expect(
+      t.widget<FilledButton>(_key('owner-model-proactive-review')).onPressed,
+      isNull,
+    );
+    await _enter(t, 'owner-model-proactive-offset', '+00:00');
+    await _enter(t, 'owner-model-proactive-interval', '59');
+    expect(
+      t.widget<FilledButton>(_key('owner-model-proactive-review')).onPressed,
+      isNull,
+    );
+    expect(_key('owner-model-proactive-confirm'), findsNothing);
+    expect(host.writes, isEmpty);
+  });
 
   for (final (name, settings, blocked) in [
     ('global stop', settingsJson(offsetMinutes: 0), true),
@@ -255,7 +262,10 @@ void main() {
       host.global = {'revision': 2, 'blocked': blocked};
       await _pump(t, host);
       await _tap(t, 'owner-model-proactive-read');
-      expect(t.widget<FilledButton>(_key('owner-model-proactive-review')).onPressed, isNull);
+      expect(
+        t.widget<FilledButton>(_key('owner-model-proactive-review')).onPressed,
+        isNull,
+      );
       expect(_key('owner-model-proactive-confirm'), findsNothing);
       expect(host.writes, isEmpty);
     });
@@ -266,7 +276,12 @@ void main() {
     (t) async {
       await _pump(t, host);
       await _tap(t, 'owner-model-proactive-read');
-      expect(t.widget<SwitchListTile>(_key('owner-model-proactive-global-stop')).value, isFalse);
+      expect(
+        t
+            .widget<SwitchListTile>(_key('owner-model-proactive-global-stop'))
+            .value,
+        isFalse,
+      );
       await _tap(t, 'owner-model-proactive-global-stop');
       expect(find.text('停止全部模型主动联系？'), findsOneWidget);
       await _tap(t, 'owner-model-proactive-global-confirm');

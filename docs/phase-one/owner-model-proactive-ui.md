@@ -17,5 +17,7 @@
 
 ## 本地验证
 
-- 使用合成账号和回环/替身宿主边界，无真实账户设置或外部请求。[API 用例](<../../apps/client_flutter/test/owner_model_proactive_api_test.dart>)校验响应字段（含 `intervalMinutes`）、CAS、开启门槛预检与各类失败分类；[UI 用例](<../../apps/client_flutter/test/owner_model_proactive_ui_test.dart>)覆盖读取、二次确认开启、关闭保留设置、非法偏移/间隔拦截、门槛抑制与账户级停止。
+- 使用合成账号和回环/替身宿主边界，无真实账户设置或外部请求。[API 用例](<../../apps/client_flutter/test/owner_model_proactive_api_test.dart>)校验响应字段（含 `intervalMinutes`）、CAS、开启门槛预检与各类失败分类；[UI 用例](<../../apps/client_flutter/test/owner_model_proactive_ui_test.dart>)覆盖读取、二次确认开启、关闭保留设置、非法偏移/间隔拦截、门槛抑制与账户级停止（含全局停止写入路由的断言）。
 - 宿主端执行 `flutter analyze`、`flutter test test/owner_model_proactive_api_test.dart test/owner_model_proactive_ui_test.dart`。未运行 Android 真机、原生安装、线上宿主或真实发送；不是发布验收。
+- 接线：卡片需要 `OwnerModelProactiveApi(connection)`、`profileId`（canonical profile ID）、`aiLabel`、`isCurrent`、`canContactHost` 五个构造参数；Lead 在 `ai_config_editor.dart`/`settings_screen.dart` 中按现有 `OwnerRuleGreetingCard` 的方式插入即可，卡片自身不发消息、不起定时器、不调用模型。
+

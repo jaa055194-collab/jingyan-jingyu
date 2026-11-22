@@ -27,7 +27,6 @@ import 'package:jingyu_host/src/social/owner_ai_direct_migration.dart';
 import 'package:jingyu_host/src/social/private_conversation_migration.dart';
 import 'package:jingyu_host/src/social/social_migrations.dart';
 import 'package:jingyu_host/src/storage/cipher.dart';
-import 'package:jingyu_host/src/storage/database.dart';
 import 'package:jingyu_host/src/storage/migrations.dart';
 import 'package:jingyu_host/src/storage/sqlite_database.dart';
 import 'package:test/test.dart';
@@ -387,10 +386,274 @@ void main() {
       )).status,
       409,
     );
-    expect(
-      (await call('GET', listPath)).status,
-      200,
+    expect((await call('GET', listPath)).status, 200);
+  });
+
+  test('module rejects bad revision, token shape, body and path params', () async {
+    await f.consent();
+    await f.bind();
+    final router = Router();
+    OwnerAutoMemoryModule(f.autoMemory, f.auth).mount(router);
+    final pipeline = Pipeline(router: router, authenticate: f.auth);
+    Future<HostResponse> call(
+      String method,
+      String path, {
+      Object? body,
+      String? actor = _owner,
+    }) => pipeline.handle(
+      HostRequest(
+        method: method,
+        path: path,
+        body: body,
+        headers: {
+          if (actor != null) 'authorization': 'Bearer ${f.tokens[actor]}',
+        },
+      ),
     );
+    final settingsPath = Routes.aiOwnerAutoMemorySettings.replaceFirst(
+      '{aiId}',
+      _profile,
+    );
+    final listPath = Routes.aiOwnerAutoMemory.replaceFirst('{aiId}', _profile);
+    final entryPath = Routes.aiOwnerAutoMemoryEntry
+        .replaceFirst('{aiId}', _profile)
+        .replaceFirst('{memoryId}', 'mem-a');
+
+    for (final body in [
+      {'expectedRevision': -1, 'enabled': false, 'expectedTargetToken': null},
+      {'expectedRevision': 0, 'enabled': 'yes', 'expectedTargetToken': null},
+      {'expectedRevision': 0, 'enabled': false},
+      {'expectedRevision': 0, 'enabled': false, 'expectedTargetToken': 'a' * 129},
+      {'expectedRevision': 0, 'enabled': false, 'expectedTargetToken': 'bad token'},
+    ]) {
+      expect((await call('PUT', settingsPath, body: body)).status, 400);
+    }
+    for (final body in [
+      {'expectedRevision': -1},
+      {'expectedRevision': 0, 'extra': true},
+      <String, Object?>{},
+    ]) {
+      expect((await call('DELETE', listPath, body: body)).status, 400);
+      expect((await call('DELETE', entryPath, body: body)).status, 400);
+    }
+    // A GET with a body, a query string, or a non-canonical AI id is refused.
+    expect((await call('GET', listPath, body: {'a': 1})).status, 400);
+    expect(
+      (await pipeline.handle(
+        HostRequest(
+          method: 'GET',
+          path: listPath,
+          query: const {'debug': '1'},
+          headers: {'authorization': 'Bearer ${f.tokens[_owner]}'},
+        ),
+      )).status,
+      400,
+    );
+    expect(
+      (await call(
+        'GET',
+        Routes.aiOwnerAutoMemory.replaceFirst('{aiId}', 'bad id'),
+      )).status,
+      400,
+    );
+    // Unknown entry id is a 404, never a silent success.
+    expect(
+      (await call('DELETE', entryPath, body: {'expectedRevision': 0})).status,
+      404,
+    );
+    expect(await f.db.query('SELECT * FROM owner_auto_memory_settings'), isEmpty);
+  });
+
+  test('clear with no entries still bumps revision and audits', () async {
+    await f.consent();
+    await f.bind();
+    await f.enable();
+    final cleared = await f.clear(1);
+    expect(cleared['revision'], 2);
+    expect(cleared['entries'], isEmpty);
+    expect(
+      jsonEncode(await f.db.query('SELECT * FROM audit_log')),
+      contains('owner_auto_memory.clear'),
+    );
+  });
+
+  test('capture rejects recalled, edited and non-private sources', () async {
+    await f.consent();
+    await f.bind();
+    await f.enable();
+    final edited = await f.accept('c-edit', '记住会被编辑');
+    await f.db.execute(
+      '''INSERT INTO message_edits(edit_id,message_id,conversation_id,editor_id,body,edited_at)
+VALUES('e1',?,?,?,?,?)''',
+      [edited.messageId, edited.conversationId, _owner, 'sealed', 'now'],
+    );
+    await f.capture(edited);
+
+    final recalled = await f.accept('c-recall', '记住会被撤回');
+    await f.db.execute(
+      'UPDATE messages SET recalled_at=? WHERE message_id=?',
+      ['now', recalled.messageId],
+    );
+    await f.capture(recalled);
+
+    expect(await f.db.query('SELECT * FROM encrypted_memory'), isEmpty);
+  });
+
+  test('long or multi-line owner text is never captured', () async {
+    await f.consent();
+    await f.bind();
+    await f.enable();
+    // 512 UTF-8 bytes is the per-entry bound: "记住" is 6 bytes, so 169 CJK
+    // chars (507 bytes) is 513 bytes and must be refused.
+    final tooLong = await f.accept('c-long', '记住${'花' * 169}');
+    await f.capture(tooLong);
+    expect(await f.db.query('SELECT * FROM encrypted_memory'), isEmpty);
+
+    f.clock.advance(const Duration(seconds: 1));
+    // Control characters (including a newline) are refused outright.
+    final multiLine = await f.accept('c-multi', '记住第一行\n第二行');
+    await f.capture(multiLine);
+    expect(await f.db.query('SELECT * FROM encrypted_memory'), isEmpty);
+
+    f.clock.advance(const Duration(seconds: 1));
+    // 168 CJK chars (504 bytes) plus the 6-byte prefix is exactly 510 bytes.
+    final bounded = await f.accept('c-bound', '记住${'花' * 168}');
+    await f.capture(bounded);
+    expect(await f.db.query('SELECT * FROM encrypted_memory'), hasLength(1));
+  });
+
+  test('disable stops capture and stale sources never inject', () async {
+    await f.consent();
+    await f.bind();
+    await f.enable();
+    final before = await f.accept('c1', '记住关闭前');
+    await f.capture(before);
+    final disabled = await f.disable();
+    expect(disabled['enabled'], false);
+    // Existing entries stay visible after revoking the grant.
+    expect(((await f.list())['entries']! as List), hasLength(1));
+
+    f.clock.advance(const Duration(seconds: 1));
+    final after = await f.accept('c2', '记住关闭后');
+    await f.capture(after);
+    expect(((await f.list())['entries']! as List), hasLength(1));
+
+    final use = await f.db.transaction((tx) async {
+      final grant = await OwnerAiDirectConsent.resolveInTx(
+        tx,
+        ownerAccountId: _owner,
+        conversationId: f.conversationId!,
+      );
+      return f.autoMemory.forSourceInTx(tx, grant!, before.messageId);
+    });
+    expect(use, isNull);
+  });
+
+  test('injection is also bounded by 1024 total bytes', () async {
+    await f.consent();
+    await f.bind();
+    await f.enable();
+    String? last;
+    // Each entry is ~340 bytes, so only three fit inside 1024 bytes.
+    for (var i = 1; i <= 4; i++) {
+      f.clock.advance(const Duration(seconds: 1));
+      final message = await f.accept('c$i', '记住${'花' * 110}$i');
+      await f.capture(message);
+      last = message.messageId;
+    }
+    final use = await f.db.transaction((tx) async {
+      final grant = await OwnerAiDirectConsent.resolveInTx(
+        tx,
+        ownerAccountId: _owner,
+        conversationId: f.conversationId!,
+      );
+      return f.autoMemory.forSourceInTx(tx, grant!, last!);
+    });
+    expect(use, isNotNull);
+    expect(use!.entries, hasLength(3));
+    final total = use.entries.fold<int>(
+      0,
+      (sum, text) => sum + utf8.encode(text).length,
+    );
+    expect(total, lessThanOrEqualTo(1024));
+    expect(OwnerAutoMemoryUse.kind, 'untrusted_owner_memory');
+    expect(use.toJson(), {
+      'kind': 'untrusted_owner_memory',
+      'entries': use.entries,
+    });
+  });
+
+  test('pending entries never inject even when newer than active ones', () async {
+    await f.consent();
+    await f.bind();
+    await f.enable();
+    final active = await f.accept('a1', '记住我喜欢桂花');
+    await f.capture(active);
+    f.clock.advance(const Duration(seconds: 1));
+    final pending = await f.accept('p1', '我最近睡得很晚');
+    await f.capture(pending);
+    final use = await f.db.transaction((tx) async {
+      final grant = await OwnerAiDirectConsent.resolveInTx(
+        tx,
+        ownerAccountId: _owner,
+        conversationId: f.conversationId!,
+      );
+      return f.autoMemory.forSourceInTx(tx, grant!, pending.messageId);
+    });
+    expect(use!.entries, ['记住我喜欢桂花']);
+  });
+
+  test('a settings change makes the earlier accepted source stale', () async {
+    await f.consent();
+    await f.bind();
+    await f.enable();
+    final message = await f.accept('c1', '记住我喜欢桂花');
+    await f.capture(message);
+    final use = await f.db.transaction((tx) async {
+      final grant = await OwnerAiDirectConsent.resolveInTx(
+        tx,
+        ownerAccountId: _owner,
+        conversationId: f.conversationId!,
+      );
+      return f.autoMemory.forSourceInTx(tx, grant!, message.messageId);
+    });
+    expect(use, isNotNull);
+    // Disabling and re-enabling must not revive the old source stamp.
+    await f.disable();
+    await f.enable();
+    final stale = await f.db.transaction((tx) async {
+      final grant = await OwnerAiDirectConsent.resolveInTx(
+        tx,
+        ownerAccountId: _owner,
+        conversationId: f.conversationId!,
+      );
+      return f.autoMemory.forSourceInTx(tx, grant!, message.messageId);
+    });
+    expect(stale, isNull);
+  });
+
+  test('capture is a no-op for an unknown or non-owner message', () async {
+    await f.consent();
+    await f.bind();
+    await f.enable();
+    final message = await f.accept('c1', '记住我喜欢桂花');
+    // An unstamped message id and a mismatched sender both capture nothing.
+    await f.autoMemory.captureAccepted(
+      StoredMessage(
+        conversationId: message.conversationId,
+        seq: message.seq,
+        messageId: 'not-stamped',
+        senderId: _owner,
+        clientMsgId: 'x',
+        kind: MessageKind.text,
+        body: const {'text': '记住伪造'},
+        sentAt: message.sentAt,
+      ),
+    );
+    expect(await f.db.query('SELECT * FROM encrypted_memory'), isEmpty);
+    // The observer interface delegates to the same bounded capture path.
+    await f.autoMemory.onAccepted(message);
+    expect(await f.db.query('SELECT * FROM encrypted_memory'), hasLength(1));
   });
 }
 
@@ -536,6 +799,21 @@ VALUES(?,?,?,?,?)''',
       expectedRevision: settings['revision']! as int,
       enabled: true,
       expectedTargetToken: target['token']! as String,
+    );
+    expect(result.isOk, isTrue, reason: result.failureOrNull?.message);
+    return result.value;
+  }
+
+  Future<Map<String, Object?>> disable() async {
+    final settings = await readSettings();
+    final result = await autoMemory.setEnabled(
+      owner: _owner,
+      device: '$_owner-device',
+      bearer: tokens[_owner]!,
+      ai: AiId.parse(_profile),
+      expectedRevision: settings['revision']! as int,
+      enabled: false,
+      expectedTargetToken: null,
     );
     expect(result.isOk, isTrue, reason: result.failureOrNull?.message);
     return result.value;

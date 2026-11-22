@@ -30,17 +30,18 @@ typedef ProactiveUpdate = ({
 
 /// Trusted model port. Production composes [ModelRuntime.chat]; tests supply a
 /// deterministic worker without credentials or outbound networking.
-typedef ProactiveChatPort = Future<Result<ChatCompletion>> Function({
-  required String ownerId,
-  required AiId ai,
-  required List<ChatTurn> turns,
-  required String requestId,
-  required BudgetLayer layer,
-  required TrustedChatContext context,
-  int? maxTokens,
-  String? expectedProviderId,
-  String? expectedModel,
-});
+typedef ProactiveChatPort =
+    Future<Result<ChatCompletion>> Function({
+      required String ownerId,
+      required AiId ai,
+      required List<ChatTurn> turns,
+      required String requestId,
+      required BudgetLayer layer,
+      required TrustedChatContext context,
+      int? maxTokens,
+      String? expectedProviderId,
+      String? expectedModel,
+    });
 
 typedef _Slot = ({DateTime nominal, DateTime due});
 typedef _ConsumedSlot = ({
@@ -74,6 +75,34 @@ final class OwnerModelProactive {
     required this.chat,
     this.maxTokens = 64,
   });
+
+  /// Isolated hosts without a configured model worker still get the settings
+  /// routes and the global stop, but every due slot stays silent: no model call,
+  /// no message, no watermark and no token settlement. Never fabricate a reply.
+  factory OwnerModelProactive.withoutModel({
+    required Database database,
+    required SqliteMessageStore messages,
+    required Clock clock,
+  }) => OwnerModelProactive(
+    database: database,
+    messages: messages,
+    clock: clock,
+    chat:
+        ({
+          required ownerId,
+          required ai,
+          required turns,
+          required requestId,
+          required layer,
+          required context,
+          maxTokens,
+          expectedProviderId,
+          expectedModel,
+        }) async => err(
+          FailureCode.modelUnavailable,
+          'No model worker configured for proactive contact',
+        ),
+  );
 
   final Database database;
   final SqliteMessageStore messages;
@@ -507,7 +536,11 @@ last_at=excluded.last_at''',
       'owner_model_proactive.sent',
       'ai_profile',
       ai.value,
-      {'messageId': message.messageId, 'day': day, 'revision': consumed.revision},
+      {
+        'messageId': message.messageId,
+        'day': day,
+        'revision': consumed.revision,
+      },
     );
     return true;
   }
