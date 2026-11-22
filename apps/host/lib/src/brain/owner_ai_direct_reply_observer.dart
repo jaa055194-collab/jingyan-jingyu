@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
+import '../ai/memory/owner_memory_notes.dart';
 import '../ai/memory/owner_reply_preferences.dart';
 import '../messages/accepted_message_observer.dart';
 import '../messages/message_store.dart';
@@ -31,6 +32,7 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
     required this.resolveBinding,
     this.chat,
     this.preferences,
+    this.memoryNotes,
     this.attempts = const OwnerReplyAttempts(),
   });
 
@@ -46,6 +48,9 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
 
   /// Optional independent grant. Null keeps the ordinary reply path unchanged.
   final OwnerReplyPreferences? preferences;
+
+  /// Optional independently authorized, explicitly saved notes.
+  final OwnerMemoryNotes? memoryNotes;
   final OwnerReplyAttempts attempts;
   static const _rules = RulesS1Responder();
 
@@ -80,6 +85,7 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
       final (grant, text, simple) = source;
       ResolvedBinding? binding;
       OwnerReplyPreferenceUse? preferenceUse;
+      OwnerMemoryNoteUse? memoryUse;
       String output;
       if (simple) {
         // Admission owns the real B1 hard-stop check. Never invent token usage.
@@ -116,7 +122,10 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
           final use = preferences == null
               ? null
               : await preferences!.forSourceInTx(tx, grant, incoming.messageId);
-          return _PreparedPreference(use);
+          final memory = memoryNotes == null
+              ? null
+              : await memoryNotes!.forSourceInTx(tx, grant, incoming.messageId);
+          return _PreparedPreference(use, memory);
         });
         if (prepared == null) {
           await _terminal(
@@ -126,8 +135,11 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
           );
           return;
         }
-        final use = prepared.use;
+        final use = prepared.preferences;
+        final notes = prepared.memory;
         preferenceUse = use;
+        memoryUse = notes;
+        final needsAdmission = use != null || notes != null;
         Future<bool> admission(
           Tx tx, {
           required AiId ai,
@@ -138,9 +150,24 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
         }) async =>
             ai.value == grant.aiProfileId &&
             requestId == claim!.requestId &&
-            use!.matchesRecipient(providerId, model, baseUrl) &&
+            (use == null || use.matchesRecipient(providerId, model, baseUrl)) &&
+            (notes == null ||
+                notes.matchesRecipient(providerId, model, baseUrl)) &&
             await _fresh(tx, incoming, grant, text, binding) &&
-            await preferences!.isFreshInTx(tx, grant, incoming.messageId, use);
+            (use == null ||
+                await preferences!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  use,
+                )) &&
+            (notes == null ||
+                await memoryNotes!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  notes,
+                ));
 
         final result = await chat!.chat(
           ownerId: grant.ownerAccountId,
@@ -153,7 +180,8 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
           expectedModel: binding.model,
           maxTokens: maxTokens,
           preferenceChoices: use?.choices,
-          dispatchAdmission: use == null ? null : admission,
+          memoryNotes: notes?.notes,
+          dispatchAdmission: needsAdmission ? admission : null,
         );
         if (result.isErr) {
           // Runtime owns settlement/unknown usage; do not modify its ledger.
@@ -174,6 +202,13 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
                   grant,
                   incoming.messageId,
                   preferenceUse,
+                )) ||
+            (memoryUse != null &&
+                !await memoryNotes!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  memoryUse,
                 ))) {
           await _finish(
             tx,
@@ -348,6 +383,7 @@ final class _Rollback implements Exception {
 }
 
 final class _PreparedPreference {
-  const _PreparedPreference(this.use);
-  final OwnerReplyPreferenceUse? use;
+  const _PreparedPreference(this.preferences, this.memory);
+  final OwnerReplyPreferenceUse? preferences;
+  final OwnerMemoryNoteUse? memory;
 }

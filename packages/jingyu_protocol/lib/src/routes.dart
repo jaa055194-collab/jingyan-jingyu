@@ -198,6 +198,14 @@ abstract final class Routes {
   static const String aiOwnerReplyPreferences =
       '$prefix/ai-profiles/{aiId}/owner-reply-preferences';
 
+  /// Owner's manually confirmed encrypted memory notes and separate use grant.
+  static const String aiOwnerMemoryNotes =
+      '$prefix/ai-profiles/{aiId}/owner-memory-notes';
+  static const String aiOwnerMemoryNote =
+      '$prefix/ai-profiles/{aiId}/owner-memory-notes/{noteId}';
+  static const String aiOwnerMemoryNoteSettings =
+      '$prefix/ai-profiles/{aiId}/owner-memory-notes/settings';
+
   /// 模型接入配置。
   static const String modelProviders = '$prefix/model-providers';
   static const String modelProvider = '$prefix/model-providers/{providerId}';
