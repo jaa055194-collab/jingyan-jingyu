@@ -206,6 +206,9 @@ final class OwnerAutoMemory implements AcceptedMessageObserver {
     }
     final enabled = write.enabled;
     final expected = write.expectedTargetToken;
+    // Same distinction as the manual memory-note grant: no live target at all is
+    // a stale state (409); a malformed or no-longer-reviewed token value is an
+    // argument error (400).
     if ((enabled &&
             (target == null || expected == null || expected != target.token)) ||
         (!enabled && expected != null)) {
