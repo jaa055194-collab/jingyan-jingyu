@@ -224,3 +224,12 @@ M14 附件列表后续复核见 [验收 §F.3](acceptance.md#f3-汇总与限制)
 | REQ-P1-11 | FR-42–45/48、AC-04/09 本人规则问候子集 | 只有另行开启的本人私聊可在 L3+、非静默及预算充足情况下收到标记为规则的固定问候；默认关、可单独或全局撤销，重启不补发，失败不留下消息或发送审计 | [宿主契约与回归](phase-one/owner-rule-greeting.md)、[客户端设置](phase-one/owner-rule-greeting-ui.md)、[真实 Flutter 前后图](../apps/client_flutter/evidence/owner-rule-greeting.md) | 局部通过；无外部模型、历史/他人数据、真机或全量生活引擎验收 |
 | REQ-P1-12 | FR-20 / AC-19 定时消息子集 | 当前已认证、解锁、在线普通群聊可显式安排一条未来的普通文字：严格本地日期/时刻与固定 UTC 偏移、确认页显示绝对时刻；本人状态只读有界；仅已知 pending 记录确认后取消；未知创建/取消不重试、不猜测 ID；保留聊天草稿 | [定时消息流程与边界](phase-one/scheduled-messages-ui.md)、[同场景 Flutter 捕获](../apps/client_flutter/evidence/scheduled-messages.md) | 客户端回环/Widget 验证通过；不覆盖 Android 真机、真实发送、手机通知、AI 触发或跨设备同步 |
 | REQ-P1-13 | FR-49/50 子集（本人便签） | 主人可手动新增/编辑/删除非敏感便签；独立默认关闭授权后才可注入本人私聊 B2 回复，撤销/清空后不得继续使用，旧接受消息不继承新便签 | [宿主契约](phase-one/owner-memory-notes.md)、[客户端设置](phase-one/owner-memory-notes-ui.md)、[真实 Flutter 前后图](../apps/client_flutter/evidence/owner-memory-notes.md) | 局部通过；不是聊天历史自动采集、T1/T2 分类器或通用记忆管理器 |
+
+## 第一期硬门槛：聊天历史自动记忆与模型主动联系
+
+两条独立、默认关闭、按 AI 单独开启、可撤回的授权。均以真实默认宿主、真实 SQLite、真实回环 HTTP 与真实子进程模型 worker 做端到端实测，非仅内部单测。
+
+| ID | 规格范围 | 可观察验收 | 验证与证据 | 状态与未覆盖 |
+|---|---|---|---|---|
+| REQ-P1-14 | FR-49/50 子集（聊天历史自动记忆） | 仅采集主人本人在**已授权私聊**中的文字：显式记忆指令（记住/记下/别忘了/以后/别忘）且长度有界→T0 active，其余→T1 pending；绝不 T2，绝不群聊或第三人内容；每 AI 最多 50 条、单条 ≤512 UTF-8 字节；默认关闭、开启需精确核对接收目标 token；可查看/删除/清空；仅 active 的 T0/T1 以独立 `untrusted_owner_memory` user 段注入 B2（≤5 条、≤1024 字节），pending 不注入；撤销后不再采集，旧来源不补采 | [宿主契约](phase-one/owner-auto-memory.md)、[客户端设置](phase-one/owner-auto-memory-ui.md)、`owner_auto_memory_test` 19 项、[端到端实测](../apps/host/test/phase_one_memory_proactive_e2e_test.dart) | 实测通过（隔离宿主/合成账号/合成 worker）；不是通用记忆管理器，不含 T2 打码、自然语言遗忘、跨用户检索、导出或客户端真机 |
+| REQ-P1-15 | FR-42–44/48 子集（模型主动联系） | 仅主人本人 AI 私聊；默认关闭；开启需固定 UTC 偏移、L3/L4、有效私聊、未全局停止、B3 预算就绪及三项已审核 revision；静默窗顺延不发送；`interval_minutes`(60–10080) 频率上限；到点调用模型（B3/chat）生成短句后原子 append + 水位 + 无正文审计；预算缺失/未知/耗尽或模型失败一律静默、不补发、不重放、不伪装成规则问候；`clientMsgId` + 水位双重去重；全局停止撤销全部且解除不复活 | [宿主契约](phase-one/owner-model-proactive.md)、[客户端设置](phase-one/owner-model-proactive-ui.md)、`owner_model_proactive_test` 28 项 + `model_gateway_test` B3、[端到端实测](../apps/host/test/phase_one_memory_proactive_e2e_test.dart) | 实测通过（隔离宿主/合成账号/合成 worker）；不含真实外部 Provider、真机、AI-AI 私信、朋友圈/串门或完整生活引擎 |
