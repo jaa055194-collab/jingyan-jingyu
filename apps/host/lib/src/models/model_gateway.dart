@@ -46,7 +46,7 @@ final class TrustedChatContext {
   final ChatDispatchAdmission? dispatchAdmission;
 }
 
-/// Owner-configured, single-call chat pipeline for B1 and B2 only.
+/// Owner-configured, single-call chat pipeline for B1, B2 and B3 only.
 ///
 /// The host owns message persistence and upstream B1 rule responses. This class
 /// neither stores inbound messages nor implements other budget layers. No retry,
@@ -121,7 +121,9 @@ final class ModelGateway {
                 RegExp(r'[\x00-\x1f\x7f]').hasMatch(expectedModel))) {
       return err(FailureCode.invalidArgument, 'Invalid chat request');
     }
-    if (layer != BudgetLayer.b1FastBrain && layer != BudgetLayer.b2DeepChat) {
+    if (layer != BudgetLayer.b1FastBrain &&
+        layer != BudgetLayer.b2DeepChat &&
+        layer != BudgetLayer.b3Proactive) {
       return err(FailureCode.invalidArgument, 'Unsupported chat budget layer');
     }
     final capability = layer == BudgetLayer.b1FastBrain
@@ -157,6 +159,8 @@ final class ModelGateway {
         FailureCode.budgetExhausted,
         layer == BudgetLayer.b1FastBrain
             ? 'B1 degraded; upstream rule response required'
+            : layer == BudgetLayer.b3Proactive
+            ? 'B3 degraded; proactive messaging stays silent'
             : 'B2 degraded; only owner private chat permitted',
       );
     }
