@@ -396,7 +396,9 @@ void main() {
       final didFetch = await tester.runAsync(() async {
         // This gate is awaited by the real HTTP server, outside fake async.
         f.mediaGate = Completer<void>();
-        await tester.tap(find.byKey(const Key('play-voice-voice-one')));
+        // Start with the newest playable row in the opening viewport.
+        final play = find.byKey(const Key('play-voice-voice-two')).hitTestable();
+        await tester.tap(play);
         await f.mediaArrived.future.timeout(const Duration(seconds: 5));
         return true;
       });

@@ -116,6 +116,30 @@ void main() {
     expect(model.writes, [('a', 'msg')]);
   });
 
+  testWidgets('an arriving message does not discard an in-flight save', (
+    tester,
+  ) async {
+    final model = _Model();
+    await _pump(tester, model);
+    await tester.tap(find.byKey(_key));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(find.text('正在收藏…'), findsOneWidget);
+
+    model.messages = [
+      ...model.messages,
+      const ShellMessage(id: 'new', text: 'A new message'),
+    ];
+    model.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(find.text('正在收藏…').hitTestable(), findsOneWidget);
+
+    model.reply.complete(FavoriteSaveOutcome.saved);
+    await tester.pumpAndSettle();
+    expect(find.text('已收藏').hitTestable(), findsOneWidget);
+    expect(model.writes, [('a', 'msg')]);
+  });
+
   for (final (outcome, text) in [
     (FavoriteSaveOutcome.rejected, '宿主拒绝收藏。'),
     (FavoriteSaveOutcome.unknown, '收藏结果未确认，请到「我的收藏」核对。'),
