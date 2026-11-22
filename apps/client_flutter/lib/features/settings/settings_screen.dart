@@ -12,7 +12,9 @@ import '../../net/ai_config_write_api.dart';
 import '../../net/model_diagnostics_api.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
+import '../../net/owner_auto_memory_api.dart';
 import '../../net/owner_memory_notes_api.dart';
+import '../../net/owner_model_proactive_api.dart';
 import '../../net/owner_reply_preferences_api.dart';
 import '../../net/owner_rule_greeting_api.dart';
 import '../../net/persona_history_api.dart';
@@ -692,6 +694,12 @@ class SettingsScreen extends StatelessWidget {
                       memoryNotes: connection == null
                           ? null
                           : OwnerMemoryNotesApi(connection),
+                      autoMemory: connection == null
+                          ? null
+                          : OwnerAutoMemoryApi(connection),
+                      modelProactive: connection == null
+                          ? null
+                          : OwnerModelProactiveApi(connection),
                       personaFilePicker: connection == null
                           ? null
                           : NativePersonaFilePicker(),

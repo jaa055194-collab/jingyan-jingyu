@@ -28,9 +28,16 @@ import 'src/messages/message_store.dart';
 
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
 
+import 'src/ai/life/owner_model_proactive.dart';
+import 'src/ai/life/owner_model_proactive_migration.dart';
+import 'src/ai/life/owner_model_proactive_module.dart';
 import 'src/ai/life/owner_rule_greeting.dart';
 import 'src/ai/life/owner_rule_greeting_migration.dart';
 import 'src/ai/life/owner_rule_greeting_module.dart';
+import 'src/ai/memory/memory_migrations.dart';
+import 'src/ai/memory/owner_auto_memory.dart';
+import 'src/ai/memory/owner_auto_memory_migration.dart';
+import 'src/ai/memory/owner_auto_memory_module.dart';
 import 'src/ai/memory/owner_memory_notes.dart';
 import 'src/ai/memory/owner_memory_notes_migration.dart';
 import 'src/ai/memory/owner_memory_notes_module.dart';
@@ -169,6 +176,9 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       ownerReplyPreferencesMigration,
       ownerRuleGreetingMigration,
       ownerMemoryNotesMigration,
+      ...memoryMigrations,
+      ownerAutoMemoryMigration,
+      ownerModelProactiveMigration,
       ...creativeMigrations,
       ...voiceMigrations,
       ...worldMigrations,
@@ -375,6 +385,14 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
     cipher: storage.cipher,
     clock: clock,
   );
+  // Default-off, per-AI opt-in auto chat-history memory. Capture only ever sees
+  // accepted owner texts in an authorized own-DM; group and third-party content
+  // never reach it.
+  final ownerAutoMemory = OwnerAutoMemory(
+    database: storage.database,
+    cipher: storage.cipher,
+    clock: clock,
+  );
   final ownerReplies = OwnerAiDirectReplyObserver(
     database: storage.database,
     cipher: storage.cipher,
@@ -393,6 +411,7 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
     ).resolve(AiId.parse(grant.aiProfileId), ProviderCapability.chat),
     preferences: ownerReplyPreferences,
     memoryNotes: ownerMemoryNotes,
+    autoMemory: ownerAutoMemory,
     chat: runtime == null
         ? null
         : StatelessOwnerChat.fromRuntime(
@@ -403,7 +422,8 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
           ),
   );
   final groupRules = GroupRulesModule(
-    composeObserver: (rules) => AcceptedMessageFanout([rules, ownerReplies]),
+    composeObserver: (rules) =>
+        AcceptedMessageFanout([rules, ownerReplies, ownerAutoMemory]),
     dispatch: (incoming, target, reply) async {
       final first = await resolve(incoming, target);
       if (first == null || await budget(first) == null) return;
@@ -547,12 +567,30 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
       DbAuthenticator(accounts).call,
     ),
     OwnerMemoryNotesModule(ownerMemoryNotes, DbAuthenticator(accounts).call),
+    OwnerAutoMemoryModule(ownerAutoMemory, DbAuthenticator(accounts).call),
     OwnerRuleGreetingModule(
       OwnerRuleGreeting(
         database: storage.database,
         messages: messages,
         clock: clock,
       ),
+    ),
+    // Model-driven proactive contact. Without a model runtime the settings and
+    // global-stop routes still work, but every due slot ends silently as
+    // modelUnavailable: no model call, no append, no watermark, no token.
+    OwnerModelProactiveModule(
+      runtime == null
+          ? OwnerModelProactive.withoutModel(
+              database: storage.database,
+              messages: messages,
+              clock: clock,
+            )
+          : OwnerModelProactive(
+              database: storage.database,
+              messages: messages,
+              clock: clock,
+              chat: runtime.chat,
+            ),
     ),
     PersonaModule(
       database: storage.database,

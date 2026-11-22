@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
+import '../ai/memory/owner_auto_memory.dart';
 import '../ai/memory/owner_memory_notes.dart';
 import '../ai/memory/owner_reply_preferences.dart';
 import '../messages/accepted_message_observer.dart';
@@ -33,6 +34,7 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
     this.chat,
     this.preferences,
     this.memoryNotes,
+    this.autoMemory,
     this.attempts = const OwnerReplyAttempts(),
   });
 
@@ -51,6 +53,10 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
 
   /// Optional independently authorized, explicitly saved notes.
   final OwnerMemoryNotes? memoryNotes;
+
+  /// Optional independently authorized auto chat-history memory. Default off and
+  /// owner-private only; null keeps the ordinary reply path unchanged.
+  final OwnerAutoMemory? autoMemory;
   final OwnerReplyAttempts attempts;
   static const _rules = RulesS1Responder();
 
@@ -86,6 +92,7 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
       ResolvedBinding? binding;
       OwnerReplyPreferenceUse? preferenceUse;
       OwnerMemoryNoteUse? memoryUse;
+      OwnerAutoMemoryUse? autoMemoryUse;
       String output;
       if (simple) {
         // Admission owns the real B1 hard-stop check. Never invent token usage.
@@ -125,7 +132,10 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
           final memory = memoryNotes == null
               ? null
               : await memoryNotes!.forSourceInTx(tx, grant, incoming.messageId);
-          return _PreparedPreference(use, memory);
+          final auto = autoMemory == null
+              ? null
+              : await autoMemory!.forSourceInTx(tx, grant, incoming.messageId);
+          return _PreparedPreference(use, memory, auto);
         });
         if (prepared == null) {
           await _terminal(
@@ -137,9 +147,11 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
         }
         final use = prepared.preferences;
         final notes = prepared.memory;
+        final auto = prepared.autoMemory;
         preferenceUse = use;
         memoryUse = notes;
-        final needsAdmission = use != null || notes != null;
+        autoMemoryUse = auto;
+        final needsAdmission = use != null || notes != null || auto != null;
         Future<bool> admission(
           Tx tx, {
           required AiId ai,
@@ -153,6 +165,7 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
             (use == null || use.matchesRecipient(providerId, model, baseUrl)) &&
             (notes == null ||
                 notes.matchesRecipient(providerId, model, baseUrl)) &&
+            (auto == null || auto.matchesRecipient(providerId, model, baseUrl)) &&
             await _fresh(tx, incoming, grant, text, binding) &&
             (use == null ||
                 await preferences!.isFreshInTx(
@@ -167,6 +180,13 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
                   grant,
                   incoming.messageId,
                   notes,
+                )) &&
+            (auto == null ||
+                await autoMemory!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  auto,
                 ));
 
         final result = await chat!.chat(
@@ -181,6 +201,7 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
           maxTokens: maxTokens,
           preferenceChoices: use?.choices,
           memoryNotes: notes?.notes,
+          autoMemoryEntries: auto?.entries,
           dispatchAdmission: needsAdmission ? admission : null,
         );
         if (result.isErr) {
@@ -209,6 +230,13 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
                   grant,
                   incoming.messageId,
                   memoryUse,
+                )) ||
+            (autoMemoryUse != null &&
+                !await autoMemory!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  autoMemoryUse,
                 ))) {
           await _finish(
             tx,
@@ -383,7 +411,8 @@ final class _Rollback implements Exception {
 }
 
 final class _PreparedPreference {
-  const _PreparedPreference(this.preferences, this.memory);
+  const _PreparedPreference(this.preferences, this.memory, this.autoMemory);
   final OwnerReplyPreferenceUse? preferences;
   final OwnerMemoryNoteUse? memory;
+  final OwnerAutoMemoryUse? autoMemory;
 }
