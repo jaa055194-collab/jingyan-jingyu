@@ -919,7 +919,10 @@ final class _Fixture {
       config: config,
       clock: clock,
       modules: [
-        ...base,
+        // The production wiring mounts this module already. Replace it with the
+        // fixture's own instance so this test drives poll() deterministically
+        // with FakeClock and never starts the real 10s timer.
+        ...base.where((module) => module.name != 'owner_model_proactive'),
         OwnerModelProactiveModule(proactive, enableTimer: false),
       ],
       onError: (error, stack) => print('HOST-ERR: $error\n$stack'),
