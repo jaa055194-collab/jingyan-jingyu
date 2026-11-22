@@ -5,11 +5,15 @@ import '../../app/shell_view_model.dart';
 import '../../net/ai_config_write_api.dart';
 import '../../net/host_connection.dart';
 import '../../net/model_diagnostics_api.dart';
+import '../../net/owner_auto_memory_api.dart';
 import '../../net/owner_memory_notes_api.dart';
+import '../../net/owner_model_proactive_api.dart';
 import '../../net/owner_reply_preferences_api.dart';
 import '../../net/owner_rule_greeting_api.dart';
 import '../../net/persona_history_api.dart';
+import 'owner_auto_memory_section.dart';
 import 'owner_memory_notes_section.dart';
+import 'owner_model_proactive_card.dart';
 import 'owner_reply_preferences_section.dart';
 import 'owner_rule_greeting_card.dart';
 import 'persona_card_import.dart';
@@ -33,6 +37,8 @@ class AiConfigEditor extends StatefulWidget {
     this.replyPreferences,
     this.ruleGreeting,
     this.memoryNotes,
+    this.autoMemory,
+    this.modelProactive,
     this.personaFilePicker,
     this.session,
     this.ownedAiAccountIds = const <String>[],
@@ -48,6 +54,12 @@ class AiConfigEditor extends StatefulWidget {
   final OwnerReplyPreferencesApi? replyPreferences;
   final OwnerRuleGreetingApi? ruleGreeting;
   final OwnerMemoryNotesApi? memoryNotes;
+
+  /// Default-off auto chat-history memory for the owner's own private chat.
+  final OwnerAutoMemoryApi? autoMemory;
+
+  /// Default-off model-driven proactive contact to the owner's own private chat.
+  final OwnerModelProactiveApi? modelProactive;
 
   /// Explicit local persona-card file read. Null disables the file entry only;
   /// pasted JSON remains available. Import always fills the form and never
@@ -263,6 +275,72 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
             !_sessionLost &&
             _sessionMatches &&
             identical(api, widget.memoryNotes) &&
+            _selected == selected &&
+            _profileId == profile &&
+            _profileGeneration == generation,
+        canContactHost: () => session.model.online && !_busy,
+      ),
+    );
+  }
+
+  Widget? _ownerAutoMemory(int generation) {
+    final api = widget.autoMemory;
+    final selected = _selected;
+    final profile = _profileId;
+    final session = _session;
+    if (api == null || selected == null || profile == null || session == null) {
+      return null;
+    }
+    return ListenableBuilder(
+      listenable: session.model,
+      builder: (_, _) => OwnerAutoMemorySection(
+        key: ValueKey((api, generation, selected, profile)),
+        api: api,
+        profile: profile,
+        aiLabel:
+            session.model.ownAiAccounts
+                .where((ai) => ai.accountId == selected)
+                .firstOrNull
+                ?.displayName ??
+            selected,
+        isCurrent: () =>
+            mounted &&
+            !_sessionLost &&
+            _sessionMatches &&
+            identical(api, widget.autoMemory) &&
+            _selected == selected &&
+            _profileId == profile &&
+            _profileGeneration == generation,
+        canContactHost: () => session.model.online && !_busy,
+      ),
+    );
+  }
+
+  Widget? _ownerModelProactive(int generation) {
+    final api = widget.modelProactive;
+    final selected = _selected;
+    final profile = _profileId;
+    final session = _session;
+    if (api == null || selected == null || profile == null || session == null) {
+      return null;
+    }
+    return ListenableBuilder(
+      listenable: session.model,
+      builder: (_, _) => OwnerModelProactiveCard(
+        key: ValueKey((api, generation, selected, profile)),
+        api: api,
+        profileId: profile,
+        aiLabel:
+            session.model.ownAiAccounts
+                .where((ai) => ai.accountId == selected)
+                .firstOrNull
+                ?.displayName ??
+            selected,
+        isCurrent: () =>
+            mounted &&
+            !_sessionLost &&
+            _sessionMatches &&
+            identical(api, widget.modelProactive) &&
             _selected == selected &&
             _profileId == profile &&
             _profileGeneration == generation,
@@ -680,6 +758,8 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
           ?_ownerReplyPreferences(profileGeneration),
           ?_ownerRuleGreeting(profileGeneration),
           ?_ownerMemoryNotes(profileGeneration),
+          ?_ownerAutoMemory(profileGeneration),
+          ?_ownerModelProactive(profileGeneration),
           _section(
             '人格',
             [

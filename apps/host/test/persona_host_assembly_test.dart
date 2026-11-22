@@ -58,10 +58,14 @@ void main() {
           hasLength(1),
         );
         expect(await db.query('SELECT * FROM persona_cards'), isEmpty);
+        // Migration 600 is now registered by the default host because the
+        // owner's opt-in chat-history auto-memory reuses `encrypted_memory`.
+        // The tables stay empty until the owner explicitly opts in.
         expect(
           await db.query('SELECT 1 FROM schema_migrations WHERE version = 600'),
-          isEmpty,
+          hasLength(1),
         );
+        expect(await db.query('SELECT * FROM encrypted_memory'), isEmpty);
       } finally {
         await host.shutdown();
         await dir.delete(recursive: true);

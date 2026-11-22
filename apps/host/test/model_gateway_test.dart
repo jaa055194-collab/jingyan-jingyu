@@ -118,6 +118,7 @@ void main() {
   Future<void> configure({
     int b1 = 50,
     int b2 = 50,
+    int b3 = 0,
     int daily = 200,
     int chat = 100,
   }) async {
@@ -132,6 +133,8 @@ void main() {
                   ? b1
                   : l == BudgetLayer.b2DeepChat
                   ? b2
+                  : l == BudgetLayer.b3Proactive
+                  ? b3
                   : 0,
           },
           capabilityLimits: {
@@ -341,11 +344,7 @@ void main() {
         )).failureOrNull?.details['configurationRequired'],
         true,
       );
-      for (final layer in [
-        BudgetLayer.b0Life,
-        BudgetLayer.b3Proactive,
-        BudgetLayer.b4Maintenance,
-      ]) {
+      for (final layer in [BudgetLayer.b0Life, BudgetLayer.b4Maintenance]) {
         expect(
           (await chat(
             'unsupported-${layer.name}',
@@ -355,6 +354,24 @@ void main() {
         );
       }
       expect(calls, 0);
+    },
+  );
+  test(
+    'B3 proactive uses the chat capability and degraded is silent',
+    () async {
+      await configure(b3: 50);
+      expect((await chat('b3-ok', layer: BudgetLayer.b3Proactive)).isOk, true);
+      expect(models, ['S2']);
+      expect(calls, 1);
+      await configure(b3: 0);
+      expect(
+        (await chat(
+          'b3-degraded',
+          layer: BudgetLayer.b3Proactive,
+        )).failureOrNull?.code,
+        FailureCode.budgetExhausted,
+      );
+      expect(calls, 1);
     },
   );
   test(

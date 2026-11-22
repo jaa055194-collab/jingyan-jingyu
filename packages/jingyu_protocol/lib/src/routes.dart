@@ -206,6 +206,25 @@ abstract final class Routes {
   static const String aiOwnerMemoryNoteSettings =
       '$prefix/ai-profiles/{aiId}/owner-memory-notes/settings';
 
+  /// Owner's default-off, per-AI opt-in auto chat-history memory: it captures
+  /// only the owner's own authorized private chat and offers a bounded manager
+  /// to view, confirm/revoke and clear captured entries. No group or third
+  /// party content is ever collected.
+  static const String aiOwnerAutoMemory =
+      '$prefix/ai-profiles/{aiId}/owner-auto-memory';
+  static const String aiOwnerAutoMemorySettings =
+      '$prefix/ai-profiles/{aiId}/owner-auto-memory/settings';
+  static const String aiOwnerAutoMemoryEntry =
+      '$prefix/ai-profiles/{aiId}/owner-auto-memory/{memoryId}';
+
+  /// Separate, default-off settings for a model-driven proactive message to the
+  /// owner's own private chat; unlike the fixed rule greeting this invokes the
+  /// model under the B3 budget and sends a generated short message.
+  static const String aiOwnerModelProactive =
+      '$prefix/ai-profiles/{aiId}/owner-model-proactive';
+  static const String ownerModelProactiveStop =
+      '$prefix/accounts/me/owner-model-proactive';
+
   /// 模型接入配置。
   static const String modelProviders = '$prefix/model-providers';
   static const String modelProvider = '$prefix/model-providers/{providerId}';
