@@ -1,7 +1,9 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
 
+import '../../app/android_private_ai_route.dart';
 import '../../app/runtime.dart';
 import '../../app/shell_view_model.dart';
 import '../../net/attachment_api.dart';
@@ -17,6 +19,7 @@ import '../../net/owner_memory_notes_api.dart';
 import '../../net/owner_model_proactive_api.dart';
 import '../../net/owner_reply_preferences_api.dart';
 import '../../net/owner_rule_greeting_api.dart';
+import '../../net/owner_social_level_api.dart';
 import '../../net/persona_history_api.dart';
 import '../../net/search_api.dart';
 import '../../net/voice_api.dart';
@@ -37,6 +40,7 @@ import '../search/search_screen.dart';
 import '../voice/voice_call_list_screen.dart';
 import '../voice/voice_screen.dart';
 import '../world/world_status_screen.dart';
+import 'android_ai_directory_screen.dart';
 import 'device_sessions_screen.dart';
 import 'owner_rule_greeting_settings_panel.dart';
 
@@ -147,6 +151,155 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
+  // On the native Flutter targets this follows the device platform, not the
+  // theme or screen width: a narrow Windows window keeps the desktop settings.
+  bool get _android => defaultTargetPlatform == TargetPlatform.android;
+
+  void _openAiConfig(
+    BuildContext context, {
+    ShellOwnedAi? androidAi,
+    Object? renderedInteraction,
+  }) {
+    final shell = model;
+    final runtime = shell is ClientRuntime ? shell : null;
+    final owner = shell.connectedAccountId;
+    final epoch = shell.ownAiSessionContext;
+    // Also catch a lock between the tap and the editor's first frame.
+    final lockEpoch = shell.ownAiDirectContext;
+    final connection =
+        shell.authenticated &&
+            !shell.locked &&
+            owner != null &&
+            epoch != null &&
+            lockEpoch != null
+        ? runtime?.connection
+        : null;
+    bool sessionCurrent() =>
+        shell.authenticated &&
+        !shell.locked &&
+        shell.connectedAccountId == owner &&
+        shell.ownAiSessionContext == epoch &&
+        identical(shell.ownAiDirectContext, lockEpoch) &&
+        identical(runtime?.connection, connection);
+    if (androidAi != null &&
+        (connection == null ||
+            !shell.online ||
+            shell.busy ||
+            !identical(lockEpoch, renderedInteraction) ||
+            !shell.ownAiAccounts.any(
+              (ai) =>
+                  ai.accountId == androidAi.accountId &&
+                  ai.displayName == androidAi.displayName &&
+                  !ai.disabled,
+            ))) {
+      return;
+    }
+    final owned = connection == null
+        ? const <String>[]
+        : androidAi != null
+        ? [androidAi.accountId]
+        : [
+            for (final ai in shell.ownAiAccounts)
+              if (!ai.disabled) ai.accountId,
+          ];
+    final writer = connection == null
+        ? null
+        : AiConfigWriteApi(
+            connection,
+            retryAuthentication: false,
+            allowMultilinePersona: androidAi != null,
+          );
+    final direct = connection == null ? null : OwnerAiDirectApi(connection);
+    final catalog = connection == null ? null : ModelDiagnosticsApi(connection);
+    final history = connection == null ? null : PersonaHistoryApi(connection);
+    final androidDetails =
+        androidAi == null ||
+            connection == null ||
+            direct == null ||
+            owner == null
+        ? null
+        : (
+            aiLabel: androidAi.displayName,
+            resolveIdentity: (String accountId) => direct.registerOrResolve(
+              accountId,
+              expectedOwnerAccountId: owner,
+              retryAuthentication: false,
+            ),
+            readiness: OwnerAiReadinessApi(connection),
+          );
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AiConfigEditor(
+          writer: writer,
+          androidDetails: androidDetails,
+          resolveProfileId: direct == null || owner == null || androidAi != null
+              ? null
+              : (accountId) => direct
+                    .registerOrResolve(accountId, expectedOwnerAccountId: owner)
+                    .then((identity) => identity.profileId),
+          readCatalog: catalog == null
+              ? null
+              : (providerId) => catalog.readModelCatalog(
+                  providerId,
+                  retryAuthentication: false,
+                ),
+          readPersonaHistory: history?.read,
+          replyPreferences: connection == null
+              ? null
+              : OwnerReplyPreferencesApi(connection),
+          socialLevel: androidDetails == null || connection == null
+              ? null
+              : OwnerSocialLevelApi(connection),
+          ruleGreeting: connection == null
+              ? null
+              : OwnerRuleGreetingApi(connection),
+          memoryNotes: connection == null
+              ? null
+              : OwnerMemoryNotesApi(connection),
+          autoMemory: connection == null
+              ? null
+              : OwnerAutoMemoryApi(connection),
+          modelProactive: connection == null
+              ? null
+              : OwnerModelProactiveApi(connection),
+          personaFilePicker: connection == null
+              ? null
+              : NativePersonaFilePicker(),
+          session: connection == null
+              ? null
+              : (model: shell, isCurrent: sessionCurrent),
+          ownedAiAccountIds: owned,
+        ),
+      ),
+    );
+  }
+
+  void _openPrivateChat(
+    BuildContext context,
+    ShellOwnedAi ai,
+    Object interaction,
+  ) {
+    final shell = model;
+    if (shell is! ClientRuntime ||
+        !shell.authenticated ||
+        shell.locked ||
+        !identical(shell.ownAiDirectContext, interaction) ||
+        !shell.ownAiAccounts.any(
+          (row) => row.accountId == ai.accountId && !row.disabled,
+        )) {
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AndroidPrivateAiRoute(
+          runtime: shell,
+          ai: ai,
+          interaction: interaction,
+        ),
+      ),
+    );
+  }
+
   Future<void> editLock(BuildContext context, bool enable) async {
     final controller = TextEditingController();
     String? validation;
@@ -192,6 +345,63 @@ class SettingsScreen extends StatelessWidget {
     );
     // Dialog exit animation may still reference the controller; disposal follows
     // its route removal rather than the button's synchronous callback.
+  }
+
+  List<Widget> _ownAiSection(BuildContext context) {
+    final canManage = model.authenticated && !model.locked;
+    final canContactHost = canManage && model.online && !model.busy;
+    return [
+      Text('我的 AI', style: Theme.of(context).textTheme.titleMedium),
+      const Text('仅管理你拥有的 AI 账户。回复仍需宿主配置；创建不会自动配置模型、社交等级或授权。'),
+      Wrap(
+        spacing: 8,
+        children: [
+          TextButton.icon(
+            key: const Key('own-ai-refresh'),
+            onPressed: canContactHost ? model.loadOwnAi : null,
+            icon: const Icon(Icons.refresh),
+            label: const Text('刷新我的 AI'),
+          ),
+          FilledButton.icon(
+            key: const Key('own-ai-create'),
+            onPressed: canContactHost
+                ? () => showDialog<void>(
+                    context: context,
+                    builder: (_) => _CreateOwnAiDialog(model: model),
+                  )
+                : null,
+            icon: const Icon(Icons.add),
+            label: const Text('创建 AI 账户'),
+          ),
+        ],
+      ),
+      if (canManage) ...[
+        if (model.ownAiNotice != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: SelectableText(model.ownAiNotice!),
+          ),
+        if (model.ownAiAccounts.isEmpty)
+          Text(model.ownAiLoaded ? '你还没有 AI 账户。' : '尚未加载，请刷新我的 AI。'),
+        for (final ai in model.ownAiAccounts)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${ai.displayName} · ${ai.disabled ? "已停用" : "未停用"}'),
+                SelectableText(ai.accountId),
+                _OwnAiDirectControls(
+                  model: model,
+                  ai: ai,
+                  onOpenChat: onOpenOwnAiChat,
+                  checkingAccount: checkingOwnAiAccount,
+                ),
+              ],
+            ),
+          ),
+      ],
+    ];
   }
 
   @override
@@ -271,6 +481,36 @@ class SettingsScreen extends StatelessWidget {
                     ? () => _openGreetingStop(context)
                     : null,
               ),
+            if (_android &&
+                model is ClientRuntime &&
+                model.authenticated &&
+                !model.locked) ...[
+              const Divider(height: 32),
+              Text('我的 AI 配置', style: Theme.of(context).textTheme.titleMedium),
+              const Text('查看每个 AI 使用的模型与 API、人格和活人感设置，或打开本机私聊。'),
+              ListTile(
+                key: const Key('open-android-ai-directory'),
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.smart_toy_outlined),
+                title: const Text('选择 AI'),
+                subtitle: const Text('模型与 API · 人格 · 活人感 · 私聊'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => AndroidAiDirectoryScreen(
+                      model: model,
+                      onOpenAi: (ai, interaction) => _openAiConfig(
+                        context,
+                        androidAi: ai,
+                        renderedInteraction: interaction,
+                      ),
+                      onOpenPrivateChat: (ai, interaction) =>
+                          _openPrivateChat(context, ai, interaction),
+                    ),
+                  ),
+                ),
+              ),
+            ],
             const Divider(height: 32),
             Text('通用', style: Theme.of(context).textTheme.titleMedium),
             SwitchListTile(
@@ -627,154 +867,10 @@ class SettingsScreen extends StatelessWidget {
                 '编辑人格/Provider/聊天绑定/预算；api_key 遮蔽输入、只显示掩码，绝不回显或记录密钥',
               ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                final shell = model;
-                final runtime = shell is ClientRuntime ? shell : null;
-                final owner = shell.connectedAccountId;
-                final epoch = shell.ownAiSessionContext;
-                // Also catch a lock between the tap and the editor's first frame.
-                final lockEpoch = shell.ownAiDirectContext;
-                final connection =
-                    shell.authenticated &&
-                        !shell.locked &&
-                        owner != null &&
-                        epoch != null &&
-                        lockEpoch != null
-                    ? runtime?.connection
-                    : null;
-                bool sessionCurrent() =>
-                    shell.authenticated &&
-                    !shell.locked &&
-                    shell.connectedAccountId == owner &&
-                    shell.ownAiSessionContext == epoch &&
-                    identical(shell.ownAiDirectContext, lockEpoch) &&
-                    identical(runtime?.connection, connection);
-                final owned = connection == null
-                    ? const <String>[]
-                    : [
-                        for (final ai in shell.ownAiAccounts)
-                          if (!ai.disabled) ai.accountId,
-                      ];
-                final resolve = (connection != null && owner != null)
-                    ? (String accountId) => OwnerAiDirectApi(connection)
-                          .registerOrResolve(
-                            accountId,
-                            expectedOwnerAccountId: owner,
-                          )
-                          .then((identity) => identity.profileId)
-                    : null;
-                final writer = connection == null
-                    ? null
-                    : AiConfigWriteApi(connection, retryAuthentication: false);
-                final catalog = connection == null
-                    ? null
-                    : ModelDiagnosticsApi(connection);
-                final history = connection == null
-                    ? null
-                    : PersonaHistoryApi(connection);
-                final replyPreferences = connection == null
-                    ? null
-                    : OwnerReplyPreferencesApi(connection);
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => AiConfigEditor(
-                      writer: writer,
-                      resolveProfileId: resolve,
-                      readCatalog: catalog == null
-                          ? null
-                          : (providerId) => catalog.readModelCatalog(
-                              providerId,
-                              retryAuthentication: false,
-                            ),
-                      readPersonaHistory: history?.read,
-                      replyPreferences: replyPreferences,
-                      ruleGreeting: connection == null
-                          ? null
-                          : OwnerRuleGreetingApi(connection),
-                      memoryNotes: connection == null
-                          ? null
-                          : OwnerMemoryNotesApi(connection),
-                      autoMemory: connection == null
-                          ? null
-                          : OwnerAutoMemoryApi(connection),
-                      modelProactive: connection == null
-                          ? null
-                          : OwnerModelProactiveApi(connection),
-                      personaFilePicker: connection == null
-                          ? null
-                          : NativePersonaFilePicker(),
-                      session: connection == null
-                          ? null
-                          : (model: shell, isCurrent: sessionCurrent),
-                      ownedAiAccountIds: owned,
-                    ),
-                  ),
-                );
-              },
+              onTap: () => _openAiConfig(context),
             ),
             const Divider(height: 32),
-            Text('我的 AI', style: Theme.of(context).textTheme.titleMedium),
-            const Text('仅管理你拥有的 AI 账户。回复仍需宿主配置；创建不会自动配置模型、社交等级或授权。'),
-            Wrap(
-              spacing: 8,
-              children: [
-                TextButton.icon(
-                  key: const Key('own-ai-refresh'),
-                  onPressed:
-                      model.authenticated &&
-                          model.online &&
-                          !model.locked &&
-                          !model.busy
-                      ? model.loadOwnAi
-                      : null,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('刷新我的 AI'),
-                ),
-                FilledButton.icon(
-                  key: const Key('own-ai-create'),
-                  onPressed:
-                      model.authenticated &&
-                          model.online &&
-                          !model.locked &&
-                          !model.busy
-                      ? () => showDialog<void>(
-                          context: context,
-                          builder: (_) => _CreateOwnAiDialog(model: model),
-                        )
-                      : null,
-                  icon: const Icon(Icons.add),
-                  label: const Text('创建 AI 账户'),
-                ),
-              ],
-            ),
-            if (model.authenticated && !model.locked) ...[
-              if (model.ownAiNotice != null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: SelectableText(model.ownAiNotice!),
-                ),
-              if (model.ownAiAccounts.isEmpty)
-                Text(model.ownAiLoaded ? '你还没有 AI 账户。' : '尚未加载，请刷新我的 AI。'),
-              for (final ai in model.ownAiAccounts)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${ai.displayName} · ${ai.disabled ? "已停用" : "未停用"}',
-                      ),
-                      SelectableText(ai.accountId),
-                      _OwnAiDirectControls(
-                        model: model,
-                        ai: ai,
-                        onOpenChat: onOpenOwnAiChat,
-                        checkingAccount: checkingOwnAiAccount,
-                      ),
-                    ],
-                  ),
-                ),
-            ],
+            ..._ownAiSection(context),
           ],
         ),
       ),

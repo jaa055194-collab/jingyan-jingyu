@@ -224,6 +224,7 @@ void main() {
         'owner_reply_preferences',
         'owner_memory_notes',
         'owner_auto_memory',
+        'android_private_chat',
         'owner_rule_greeting',
         'owner_model_proactive',
         'persona',

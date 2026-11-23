@@ -48,6 +48,7 @@ class AccountsModule extends HostModule {
     router.post(Routes.authDeviceRevoke, _revoke);
     router.get(Routes.ownAiAccounts, _ownAi);
     router.post(Routes.ownAiAccounts, _createOwnAi);
+    router.delete(Routes.ownAiAccount, _removeOwnAi);
     router.post(adminInvitesPath, _invite, access: Access.admin);
     router.get(adminInvitesPath, _invites, access: Access.admin);
     router.post(Routes.adminInviteRevoke, _revokeInvite, access: Access.admin);
@@ -120,6 +121,30 @@ class AccountsModule extends HostModule {
         displayName: body['displayName'] as String,
       ),
       (id) => {'accountId': id.value},
+    );
+  }
+
+  Future<HostResponse> _removeOwnAi(HostRequest request) async {
+    final scope = await _currentSession(request);
+    if (scope == null) return _unauthenticated();
+    if (request.query.isNotEmpty) return _bad();
+    // DELETE has no JSON entity. Parsed JSON null is indistinguishable from an
+    // absent body, so also reject any nonempty or chunked request framing.
+    final length = request.headers['content-length'];
+    if (request.body != null ||
+        (length != null && int.tryParse(length) != 0) ||
+        request.headers.containsKey('transfer-encoding')) {
+      return _bad();
+    }
+    final AccountId target;
+    try {
+      target = AccountId.parse(request.pathParams['accountId'] ?? '');
+    } on FormatException {
+      return _bad();
+    }
+    return HostResponse.fromResult(
+      await scope.session.removeOwnAi(target),
+      (_) => {'removed': true},
     );
   }
 

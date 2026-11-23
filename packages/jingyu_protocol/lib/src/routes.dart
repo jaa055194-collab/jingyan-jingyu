@@ -34,6 +34,9 @@ abstract final class Routes {
   /// Current human operator's AI accounts; no implicit friendship or profile.
   static const String ownAiAccounts = '$prefix/accounts/me/ai';
 
+  /// A single current human operator's own AI account; logical removal only.
+  static const String ownAiAccount = '$prefix/accounts/me/ai/{accountId}';
+
   /// Account-wide stop for local owner rule greetings, not a dispatch route.
   static const String ownerRuleGreetingStop =
       '$prefix/accounts/me/owner-rule-greetings';
@@ -69,6 +72,12 @@ abstract final class Routes {
   /// Current human's explicit ownerTextOnly consent (GET/POST/DELETE), no dispatch.
   static const String ownerAiDirectConsent =
       '$prefix/ai-profiles/{aiId}/direct-conversation';
+
+  /// Owner-private Android transcript exchanges for the current human's own AI:
+  /// GET a bounded cursor page, POST one already-produced exchange pair. This
+  /// is not ordinary chat, consent, model dispatch or any other AI setting.
+  static const String androidPrivateChat =
+      '$prefix/ai-profiles/{aiId}/android-private-chat';
 
   /// Separate, default-off settings for a local rule greeting to the owner.
   static const String aiOwnerRuleGreeting =

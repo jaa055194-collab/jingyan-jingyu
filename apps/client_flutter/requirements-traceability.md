@@ -90,3 +90,16 @@ Only the Flutter history viewport changes: the host, sync order, and history sto
 4. Run real-host offline-three-message and real-device AC-16/18/30/32 acceptance.
 
 Environment: Windows11, Flutter3.50/Dart3.14, Android SDK36/JDK21, VS2022 BuildTools. Short `J:` build path avoids MSBuild MAX_PATH. Gradle proxy is process-only; no credentials/config committed. No Android device attached.
+
+## Android own-AI private chat and settings increment
+
+Scope: Android-only new entry points; existing host-mediated chats and the Windows client remain on their prior paths. Source base: `87de5f3`; the attempted native baseline APK was built at `8b47f314`. “Host offline” means the Jingyu host is unreachable while the model endpoint is still reachable; it does not mean on-device inference or no network.
+
+| ID | Acceptance | Implementation and verification | Boundary |
+|---|---|---|---|
+| M11-Android-AI-01 | A previously configured phone can reopen one owned AI after a cold start, retain its current model/persona and local exchanges, and contact the configured HTTPS model with the phone's own key. | Private chat controller, Android Keystore vault and one-shot model adapter. Controller restart/lock tests and adapter transport tests; native Android build is separate from device acceptance. | Android app-level cold restart with the model reachable while the host is down is not yet device-verified. First setup requires the host. |
+| M11-Android-AI-02 | After enabling synchronization, Android exchanges reach the host once and can be read by another authenticated Android device for the same owner and AI. | `android-private-chat` transport and encrypted owner-scoped history, covered by controller, HTTP adapter and disposable SQLite host tests. | Separate from legacy conversations. Sync sends exchange text, not keys or settings. No host model is invoked by a sync. |
+| M11-Android-AI-03 | The user can distinguish the configured model, API address and persona, and view or edit saved persona and supported behavior controls. | Android AI directory, direct-chat secondary menu and per-AI setting screen. Widget/API tests cover scope, exact model/provider pairing, persona revision and multiline values, reply preferences and social-level invalidation. | The saved persona and last-read behavior summary can be viewed offline. Editing persona and behavior settings still uses the host; offline status does not enable local scheduled or proactive behavior. |
+| M11-Android-AI-04 | Confirmed owner-only removal stops the AI and removes it from the roster without deleting or corrupting existing history. | Durable logical removal with a metadata-only audit; host tests cover ownership, restart, repeat and retention. Android requires explicit confirmation. | Logical removal, not permanent data erasure. |
+
+Native comparison is incomplete: baseline and changed APK builds are not evidence of matching Before/After screens. The available API 36 emulator repeatedly reported Android system input-dispatch ANRs before reaching authenticated Settings. No onboarding screen, synthetic mockup or widget-only capture substitutes for the missing comparison.

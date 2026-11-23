@@ -11,6 +11,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.util.UUID
@@ -21,7 +22,12 @@ class MainActivity : FlutterActivity() {
         private const val REQUEST_PICK_ATTACHMENT = 1201
         private const val REQUEST_SAVE_BACKUP = 1202
         private const val MAX_BACKUP_BYTES = 4 * 1024 * 1024
+        // Serialize read/replace/delete across Activity recreation, including
+        // Keystore key creation. Tasks access app-private storage only.
+        private val privateAiVaultExecutor = Executors.newSingleThreadExecutor()
     }
+
+    private val privateAiVault by lazy { PrivateAiVault(applicationContext) }
 
     private lateinit var channel: MethodChannel
     private lateinit var pinStore: PinStore
@@ -64,6 +70,8 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "getDataDirectory" -> result.success(filesDir.absolutePath)
+                    "readPrivateAiVault", "writePrivateAiVault", "removePrivateAiVault" ->
+                        handlePrivateAiVault(call, result)
                     "playVoiceMessage" -> {
                         val id = call.argument<Number>("requestId")?.toLong()
                         val epoch = call.argument<Number>("epoch")?.toLong()
@@ -208,6 +216,43 @@ class MainActivity : FlutterActivity() {
                 }
             } catch (error: Exception) {
                 result.error("platform_error", error.message, null)
+            }
+        }
+    }
+
+    private fun handlePrivateAiVault(call: MethodCall, result: MethodChannel.Result) {
+        val arguments = call.arguments as? Map<*, *>
+        val scope = arguments?.get("scope") as? String
+        val isWrite = call.method == "writePrivateAiVault"
+        val bytes = arguments?.get("bytes") as? ByteArray
+        if (scope == null || !PrivateAiVault.isScope(scope) ||
+            (isWrite && (bytes == null || bytes.size !in 1..PrivateAiVault.MAX_RECORD_BYTES))
+        ) {
+            result.error("private_ai_vault_error", "Invalid private AI vault arguments", null)
+            return
+        }
+        privateAiVaultExecutor.execute {
+            try {
+                val value = when (call.method) {
+                    "readPrivateAiVault" -> privateAiVault.read(scope)
+                    "writePrivateAiVault" -> {
+                        privateAiVault.write(scope, checkNotNull(bytes))
+                        null
+                    }
+                    else -> {
+                        privateAiVault.remove(scope)
+                        null
+                    }
+                }
+                runOnUiThread { if (!isDestroyed) result.success(value) }
+            } catch (_: Exception) {
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        result.error("private_ai_vault_error", "Private AI vault operation failed", null)
+                    }
+                }
+            } finally {
+                if (isWrite) bytes?.fill(0)
             }
         }
     }

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -5,20 +6,26 @@ import '../../app/shell_view_model.dart';
 import '../../net/ai_config_write_api.dart';
 import '../../net/host_connection.dart';
 import '../../net/model_diagnostics_api.dart';
+import '../../net/owner_ai_direct_api.dart';
+import '../../net/owner_ai_readiness_api.dart';
 import '../../net/owner_auto_memory_api.dart';
 import '../../net/owner_memory_notes_api.dart';
 import '../../net/owner_model_proactive_api.dart';
 import '../../net/owner_reply_preferences_api.dart';
 import '../../net/owner_rule_greeting_api.dart';
+import '../../net/owner_social_level_api.dart';
 import '../../net/persona_history_api.dart';
 import 'owner_auto_memory_section.dart';
 import 'owner_memory_notes_section.dart';
 import 'owner_model_proactive_card.dart';
 import 'owner_reply_preferences_section.dart';
 import 'owner_rule_greeting_card.dart';
+import 'owner_social_level_section.dart';
 import 'persona_card_import.dart';
 import 'persona_file_picker.dart';
 import 'persona_history_screen.dart';
+
+part 'android_ai_config_details.dart';
 
 /// Read-write "AI 运行配置" hub for one owned AI.
 ///
@@ -39,7 +46,9 @@ class AiConfigEditor extends StatefulWidget {
     this.memoryNotes,
     this.autoMemory,
     this.modelProactive,
+    this.socialLevel,
     this.personaFilePicker,
+    this.androidDetails,
     this.session,
     this.ownedAiAccountIds = const <String>[],
   });
@@ -61,10 +70,22 @@ class AiConfigEditor extends StatefulWidget {
   /// Default-off model-driven proactive contact to the owner's own private chat.
   final OwnerModelProactiveApi? modelProactive;
 
+  /// Android-only owner social level. It never grants proactive contact itself.
+  final OwnerSocialLevelApi? socialLevel;
+
   /// Explicit local persona-card file read. Null disables the file entry only;
   /// pasted JSON remains available. Import always fills the form and never
   /// writes to the host.
   final PersonaFilePicker? personaFilePicker;
+
+  /// Android Settings pins one owned AI. Registration is deferred until the
+  /// user explicitly requests its saved configuration.
+  final ({
+    String aiLabel,
+    Future<OwnedAiProfileIdentity> Function(String) resolveIdentity,
+    OwnerAiReadinessApi readiness,
+  })?
+  androidDetails;
 
   /// The Settings route captures the original account, epoch and connection.
   final ({ShellViewModel model, bool Function() isCurrent})? session;
@@ -74,7 +95,18 @@ class AiConfigEditor extends StatefulWidget {
   State<AiConfigEditor> createState() => _AiConfigEditorState();
 }
 
-class _AiConfigEditorState extends State<AiConfigEditor> {
+class _AiConfigEditorState extends _AiConfigEditorBase
+    with _AndroidAiConfigDetails {}
+
+abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
+  Widget _buildAndroid(BuildContext context);
+  void _clearAndroidDetails();
+  void _invalidateAndroidModels();
+
+  late final _pinnedAndroidDetails = widget.androidDetails;
+  bool get _isAndroidDetails => _pinnedAndroidDetails != null;
+  bool get _androidCanContactHost => _session?.model.online ?? true;
+
   String? _selected;
   String? _profileId;
   bool _resolving = false;
@@ -84,6 +116,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
   late final ({ShellViewModel model, bool Function() isCurrent})? _session;
   bool _sessionLost = false;
   int _profileGeneration = 0;
+  int _proactiveGeneration = 0;
   int _catalogGeneration = 0;
   bool _catalogLoading = false;
   String? _catalogNotice;
@@ -135,12 +168,13 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     super.initState();
     _session = widget.session;
     _session?.model.addListener(_onSessionChanged);
-    if (widget.ownedAiAccountIds.isNotEmpty) {
+    if (widget.ownedAiAccountIds.isNotEmpty &&
+        (!_isAndroidDetails || widget.ownedAiAccountIds.length == 1)) {
       _selected = widget.ownedAiAccountIds.first;
     }
     if (!_sessionMatches) {
       _invalidateSession();
-    } else if (_selected != null) {
+    } else if (!_isAndroidDetails && _selected != null) {
       _resolve();
     }
   }
@@ -164,6 +198,10 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     final session = _session;
     final ai = _selected;
     return widget.session == session &&
+        widget.androidDetails == _pinnedAndroidDetails &&
+        (!_isAndroidDetails ||
+            (widget.ownedAiAccountIds.length == 1 &&
+                widget.ownedAiAccountIds.single == ai)) &&
         (session == null ||
             session.isCurrent() &&
                 (ai == null ||
@@ -183,6 +221,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     _importing = false;
     _importGeneration++;
     _resetCatalog();
+    if (_isAndroidDetails) _clearAndroidDetails();
     for (final controller in _controllers) {
       controller.clear();
     }
@@ -209,15 +248,21 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
         key: ValueKey((api, generation, selected, profile)),
         api: api,
         profile: profile,
-        isCurrent: () => mounted && !_sessionLost && _sessionMatches &&
-            identical(api, widget.replyPreferences) && _selected == selected &&
-            _profileId == profile && _profileGeneration == generation,
+        isCurrent: () =>
+            mounted &&
+            !_sessionLost &&
+            _sessionMatches &&
+            identical(api, widget.replyPreferences) &&
+            _selected == selected &&
+            _profileId == profile &&
+            _profileGeneration == generation,
         canContactHost: () => session.model.online && !_busy,
       ),
     );
   }
 
   Widget? _ownerRuleGreeting(int generation) {
+    final proactive = _proactiveGeneration;
     final api = widget.ruleGreeting;
     final selected = _selected;
     final profile = _profileId;
@@ -228,7 +273,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     return ListenableBuilder(
       listenable: session.model,
       builder: (_, _) => OwnerRuleGreetingCard(
-        key: ValueKey((api, generation, selected, profile)),
+        key: ValueKey((api, generation, selected, profile, proactive)),
         api: api,
         profileId: profile,
         aiLabel:
@@ -244,7 +289,8 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
             identical(api, widget.ruleGreeting) &&
             _selected == selected &&
             _profileId == profile &&
-            _profileGeneration == generation,
+            _profileGeneration == generation &&
+            _proactiveGeneration == proactive,
         canContactHost: () => session.model.online && !_busy,
       ),
     );
@@ -317,6 +363,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
   }
 
   Widget? _ownerModelProactive(int generation) {
+    final proactive = _proactiveGeneration;
     final api = widget.modelProactive;
     final selected = _selected;
     final profile = _profileId;
@@ -327,7 +374,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     return ListenableBuilder(
       listenable: session.model,
       builder: (_, _) => OwnerModelProactiveCard(
-        key: ValueKey((api, generation, selected, profile)),
+        key: ValueKey((api, generation, selected, profile, proactive)),
         api: api,
         profileId: profile,
         aiLabel:
@@ -343,7 +390,8 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
             identical(api, widget.modelProactive) &&
             _selected == selected &&
             _profileId == profile &&
-            _profileGeneration == generation,
+            _profileGeneration == generation &&
+            _proactiveGeneration == proactive,
         canContactHost: () => session.model.online && !_busy,
       ),
     );
@@ -360,6 +408,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
       widget.writer != null &&
       _selected != null &&
       _profileId != null &&
+      (!_isAndroidDetails || _androidCanContactHost) &&
       !_resolving &&
       !_busy;
 
@@ -515,6 +564,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     String success, {
     required int profileGeneration,
     void Function(T result)? onSuccess,
+    bool modelMetadataMayChange = false,
   }) async {
     bool isCurrent() =>
         _checkSession() && profileGeneration == _profileGeneration;
@@ -522,6 +572,9 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     setState(() {
       _busy = true;
       _status = null;
+      if (_isAndroidDetails && modelMetadataMayChange) {
+        _invalidateAndroidModels();
+      }
     });
     try {
       final result = await action(widget.writer!);
@@ -682,10 +735,17 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
         ),
       );
     }
+    if (_isAndroidDetails) {
+      final model = _session?.model;
+      return model == null
+          ? _buildAndroid(context)
+          : ListenableBuilder(
+              listenable: model,
+              builder: (_, _) => _buildAndroid(context),
+            );
+    }
     final canUse = widget.writer != null;
     final profileGeneration = _profileGeneration;
-    final catalogGeneration = _catalogGeneration;
-    final catalogModels = _catalogModels;
     return Scaffold(
       appBar: AppBar(title: const Text('AI 运行配置')),
       body: ListView(
@@ -880,174 +940,179 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
                 '人格三层：P0 核心（不可自改）、P1 风格（可自主迭代）、P2 情绪；'
                 '初始化需三层全部非空，保存修改需当前版本与原因，历史可回滚。',
           ),
-          _section(
-            'Provider',
-            [
-              _field('provider-name', _provName, '名称'),
-              _field('provider-base-url', _provBaseUrl, 'Base URL'),
-              _field(
-                'provider-api-key',
-                _provApiKey,
-                'API Key（遮蔽输入，仅提交给宿主）',
-                obscure: true,
-              ),
-              _field('provider-capabilities', _provCaps, '能力（逗号分隔，如 chat）'),
-              _field('provider-id', _provId, '已有 Provider ID（更新时填）'),
-              Wrap(
-                spacing: 8,
-                children: [
-                  FilledButton(
-                    key: const Key('provider-create'),
-                    onPressed: !_ready
-                        ? null
-                        : () => _createProvider(profileGeneration),
-                    child: const Text('新建 Provider'),
-                  ),
-                  OutlinedButton(
-                    key: const Key('provider-update'),
-                    onPressed: !_ready
-                        ? null
-                        : () => _updateProvider(profileGeneration),
-                    child: const Text('更新 Provider'),
-                  ),
-                ],
-              ),
-            ],
-            helpKey: 'help-provider',
-            help:
-                'api_key 只经遮蔽字段提交给宿主，绝不回显、不记录；'
-                '保存后宿主只返回掩码 key_mask（不是密钥），客户端不持有明文。',
-          ),
-          _section(
-            '聊天绑定',
-            [
-              _field(
-                'binding-provider',
-                _bindProvider,
-                'Provider ID',
-                onChanged: _changeBindingProvider,
-              ),
-              _field(
-                'binding-model',
-                _bindModel,
-                '模型 ID',
-                onChanged: _changeBindingModel,
-              ),
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: OutlinedButton.icon(
-                  key: const Key('binding-catalog-read'),
-                  onPressed:
-                      !_ready ||
-                          widget.readCatalog == null ||
-                          _bindProvider.text.trim().isEmpty ||
-                          _catalogLoading
-                      ? null
-                      : () => _loadCatalog(catalogGeneration),
-                  icon: const Icon(Icons.list_alt_outlined),
-                  label: Text(
-                    _catalogLoading ? '读取模型目录中…' : '读取已保存 Provider 模型',
-                  ),
-                ),
-              ),
-              if (_catalogNotice != null)
-                Text(
-                  _catalogNotice!,
-                  key: const Key('binding-catalog-status'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              if (_catalogModels.isNotEmpty)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 176),
-                  child: ListView.builder(
-                    primary: false,
-                    shrinkWrap: true,
-                    padding: EdgeInsets.zero,
-                    itemCount: catalogModels.length,
-                    itemBuilder: (context, index) {
-                      final model = catalogModels[index];
-                      return ListTile(
-                        key: Key('binding-catalog-model-$model'),
-                        title: Text(
-                          model,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        selected: _copiedModel == model,
-                        onTap: !_ready
-                            ? null
-                            : () => _copyCatalogModel(model, catalogGeneration),
-                      );
-                    },
-                  ),
-                ),
-              if (_copiedModel != null)
-                Text(
-                  '已填入模型 ID',
-                  key: const Key('binding-catalog-selection-status'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              FilledButton(
-                key: const Key('binding-save'),
-                onPressed: !_ready
-                    ? null
-                    : () {
-                        if (catalogGeneration != _catalogGeneration) return;
-                        _run(
-                          (writer) => writer.setChatBinding(
-                            _profileId!,
-                            providerId: _bindProvider.text.trim(),
-                            model: _bindModel.text.trim(),
-                          ),
-                          '聊天绑定已保存',
-                          profileGeneration: profileGeneration,
-                        );
-                      },
-                child: const Text('保存聊天绑定'),
-              ),
-            ],
-            helpKey: 'help-binding',
-            help:
-                '聊天绑定需要 Provider ID 与模型 ID同时提供；'
-                '绑定到 chat 能力后该 AI 才能用于对话，未绑定不代表可用。',
-          ),
-          _section(
-            '预算',
-            [
-              Row(
-                children: [
-                  Expanded(
-                    child: _field('budget-daily', _budgetDaily, '每日 token 上限'),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _field('budget-offset', _budgetOffset, '时区偏移（分钟）'),
-                  ),
-                ],
-              ),
-              _field(
-                'budget-layers',
-                _budgetLayers,
-                '分层上限（b0Life=0 等，五行）',
-                lines: 5,
-              ),
-              _field('budget-caps', _budgetCaps, '能力上限（chat=0 等，七行）', lines: 7),
-              FilledButton(
-                key: const Key('budget-save'),
-                onPressed: !_ready
-                    ? null
-                    : () => _saveBudget(profileGeneration),
-                child: const Text('保存预算'),
-              ),
-            ],
-            helpKey: 'help-budget',
-            help:
-                '预算四字段：每日 token 上限、时区偏移（分钟）、分层限额（name=整数每行）、'
-                '能力限额（name=整数每行）；保存后按本地时区切日，不代表已获批或已启用。',
-          ),
+          ..._advancedSections(profileGeneration),
         ],
       ),
     );
+  }
+
+  List<Widget> _advancedSections(int profileGeneration) {
+    final catalogGeneration = _catalogGeneration;
+    final catalogModels = _catalogModels;
+    return [
+      _section(
+        'Provider',
+        [
+          _field('provider-name', _provName, '名称'),
+          _field('provider-base-url', _provBaseUrl, 'Base URL'),
+          _field(
+            'provider-api-key',
+            _provApiKey,
+            'API Key（遮蔽输入，仅提交给宿主）',
+            obscure: true,
+          ),
+          _field('provider-capabilities', _provCaps, '能力（逗号分隔，如 chat）'),
+          _field('provider-id', _provId, '已有 Provider ID（更新时填）'),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilledButton(
+                key: const Key('provider-create'),
+                onPressed: !_ready
+                    ? null
+                    : () => _createProvider(profileGeneration),
+                child: const Text('新建 Provider'),
+              ),
+              OutlinedButton(
+                key: const Key('provider-update'),
+                onPressed: !_ready
+                    ? null
+                    : () => _updateProvider(profileGeneration),
+                child: const Text('更新 Provider'),
+              ),
+            ],
+          ),
+        ],
+        helpKey: 'help-provider',
+        help:
+            'api_key 只经遮蔽字段提交给宿主，绝不回显、不记录；'
+            '保存后宿主只返回掩码 key_mask（不是密钥），客户端不持有明文。',
+      ),
+      _section(
+        '聊天绑定',
+        [
+          _field(
+            'binding-provider',
+            _bindProvider,
+            'Provider ID',
+            onChanged: _changeBindingProvider,
+          ),
+          _field(
+            'binding-model',
+            _bindModel,
+            '模型 ID',
+            onChanged: _changeBindingModel,
+          ),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: OutlinedButton.icon(
+              key: const Key('binding-catalog-read'),
+              onPressed:
+                  !_ready ||
+                      widget.readCatalog == null ||
+                      _bindProvider.text.trim().isEmpty ||
+                      _catalogLoading
+                  ? null
+                  : () => _loadCatalog(catalogGeneration),
+              icon: const Icon(Icons.list_alt_outlined),
+              label: Text(_catalogLoading ? '读取模型目录中…' : '读取已保存 Provider 模型'),
+            ),
+          ),
+          if (_catalogNotice != null)
+            Text(
+              _catalogNotice!,
+              key: const Key('binding-catalog-status'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          if (_catalogModels.isNotEmpty)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 176),
+              child: ListView.builder(
+                primary: false,
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: catalogModels.length,
+                itemBuilder: (context, index) {
+                  final model = catalogModels[index];
+                  return ListTile(
+                    key: Key('binding-catalog-model-$model'),
+                    title: Text(
+                      model,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    selected: _copiedModel == model,
+                    onTap: !_ready
+                        ? null
+                        : () => _copyCatalogModel(model, catalogGeneration),
+                  );
+                },
+              ),
+            ),
+          if (_copiedModel != null)
+            Text(
+              '已填入模型 ID',
+              key: const Key('binding-catalog-selection-status'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          FilledButton(
+            key: const Key('binding-save'),
+            onPressed: !_ready
+                ? null
+                : () {
+                    if (catalogGeneration != _catalogGeneration) return;
+                    _run(
+                      (writer) => writer.setChatBinding(
+                        _profileId!,
+                        providerId: _bindProvider.text.trim(),
+                        model: _bindModel.text.trim(),
+                      ),
+                      '聊天绑定已保存',
+                      profileGeneration: profileGeneration,
+                      modelMetadataMayChange: true,
+                    );
+                  },
+            child: const Text('保存聊天绑定'),
+          ),
+        ],
+        helpKey: 'help-binding',
+        help:
+            '聊天绑定需要 Provider ID 与模型 ID同时提供；'
+            '绑定到 chat 能力后该 AI 才能用于对话，未绑定不代表可用。',
+      ),
+      _section(
+        '预算',
+        [
+          Row(
+            children: [
+              Expanded(
+                child: _field('budget-daily', _budgetDaily, '每日 token 上限'),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _field('budget-offset', _budgetOffset, '时区偏移（分钟）'),
+              ),
+            ],
+          ),
+          _field(
+            'budget-layers',
+            _budgetLayers,
+            '分层上限（b0Life=0 等，五行）',
+            lines: 5,
+          ),
+          _field('budget-caps', _budgetCaps, '能力上限（chat=0 等，七行）', lines: 7),
+          FilledButton(
+            key: const Key('budget-save'),
+            onPressed: !_ready ? null : () => _saveBudget(profileGeneration),
+            child: const Text('保存预算'),
+          ),
+        ],
+        helpKey: 'help-budget',
+        help:
+            '预算四字段：每日 token 上限、时区偏移（分钟）、分层限额（name=整数每行）、'
+            '能力限额（name=整数每行）；保存后按本地时区切日，不代表已获批或已启用。',
+      ),
+    ];
   }
 
   Widget _personaHistory(int profileGeneration) {
@@ -1149,6 +1214,7 @@ class _AiConfigEditorState extends State<AiConfigEditor> {
     ),
     'Provider 已更新（只显示掩码，不回显密钥）',
     profileGeneration: profileGeneration,
+    modelMetadataMayChange: true,
     onSuccess: (_) => _provApiKey.clear(),
   );
 
