@@ -16,6 +16,7 @@ import '../features/inbox/foreground_message_notice.dart';
 import '../features/inbox/inbox_screen.dart';
 import '../features/creative/creative_screen.dart';
 import '../features/share/shared_text_panel.dart';
+import 'app_theme.dart';
 
 class WhaleChatApp extends StatefulWidget {
   const WhaleChatApp({super.key, required this.model});
@@ -26,6 +27,9 @@ class WhaleChatApp extends StatefulWidget {
 }
 
 class _WhaleChatAppState extends State<WhaleChatApp> {
+  // Built once and shared: the shell rebuilds on every model notification.
+  static final _lightTheme = buildAppTheme(Brightness.light);
+  static final _darkTheme = buildAppTheme(Brightness.dark);
   final _navigation = _NavigationIntentObserver();
   ShellViewModel get model => widget.model;
 
@@ -36,17 +40,8 @@ class _WhaleChatAppState extends State<WhaleChatApp> {
       title: '鲸言鲸语',
       navigatorObservers: [_navigation],
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff16776e)),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xff16776e),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
+      theme: _lightTheme,
+      darkTheme: _darkTheme,
       themeMode: model.themeMode,
       builder: (context, child) => MediaQuery(
         data: MediaQuery.of(context).copyWith(
@@ -444,7 +439,10 @@ class _ShellHomeState extends State<_ShellHome> {
                 ),
                 const VerticalDivider(width: 1),
                 Expanded(
-                  child: ChatPane(model: model, openRevision: _chatOpenRevision),
+                  child: ChatPane(
+                    model: model,
+                    openRevision: _chatOpenRevision,
+                  ),
                 ),
               ],
             )
