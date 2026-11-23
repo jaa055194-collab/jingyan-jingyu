@@ -377,12 +377,20 @@ class _PrivateAiSessionState extends State<_PrivateAiSession> {
                           horizontal: 16,
                           vertical: 8,
                         ),
-                        child: Row(
+                        // Stacked so each value gets the full width and can
+                        // wrap on a narrow screen or with large text.
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(child: _SummaryText('模型：$model')),
-                            const SizedBox(width: 8),
-                            Expanded(child: _SummaryText('人格：$persona')),
+                            _SummaryText(
+                              '模型：$model',
+                              maxLines: compact ? 1 : 2,
+                            ),
+                            const SizedBox(height: 2),
+                            _SummaryText(
+                              '人格：$persona',
+                              maxLines: compact ? 1 : 2,
+                            ),
                           ],
                         ),
                       ),
@@ -468,18 +476,18 @@ class _PrivateAiSessionState extends State<_PrivateAiSession> {
                           ),
                         ),
                       ),
-                    ColoredBox(
+                    // A Material rather than a plain box, so the hint's ink
+                    // response is painted on this surface instead of under it.
+                    Material(
                       color: theme.colorScheme.surfaceContainerLow,
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
+                            _ComposerHint(
                               reason ?? '直连模型服务 · 不在本机运行大模型',
-                              style: theme.textTheme.bodySmall,
                               maxLines: compact ? 1 : 2,
-                              overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 4),
                             Row(
@@ -532,17 +540,89 @@ class _PrivateAiSessionState extends State<_PrivateAiSession> {
 }
 
 class _SummaryText extends StatelessWidget {
-  const _SummaryText(this.value);
+  const _SummaryText(this.value, {this.maxLines = 2});
 
   final String value;
+  final int maxLines;
 
   @override
   Widget build(BuildContext context) => Text(
     value,
     style: Theme.of(context).textTheme.labelLarge,
-    maxLines: 2,
+    maxLines: maxLines,
     overflow: TextOverflow.ellipsis,
   );
+}
+
+/// The line above the composer. A long reason for a disabled send expands in
+/// place instead of staying cut off on a narrow screen or with large text.
+class _ComposerHint extends StatefulWidget {
+  const _ComposerHint(this.text, {required this.maxLines});
+
+  final String text;
+  final int maxLines;
+
+  @override
+  State<_ComposerHint> createState() => _ComposerHintState();
+}
+
+class _ComposerHintState extends State<_ComposerHint> {
+  var _expanded = false;
+
+  @override
+  void didUpdateWidget(_ComposerHint oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) _expanded = false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: widget.text, style: style),
+          maxLines: widget.maxLines,
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        final truncated = painter.didExceedMaxLines;
+        painter.dispose();
+        final text = Text(
+          widget.text,
+          key: const Key('private-ai-composer-hint'),
+          style: style,
+          maxLines: _expanded ? null : widget.maxLines,
+          overflow: _expanded ? null : TextOverflow.ellipsis,
+        );
+        if (!truncated && !_expanded) return text;
+        return Semantics(
+          button: true,
+          expanded: _expanded,
+          child: InkWell(
+            key: const Key('private-ai-composer-hint-toggle'),
+            onTap: () => setState(() => _expanded = !_expanded),
+            // A full-size touch target, even for one short line of text.
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: kMinInteractiveDimension,
+              ),
+              child: Row(
+                children: [
+                  Expanded(child: text),
+                  Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    semanticLabel: _expanded ? '收起' : '展开全文',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _ExchangeView extends StatelessWidget {
