@@ -93,7 +93,7 @@ Environment: Windows11, Flutter3.50/Dart3.14, Android SDK36/JDK21, VS2022 BuildT
 
 ## Android own-AI private chat and settings increment
 
-Scope: Android-only new entry points; existing host-mediated chats and the Windows client remain on their prior paths. Source base: `87de5f3`; the attempted native baseline APK was built at `8b47f314`. “Host offline” means the Jingyu host is unreachable while the model endpoint is still reachable; it does not mean on-device inference or no network.
+Scope: Android-only new entry points; existing host-mediated chats and the Windows client remain on their prior paths. Source base: `87de5f3`; native baseline APK attempts used `8b47f314` and `87de5f3`. “Host offline” means the Jingyu host is unreachable while the model endpoint is still reachable; it does not mean on-device inference or no network.
 
 | ID | Acceptance | Implementation and verification | Boundary |
 |---|---|---|---|
@@ -102,4 +102,4 @@ Scope: Android-only new entry points; existing host-mediated chats and the Windo
 | M11-Android-AI-03 | The user can distinguish the configured model, API address and persona, and view or edit saved persona and supported behavior controls. | Android AI directory, direct-chat secondary menu and per-AI setting screen. Widget/API tests cover scope, exact model/provider pairing, persona revision and multiline values, reply preferences and social-level invalidation. | The saved persona and last-read behavior summary can be viewed offline. Editing persona and behavior settings still uses the host; offline status does not enable local scheduled or proactive behavior. |
 | M11-Android-AI-04 | Confirmed owner-only removal stops the AI and removes it from the roster without deleting or corrupting existing history. | Durable logical removal with a metadata-only audit; host tests cover ownership, restart, repeat and retention. Android requires explicit confirmation. | Logical removal, not permanent data erasure. |
 
-Native comparison is incomplete: baseline and changed APK builds are not evidence of matching Before/After screens. The available API 36 emulator repeatedly reported Android system input-dispatch ANRs before reaching authenticated Settings. No onboarding screen, synthetic mockup or widget-only capture substitutes for the missing comparison.
+Native comparison is incomplete: baseline and changed APK builds are not evidence of matching Before/After screens. The existing API 36 emulator and a fresh isolated API 36 emulator repeatedly reported Android system input-dispatch ANRs before reaching authenticated Settings. No onboarding screen, synthetic mockup or widget-only capture substitutes for the missing comparison.
