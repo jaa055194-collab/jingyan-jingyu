@@ -40,6 +40,7 @@ class _Host extends HostConnection {
   final requests = <(String, String, Map<String, Object?>?, bool)>[];
   final bindingReadStarted = Completer<void>();
   Completer<void>? holdBindings;
+  Completer<void>? holdPatch;
   bool providerUnavailable = false;
   bool personaDenied = false;
   bool malformedPatchResponse = false;
@@ -94,6 +95,7 @@ class _Host extends HostConnection {
     bool allowEmptySuccess = false,
   }) async {
     requests.add((method, path, body, retryAuthentication));
+    if (method == 'PATCH') await holdPatch?.future;
     return switch ((method, path)) {
       ('POST', Routes.aiProfileRegister) => _identity,
       ('GET', _profile) => _identity,
@@ -371,6 +373,45 @@ void main() {
     });
     expect(find.textContaining('版本 8'), findsOneWidget);
     expect(host.requests.where((r) => r.$1 == 'POST'), hasLength(1));
+  });
+
+  testWidgets('persona save shows progress on its button until verified', (
+    tester,
+  ) async {
+    final host = _Host()..holdPatch = Completer<void>();
+    await _pump(tester, host);
+    await _tap(tester, 'android-ai-config-read');
+    await _tap(tester, 'android-persona-edit');
+    await _enter(tester, 'android-persona-value-p1-tone', 'new tone');
+    await _enter(tester, 'android-persona-reason', '调整语气');
+    final save = _key('android-persona-save');
+    final topProgress = find.descendant(
+      of: _key('android-ai-config-progress'),
+      matching: find.byType(LinearProgressIndicator),
+    );
+    expect(topProgress, findsNothing);
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
+    await tester.pump();
+    expect(tester.widget<FilledButton>(save).onPressed, isNull);
+    expect(
+      find.descendant(of: save, matching: find.text('正在保存并核对…')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: save,
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+    expect(topProgress, findsOneWidget);
+    host.holdPatch!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('人格已保存。'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(topProgress, findsNothing);
   });
 
   for (final conflict in [true, false]) {

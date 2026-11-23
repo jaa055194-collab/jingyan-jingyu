@@ -510,4 +510,128 @@ void main() {
     await tester.pump();
     expect(() => chat.changed(), returnsNormally);
   });
+
+  group('composer hint', () {
+    const fullReason = '本机待同步记录已满（约 48 轮），请先开启同步并同步';
+    const keyReason = '请先设置模型、地址与本机密钥';
+    List<PrivateAiExchange> pendingFull() => [
+      for (var index = 0; index < 48; index++)
+        (user: '待同步问题$index', assistant: '待同步回复$index', seq: null),
+    ];
+    Finder hint() => _key('composer-hint');
+    Finder toggle() => _key('composer-hint-toggle');
+    Text hintText(WidgetTester tester) => tester.widget<Text>(hint());
+
+    // A small phone with large text and the keyboard up keeps one hint line.
+    Future<void> openTyping(WidgetTester tester, _Chat chat) async {
+      await _open(tester, chat, size: const Size(320, 640), textScale: 1.5);
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a long disabled reason expands in place and collapses again', (
+      tester,
+    ) async {
+      final semantics = tester.ensureSemantics();
+      final chat = _Chat()..exchanges = pendingFull();
+      await openTyping(tester, chat);
+      expect(hintText(tester).data, fullReason);
+      expect(hintText(tester).maxLines, 1);
+      final collapsedHeight = tester.getSize(hint()).height;
+      expect(toggle(), findsOneWidget);
+      expect(
+        tester.getSemantics(toggle()),
+        isSemantics(
+          isButton: true,
+          hasTapAction: true,
+          hasExpandedState: true,
+          isExpanded: false,
+        ),
+      );
+      expect(
+        tester.getSize(toggle()).height,
+        greaterThanOrEqualTo(kMinInteractiveDimension),
+      );
+      // The ripple is painted on the composer's own surface, not under it.
+      final surface = tester.widget<Material>(
+        find.ancestor(of: toggle(), matching: find.byType(Material)).first,
+      );
+      expect(
+        surface.color,
+        Theme.of(tester.element(toggle())).colorScheme.surfaceContainerLow,
+      );
+
+      await tester.tap(toggle());
+      await tester.pumpAndSettle();
+      expect(hintText(tester).data, fullReason);
+      expect(hintText(tester).maxLines, isNull);
+      expect(hintText(tester).overflow, isNull);
+      expect(tester.getSize(hint()).height, greaterThan(collapsedHeight));
+      expect(
+        tester.getSemantics(toggle()),
+        isSemantics(hasExpandedState: true, isExpanded: true),
+      );
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(toggle());
+      await tester.pumpAndSettle();
+      expect(hintText(tester).maxLines, 1);
+      expect(tester.getSize(hint()).height, collapsedHeight);
+      expect(
+        tester.getSemantics(toggle()),
+        isSemantics(hasExpandedState: true, isExpanded: false),
+      );
+      expect(chat.sends, isEmpty);
+      semantics.dispose();
+    });
+
+    testWidgets('a hint that fits has no expand affordance', (tester) async {
+      final chat = _Chat();
+      await _open(tester, chat);
+      expect(hintText(tester).data, '直连模型服务 · 不在本机运行大模型');
+      expect(toggle(), findsNothing);
+      chat
+        ..keyConfigured = false
+        ..changed();
+      await tester.pumpAndSettle();
+      expect(hintText(tester).data, keyReason);
+      expect(hintText(tester).maxLines, 2);
+      expect(toggle(), findsNothing);
+    });
+
+    testWidgets('a changed reason starts collapsed again', (tester) async {
+      final semantics = tester.ensureSemantics();
+      final chat = _Chat()..exchanges = pendingFull();
+      await openTyping(tester, chat);
+      await tester.tap(toggle());
+      await tester.pumpAndSettle();
+      expect(hintText(tester).maxLines, isNull);
+
+      // A reason that fits drops the affordance rather than keeping the
+      // previous reason's expanded state.
+      chat
+        ..exchanges = []
+        ..keyConfigured = false
+        ..changed();
+      await tester.pumpAndSettle();
+      expect(hintText(tester).data, keyReason);
+      expect(hintText(tester).maxLines, 1);
+      expect(toggle(), findsNothing);
+
+      // The long reason returns cut off, with the affordance collapsed.
+      chat
+        ..keyConfigured = true
+        ..exchanges = pendingFull()
+        ..changed();
+      await tester.pumpAndSettle();
+      expect(hintText(tester).data, fullReason);
+      expect(hintText(tester).maxLines, 1);
+      expect(
+        tester.getSemantics(toggle()),
+        isSemantics(hasExpandedState: true, isExpanded: false),
+      );
+      expect(tester.takeException(), isNull);
+      semantics.dispose();
+    });
+  });
 }

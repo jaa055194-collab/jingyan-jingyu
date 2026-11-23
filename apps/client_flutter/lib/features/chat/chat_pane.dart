@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 
 import '../../app/shell_view_model.dart';
+import '../../app/status_panel.dart';
 import '../favorites/favorites_screen.dart';
 import 'chat_pins_dialog.dart';
 import 'message_favorite_action.dart';
@@ -69,15 +70,7 @@ class ConversationList extends StatelessWidget {
         ),
       Expanded(
         child: model.conversations.isEmpty
-            ? const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                    '暂无会话\n连接宿主后，将显示可用的聊天。',
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              )
+            ? _ConversationsStatus(model: model)
             : ListView(
                 children: [
                   for (final conversation in model.conversations)
@@ -109,6 +102,61 @@ class ConversationList extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// Why the conversation list is empty, most specific cause first: not signed
+/// in, offline, a failed read, then an account that simply has no chats yet.
+class _ConversationsStatus extends StatelessWidget {
+  const _ConversationsStatus({required this.model});
+  final ShellViewModel model;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!model.authenticated) {
+      return const StatusPanel(
+        key: ValueKey('conversations-signed-out'),
+        fill: true,
+        tone: StatusTone.offline,
+        icon: Icons.link_off,
+        title: '尚未连接宿主',
+        detail: '登录宿主后，这里会显示你的聊天。',
+      );
+    }
+    if (!model.online) {
+      return const StatusPanel(
+        key: ValueKey('conversations-offline'),
+        fill: true,
+        tone: StatusTone.offline,
+        icon: Icons.cloud_off_outlined,
+        title: '暂时离线',
+        detail: '恢复连接后，会显示你的聊天。',
+      );
+    }
+    if (model.error != null) {
+      return StatusPanel(
+        key: const ValueKey('conversations-error'),
+        fill: true,
+        tone: StatusTone.error,
+        icon: Icons.error_outline,
+        title: '没有可显示的会话',
+        detail: '出错原因见页面顶部的提示。可以重新读取，或稍后再试。',
+        action: OutlinedButton(
+          key: const Key('conversations-retry'),
+          onPressed: model.locked || model.busy
+              ? null
+              : model.refreshConversations,
+          child: const Text('重新读取'),
+        ),
+      );
+    }
+    return const StatusPanel(
+      key: ValueKey('conversations-empty'),
+      fill: true,
+      icon: Icons.forum_outlined,
+      title: '暂无会话',
+      detail: '可以创建群聊，或等好友发来消息。',
+    );
+  }
 }
 
 class _GroupActionDialog extends StatefulWidget {
@@ -552,7 +600,11 @@ class _ChatPaneState extends State<ChatPane> {
     final model = widget.model;
     final conversationId = model.selectedConversationId;
     if (conversationId == null) {
-      return const Center(child: Text('选择一个会话，开始聊天'));
+      return const StatusPanel(
+        fill: true,
+        icon: Icons.chat_bubble_outline,
+        title: '选择一个会话，开始聊天',
+      );
     }
     final messages = model.messages;
     final messageIndices = {
@@ -602,9 +654,11 @@ class _ChatPaneState extends State<ChatPane> {
     final canManageAttachment =
         model.authenticated && !model.busy && !model.locked;
     final canSendAttachment = canManageAttachment && model.online;
-    final showVoice = model.supportsVoicePlayback && model.authenticated && !model.locked;
+    final showVoice =
+        model.supportsVoicePlayback && model.authenticated && !model.locked;
     final voice = showVoice ? model.voicePlayback : null;
-    final voiceActive = voice?.phase == ShellVoicePhase.loading ||
+    final voiceActive =
+        voice?.phase == ShellVoicePhase.loading ||
         voice?.phase == ShellVoicePhase.playing;
     final scheduleScope = model.scheduledMessagesScope(conversationId);
     final chatActions = <Widget>[
@@ -682,7 +736,18 @@ class _ChatPaneState extends State<ChatPane> {
           ),
         Expanded(
           child: messages.isEmpty
-              ? const Center(child: Text('还没有消息'))
+              ? StatusPanel(
+                  key: ValueKey(('no-messages', conversationId)),
+                  fill: true,
+                  tone: model.online ? StatusTone.empty : StatusTone.offline,
+                  icon: model.online
+                      ? Icons.chat_outlined
+                      : Icons.cloud_off_outlined,
+                  title: '还没有消息',
+                  detail: model.online
+                      ? '发一条消息，开始这段对话。'
+                      : '离线时发出的文字消息会先排队，联网后会自动尝试发送。',
+                )
               : ListView.builder(
                   key: ValueKey((
                     model,
@@ -696,8 +761,9 @@ class _ChatPaneState extends State<ChatPane> {
                   reverse: true,
                   padding: const EdgeInsets.all(16),
                   itemCount: messages.length,
-                  findChildIndexCallback: (key) =>
-                      key is ValueKey<String> ? messageIndices[key.value] : null,
+                  findChildIndexCallback: (key) => key is ValueKey<String>
+                      ? messageIndices[key.value]
+                      : null,
                   itemBuilder: (context, index) {
                     final message = messages[messages.length - 1 - index];
                     return Align(
@@ -755,7 +821,10 @@ class _ChatPaneState extends State<ChatPane> {
                                   phase: voice?.messageId == message.id
                                       ? voice?.phase
                                       : null,
-                                  onPlay: model.online && !model.busy && !voiceActive
+                                  onPlay:
+                                      model.online &&
+                                          !model.busy &&
+                                          !voiceActive
                                       ? () => _playVoice(message)
                                       : null,
                                   onStop: _stopVoice,
@@ -785,13 +854,19 @@ class _ChatPaneState extends State<ChatPane> {
                                   children: [
                                     Text(
                                       message.status,
-                                      style: Theme.of(context).textTheme.labelSmall,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelSmall,
                                     ),
                                     if (message.edited)
                                       Text(
                                         '已编辑',
-                                        key: Key('message-edited-${message.id}'),
-                                        style: Theme.of(context).textTheme.labelSmall,
+                                        key: Key(
+                                          'message-edited-${message.id}',
+                                        ),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelSmall,
                                       ),
                                     if (operationsContext != null &&
                                         (message.canCopy ||
@@ -799,16 +874,23 @@ class _ChatPaneState extends State<ChatPane> {
                                             message.canRecall ||
                                             (message.operationEligible &&
                                                 (model.supportsChatPins ||
-                                                    model.supportsMessageReactions))))
+                                                    model
+                                                        .supportsMessageReactions))))
                                       IconButton(
-                                        key: Key('message-actions-${message.id}'),
+                                        key: Key(
+                                          'message-actions-${message.id}',
+                                        ),
                                         tooltip: '消息操作',
                                         onPressed: () => _openMessageActions(
                                           message,
                                           expectedContext: operationsContext,
-                                          viewIsCurrent: operationsViewIsCurrent,
+                                          viewIsCurrent:
+                                              operationsViewIsCurrent,
                                         ),
-                                        icon: const Icon(Icons.more_horiz, size: 20),
+                                        icon: const Icon(
+                                          Icons.more_horiz,
+                                          size: 20,
+                                        ),
                                       ),
                                   ],
                                 ),
