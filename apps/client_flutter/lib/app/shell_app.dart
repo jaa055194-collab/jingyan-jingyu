@@ -110,6 +110,7 @@ class _ShellHomeState extends State<_ShellHome> {
   int destination = 0;
   bool settings = false;
   bool mobileChat = false;
+  int _chatOpenRevision = 0;
   static const labels = ['聊天', '联系人', '动态', '收件箱', '世界'];
   static const icons = [
     Icons.chat_bubble_outline,
@@ -119,9 +120,19 @@ class _ShellHomeState extends State<_ShellHome> {
     Icons.public,
   ];
   void select(String id) async {
-    await widget.model.selectConversation(id);
-    if (mounted && widget.model.selectedConversationId == id) {
-      setState(() => mobileChat = true);
+    final model = widget.model;
+    final account = model.connectedAccountId;
+    final session = model.ownAiSessionContext;
+    await model.selectConversation(id);
+    if (mounted &&
+        identical(widget.model, model) &&
+        model.connectedAccountId == account &&
+        model.ownAiSessionContext == session &&
+        model.selectedConversationId == id) {
+      setState(() {
+        mobileChat = true;
+        _chatOpenRevision++;
+      });
     }
   }
 
@@ -432,12 +443,15 @@ class _ShellHomeState extends State<_ShellHome> {
                   child: ConversationList(model: model, onSelected: select),
                 ),
                 const VerticalDivider(width: 1),
-                Expanded(child: ChatPane(model: model)),
+                Expanded(
+                  child: ChatPane(model: model, openRevision: _chatOpenRevision),
+                ),
               ],
             )
           : showChat
           ? ChatPane(
               model: model,
+              openRevision: _chatOpenRevision,
               onBack: () => setState(() => mobileChat = false),
             )
           : ConversationList(model: model, onSelected: select);
@@ -504,6 +518,7 @@ class _ShellHomeState extends State<_ShellHome> {
                             destination = 0;
                             settings = false;
                             if (!wide) mobileChat = true;
+                            _chatOpenRevision++;
                           });
                         },
                       ),

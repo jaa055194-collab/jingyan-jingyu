@@ -332,9 +332,15 @@ class _GroupActionDialogState extends State<_GroupActionDialog> {
 }
 
 class ChatPane extends StatefulWidget {
-  const ChatPane({super.key, required this.model, this.onBack});
+  const ChatPane({
+    super.key,
+    required this.model,
+    this.onBack,
+    this.openRevision = 0,
+  });
   final ShellViewModel model;
   final VoidCallback? onBack;
+  final int openRevision;
   @override
   State<ChatPane> createState() => _ChatPaneState();
 }
@@ -549,6 +555,10 @@ class _ChatPaneState extends State<ChatPane> {
       return const Center(child: Text('选择一个会话，开始聊天'));
     }
     final messages = model.messages;
+    final messageIndices = {
+      for (var i = 0; i < messages.length; i++)
+        messages[i].id: messages.length - 1 - i,
+    };
     final favoriteContext = model.messageFavoriteContext;
     final favoriteViewRevision = _favoriteViewRevision;
     final favoriteAccount = model.connectedAccountId;
@@ -674,11 +684,24 @@ class _ChatPaneState extends State<ChatPane> {
           child: messages.isEmpty
               ? const Center(child: Text('还没有消息'))
               : ListView.builder(
+                  key: ValueKey((
+                    model,
+                    favoriteAccount,
+                    favoriteSession,
+                    conversationId,
+                    widget.openRevision,
+                  )),
+                  // Offset zero is the newest edge, even for lazily laid-out
+                  // history. Invert indices so rows still read oldest to newest.
+                  reverse: true,
                   padding: const EdgeInsets.all(16),
                   itemCount: messages.length,
+                  findChildIndexCallback: (key) =>
+                      key is ValueKey<String> ? messageIndices[key.value] : null,
                   itemBuilder: (context, index) {
-                    final message = messages[index];
+                    final message = messages[messages.length - 1 - index];
                     return Align(
+                      key: ValueKey(message.id),
                       alignment: message.outgoing
                           ? Alignment.centerRight
                           : Alignment.centerLeft,

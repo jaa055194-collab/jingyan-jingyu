@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:client_flutter/features/ai_config/owner_memory_notes_section.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -53,7 +54,13 @@ void main() {
 
   testWidgets('memory notes stay unloaded until explicit read', (t) async {
     await open(t);
-    expect(find.text('尚未读取宿主状态。'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(OwnerMemoryNotesSection),
+        matching: find.text('尚未读取宿主状态。'),
+      ),
+      findsOneWidget,
+    );
     expect(connection.memoryCalls, isEmpty);
     await read(t);
     expect(find.text('未授权使用（默认关闭）。便签可先保存，授权需单独确认。'), findsOneWidget);

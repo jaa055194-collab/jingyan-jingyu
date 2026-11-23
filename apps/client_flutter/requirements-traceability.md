@@ -74,6 +74,14 @@ This is an explicitly admitted **curated rules-only S1 greeting**, not model cha
 
 Windows native initialization now reports the actual `tray:false` capability instead of aborting the entire client solely because the notification-area icon could not be created. Real registration is still attempted; other native initialization failures are unchanged. A separate actual native integration kept `Shell_NotifyIconW` intact, observed its false result, and verified real DPAPI session restoration with ready/authenticated true and no startup error. This is not full tray/hotkey/autostart or AC-16 acceptance.
 
+## Latest message on conversation open
+
+| ID | Scope | Observable acceptance | Evidence | Status / gap |
+|---|---|---|---|---|
+| M11-014 | Open any AI direct, friend direct, or group conversation at the latest message after upgrading Android | Opening or reopening starts at the latest row; rows remain chronological and older messages are still reachable. The installed update retains the existing session and cached history without a server update. | [Widget regression](test/chat_history_opening_test.dart); [Before](evidence/chat-history-opening-before.png) from `c0208b7` and [After](evidence/chat-history-opening-after.png) from the 1.0.1 (2) upgrade. Same Android 16 emulator, 1080 × 2160, light theme, synthetic 501-message AI history, no scroll before capture. | Verified in the widget tests and on the emulator: AI chat opened at 501 instead of 001; group and friend chats opened at 030; scrolling back and reopening worked. No physical-device or production-history testing. |
+
+Only the Flutter history viewport changes: the host, sync order, and history storage are unchanged. The upgrade test installed the new APK over the previous package without clearing data. It reused the session and the fixture delivered zero new rows after restart.
+
 ## Remaining integration
 
 1. Complete character/room host contracts and RoomGenerator persistence; do not mark onboarding complete before then.
