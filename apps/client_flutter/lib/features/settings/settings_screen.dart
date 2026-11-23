@@ -227,50 +227,48 @@ class SettingsScreen extends StatelessWidget {
             ),
             readiness: OwnerAiReadinessApi(connection),
           );
+    AiConfigEditor buildEditor() => AiConfigEditor(
+      writer: writer,
+      androidDetails: androidDetails,
+      resolveProfileId: direct == null || owner == null || androidAi != null
+          ? null
+          : (accountId) => direct
+                .registerOrResolve(accountId, expectedOwnerAccountId: owner)
+                .then((identity) => identity.profileId),
+      readCatalog: catalog == null
+          ? null
+          : (providerId) => catalog.readModelCatalog(
+              providerId,
+              retryAuthentication: false,
+            ),
+      readPersonaHistory: history?.read,
+      replyPreferences: connection == null
+          ? null
+          : OwnerReplyPreferencesApi(connection),
+      socialLevel: androidDetails == null || connection == null
+          ? null
+          : OwnerSocialLevelApi(connection),
+      ruleGreeting: connection == null
+          ? null
+          : OwnerRuleGreetingApi(connection),
+      memoryNotes: connection == null ? null : OwnerMemoryNotesApi(connection),
+      autoMemory: connection == null ? null : OwnerAutoMemoryApi(connection),
+      modelProactive: connection == null
+          ? null
+          : OwnerModelProactiveApi(connection),
+      personaFilePicker: connection == null ? null : NativePersonaFilePicker(),
+      session: connection == null
+          ? null
+          : (model: shell, isCurrent: sessionCurrent),
+      ownedAiAccountIds: owned,
+    );
+
+    // Navigator can rebuild the page on ordinary shell updates. Keep the
+    // Android editor's inputs (including API identities used as child keys)
+    // stable for this route; the editor still listens to the pinned session.
+    final androidEditor = androidDetails == null ? null : buildEditor();
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => AiConfigEditor(
-          writer: writer,
-          androidDetails: androidDetails,
-          resolveProfileId: direct == null || owner == null || androidAi != null
-              ? null
-              : (accountId) => direct
-                    .registerOrResolve(accountId, expectedOwnerAccountId: owner)
-                    .then((identity) => identity.profileId),
-          readCatalog: catalog == null
-              ? null
-              : (providerId) => catalog.readModelCatalog(
-                  providerId,
-                  retryAuthentication: false,
-                ),
-          readPersonaHistory: history?.read,
-          replyPreferences: connection == null
-              ? null
-              : OwnerReplyPreferencesApi(connection),
-          socialLevel: androidDetails == null || connection == null
-              ? null
-              : OwnerSocialLevelApi(connection),
-          ruleGreeting: connection == null
-              ? null
-              : OwnerRuleGreetingApi(connection),
-          memoryNotes: connection == null
-              ? null
-              : OwnerMemoryNotesApi(connection),
-          autoMemory: connection == null
-              ? null
-              : OwnerAutoMemoryApi(connection),
-          modelProactive: connection == null
-              ? null
-              : OwnerModelProactiveApi(connection),
-          personaFilePicker: connection == null
-              ? null
-              : NativePersonaFilePicker(),
-          session: connection == null
-              ? null
-              : (model: shell, isCurrent: sessionCurrent),
-          ownedAiAccountIds: owned,
-        ),
-      ),
+      MaterialPageRoute<void>(builder: (_) => androidEditor ?? buildEditor()),
     );
   }
 
