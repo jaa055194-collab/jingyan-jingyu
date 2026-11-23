@@ -395,7 +395,15 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
                     ),
                   ],
                 ),
-                if (_resolving) const LinearProgressIndicator(),
+                // Reserved so the page does not shift when a read or a save
+                // starts or ends.
+                SizedBox(
+                  key: const Key('android-ai-config-progress'),
+                  height: 4,
+                  child: _resolving || _busy
+                      ? const LinearProgressIndicator()
+                      : null,
+                ),
                 if (_readNotice case final notice?)
                   Text(
                     notice,
@@ -598,8 +606,9 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
             FilledButton(
               key: const Key('android-persona-save'),
               onPressed: editable ? () => _saveAndroidPersona(draft) : null,
-              child: Text(
-                _busy
+              child: _SavingLabel(
+                saving: _busy,
+                label: _busy
                     ? '正在保存并核对…'
                     : missing
                     ? '初始化人格'
@@ -713,6 +722,34 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A button label that carries a small spinner while its action runs, so the
+/// progress shows where the user pressed rather than off screen.
+class _SavingLabel extends StatelessWidget {
+  const _SavingLabel({required this.saving, required this.label});
+
+  final bool saving;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!saving) return Text(label);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox.square(
+          dimension: 16,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: DefaultTextStyle.of(context).style.color,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Flexible(child: Text(label)),
+      ],
     );
   }
 }
