@@ -7,6 +7,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
+import '../audit/audit_log.dart';
 import 'account_service.dart';
 import 'accounts_store.dart';
 import 'device_service.dart';
@@ -57,6 +58,8 @@ class AccountsDomain {
       'operator': operator?.value,
       'isAdmin': admin,
       'disabled': false,
+      'removed': false,
+      'removedAt': null,
       'passwordHash': passwordHash,
       'failedPasswords': 0,
       'lockedUntil': 0,
@@ -272,7 +275,12 @@ class AccountSession {
     if (a['kind'] != 'human') return _domain._missing();
     final rows =
         s.accounts.values
-            .where((row) => row['kind'] == 'ai' && row['operator'] == a['id'])
+            .where(
+              (row) =>
+                  row['kind'] == 'ai' &&
+                  row['operator'] == a['id'] &&
+                  row['removed'] != true,
+            )
             .map(
               (row) => <String, Object?>{
                 'accountId': row['id'],
@@ -288,6 +296,55 @@ class AccountSession {
           );
     return Ok(rows);
   });
+
+  /// Logical removal for exactly one AI currently operated by the live human
+  /// bearer. The account, ai_operator reference and every conversation remain;
+  /// only this owner's active management list is filtered from now on.
+  Future<Result<void>> removeOwnAi(AccountId id) {
+    final at = _domain.clock.now().toUtc();
+    return _domain.store.transactionWithAudit(
+      (s) {
+        final d = _domain._bearer(s, _bearer);
+        if (d == null) return _domain._unauth<void>();
+        final actor = s.accounts[d['account']];
+        if (actor == null || actor['kind'] != 'human') {
+          return _domain._missing<void>();
+        }
+        final target = s.accounts[id.value];
+        if (target == null ||
+            target['kind'] != 'ai' ||
+            target['operator'] != actor['id']) {
+          return _domain._missing<void>();
+        }
+        if (target['isAdmin'] == true) {
+          return err(FailureCode.conflict, 'Administrator must remain enabled');
+        }
+        // Repeated removal is a successful no-op and does not rewrite state/audit.
+        if (target['removed'] == true) return const Ok(null);
+        target['disabled'] = true;
+        target['removed'] = true;
+        target['removedAt'] = at.millisecondsSinceEpoch;
+        return const Ok(null);
+      },
+      audit: (before, after) {
+        final next = after.accounts[id.value];
+        final previous = before.accounts[id.value];
+        if (next?['removed'] != true || previous?['removed'] == true) {
+          return const <AuditEntry>[];
+        }
+        return [
+          AuditEntry(
+            at: at,
+            actorId: next!['operator'] as String,
+            action: 'account.ai.remove',
+            targetKind: 'account',
+            targetId: id.value,
+            meta: const <String, Object?>{},
+          ),
+        ];
+      },
+    );
+  }
 
   Future<Result<List<Map<String, Object?>>>> accountMetadata() => _run((s, a) {
     if (!_admin(a)) return _domain._missing();

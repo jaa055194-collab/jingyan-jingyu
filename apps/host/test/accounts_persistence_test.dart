@@ -95,7 +95,7 @@ void main() {
         expect(hashParts[3], '600000');
         expect(base64Url.decode(base64Url.normalize(hashParts[4])).length, 16);
         expect(base64Url.decode(base64Url.normalize(hashParts[5])).length, 32);
-        expect(await database.schemaVersion(), 100);
+        expect(await database.schemaVersion(), 101);
         expect(File('${databaseFile.path}-wal').existsSync(), isTrue);
         expect(File('${databaseFile.path}-shm').existsSync(), isTrue);
         _expectNoPlaintext(directory, secrets);
@@ -111,7 +111,7 @@ void main() {
           clock: clock,
           hasher: PasswordHasher(),
         );
-        expect(await database.schemaVersion(), 100);
+        expect(await database.schemaVersion(), 101);
         expect(
           (await store.snapshot()).accounts[admin.value]!['passwordHash'] ==
               hash,

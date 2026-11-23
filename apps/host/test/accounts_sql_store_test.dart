@@ -15,6 +15,8 @@ Map<String, Object?> account(String id, {String? operator}) => {
   'operator': operator,
   'isAdmin': false,
   'disabled': false,
+  'removed': false,
+  'removedAt': null,
   'passwordHash': operator == null
       ? r'$v1$pbkdf2-sha256$600000$salt$digest'
       : null,

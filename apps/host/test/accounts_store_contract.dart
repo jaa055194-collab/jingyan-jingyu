@@ -1,4 +1,5 @@
 import 'package:jingyu_host/src/accounts/accounts_store.dart';
+import 'package:jingyu_host/src/audit/audit_log.dart';
 import 'package:test/test.dart';
 
 Map<String, Object?> _account(String id, String name) => {
@@ -67,6 +68,39 @@ void accountsStoreContract(String name, AccountsStore Function() create) {
           s.accounts['ok'] = _account('ok', 'kept');
         });
         expect((await store.snapshot()).accounts.keys, ['ok']);
+      },
+    );
+    test('transactionWithAudit commits state and audit together', () async {
+      final store = create();
+      final entry = AuditEntry(
+        at: DateTime.utc(2026, 11, 23),
+        actorId: 'actor',
+        action: 'account.ai.remove',
+        targetKind: 'account',
+        targetId: 'a',
+      );
+      await store.transactionWithAudit((state) {
+        state.accounts['a'] = _account('a', 'kept');
+      }, audit: (before, after) => [entry]);
+      expect((await store.snapshot()).accounts.keys, ['a']);
+      if (store is InMemoryAccountsStore) {
+        expect(store.auditEntries, [entry]);
+      }
+    });
+    test(
+      'transactionWithAudit rolls state back when audit construction fails',
+      () async {
+        final store = create();
+        await expectLater(
+          store.transactionWithAudit(
+            (state) {
+              state.accounts['a'] = _account('a', 'lost');
+            },
+            audit: (before, after) => throw StateError('audit builder failure'),
+          ),
+          throwsStateError,
+        );
+        expect((await store.snapshot()).accounts, isEmpty);
       },
     );
     test(

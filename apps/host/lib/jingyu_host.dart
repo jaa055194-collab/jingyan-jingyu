@@ -51,6 +51,8 @@ import 'src/ai/social_level/social_level_module.dart';
 import 'src/ai/social_level/sqlite_social_level_store.dart';
 import 'src/audit/admin_audit_module.dart';
 import 'src/audit/admin_audit_reader.dart';
+import 'src/android_private_chat/android_private_chat_migration.dart';
+import 'src/android_private_chat/android_private_chat_module.dart';
 import 'src/accounts/accounts_module.dart';
 import 'src/accounts/db_authenticator.dart';
 import 'src/accounts/password_hasher.dart';
@@ -179,6 +181,7 @@ List<HostModule> defaultModules(HostConfig config, Clock clock) {
       ...memoryMigrations,
       ownerAutoMemoryMigration,
       ownerModelProactiveMigration,
+      androidPrivateChatMigration,
       ...creativeMigrations,
       ...voiceMigrations,
       ...worldMigrations,
@@ -568,6 +571,7 @@ AND NOT EXISTS(SELECT 1 FROM direct_conversations d WHERE d.id=g.id)
     ),
     OwnerMemoryNotesModule(ownerMemoryNotes, DbAuthenticator(accounts).call),
     OwnerAutoMemoryModule(ownerAutoMemory, DbAuthenticator(accounts).call),
+    AndroidPrivateChatModule(),
     OwnerRuleGreetingModule(
       OwnerRuleGreeting(
         database: storage.database,

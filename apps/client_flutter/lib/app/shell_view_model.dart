@@ -36,6 +36,7 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get ownAiLoaded => false;
   Future<void> loadOwnAi() async {}
   Future<void> createOwnAi(String displayName) async {}
+  Future<void> removeOwnAi(String accountId) async {}
 
   /// Opaque runtime-issued session/lock epoch for an explicit confirmation.
   Object? get ownAiDirectContext => null;

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 import 'package:jingyu_core/jingyu_core.dart';
@@ -9,6 +10,7 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../data/file_persistence.dart';
 import '../data/account_snapshots.dart';
+import '../data/android_private_ai_vault.dart';
 import '../attachments/attachment_content.dart';
 import '../features/inbox/foreground_message_activity.dart';
 import '../net/account_auth.dart';
@@ -103,6 +105,95 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool get ownAiLoaded => _ownAiLoaded;
   @override
   List<ShellOwnedAi> get ownAiAccounts => List.unmodifiable(_ownAiAccounts);
+
+  String? androidPrivateAiScope(String purpose, [String? aiAccount]) {
+    final credentials = _credentials;
+    if (!Platform.isAndroid ||
+        credentials == null ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _disposed) {
+      return null;
+    }
+    return _privateAiScope(credentials, purpose, aiAccount);
+  }
+
+  static String _privateAiScope(
+    ClientCredentials credentials,
+    String purpose, [
+    String? aiAccount,
+  ]) => sha256
+      .convert(utf8.encode(jsonEncode([
+        'jingyu.android-private-ai.v1',
+        credentials.host.origin,
+        credentials.accountId,
+        credentials.deviceId,
+        purpose,
+        aiAccount,
+      ])))
+      .toString();
+
+  Future<Map<String, Object?>?> readAndroidPrivateAiVault(
+    String purpose, [
+    String? aiAccount,
+  ]) async {
+    final scope = androidPrivateAiScope(purpose, aiAccount);
+    if (scope == null) throw StateError('Private AI session is unavailable');
+    return const AndroidPrivateAiVault().read(scope);
+  }
+
+  Future<void> writeAndroidPrivateAiVault(
+    String purpose,
+    String? aiAccount,
+    Map<String, Object?> record,
+  ) async {
+    final scope = androidPrivateAiScope(purpose, aiAccount);
+    if (scope == null) throw StateError('Private AI session is unavailable');
+    await const AndroidPrivateAiVault().write(scope, record);
+  }
+
+  Future<void> _saveAndroidOwnAiDirectory(ClientCredentials credentials) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await const AndroidPrivateAiVault().write(
+        _privateAiScope(credentials, 'directory'),
+        {
+          'version': 1,
+          'accounts': [
+            for (final ai in _ownAiAccounts)
+              {
+                'accountId': ai.accountId,
+                'displayName': ai.displayName,
+                'disabled': ai.disabled,
+              },
+          ],
+        },
+      );
+    } catch (_) {
+      // Do not lose the server result just because the device vault is absent.
+    }
+  }
+
+  Future<void> _restoreAndroidOwnAiDirectory(
+    ClientCredentials credentials,
+    int generation,
+  ) async {
+    if (!Platform.isAndroid) return;
+    try {
+      final saved = await const AndroidPrivateAiVault().read(
+        _privateAiScope(credentials, 'directory'),
+      );
+      if (!_current(generation) || _credentials != credentials || saved == null) {
+        return;
+      }
+      final records = saved['accounts'];
+      if (saved['version'] != 1 || records is! List) return;
+      _publishOwnAi(records.map(OwnedAiAccount.fromJson).toList());
+    } catch (_) {
+      // An unavailable or unreadable device catalog is not an empty host list.
+    }
+  }
   @override
   String? get ownAiNotice => _ownAiNotice;
   bool _ready = false, _busy = false, _online = false, _onboarded = false;
@@ -1202,6 +1293,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
             connection = _newConnection(credentials, generation);
             _onboarded = decoded['onboarded'] == true;
             _chatEntered = _chatEntered || _onboarded;
+            await _restoreAndroidOwnAiDirectory(credentials, generation);
           }
         } on FormatException {
           // Old unscoped credentials are not paired with private legacy data.
@@ -1680,6 +1772,9 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       }
       if (_canSync(generation, epoch) && Platform.isAndroid) {
         await native.invoke<bool>('setForegroundService', {'enabled': true});
+        if (_canSync(generation, epoch) && _ownAiLoaded && !_busy) {
+          await _refreshAndroidOwnAiDirectory(generation, sessionConnection);
+        }
       }
     } catch (_) {
       if (_current(generation) && _historySyncEpoch == epoch) _online = false;
@@ -1956,6 +2051,38 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool _ownAiContext(int generation, HostConnection session) =>
       _ownAiCurrentSession(generation, session) && !locked;
 
+  Future<void> _refreshAndroidOwnAiDirectory(
+    int generation,
+    HostConnection session,
+  ) async {
+    final interaction = ownAiDirectContext;
+    if (interaction == null) return;
+    try {
+      final rows = await OwnAiApi(session).list();
+      if (!_ownAiContext(generation, session) ||
+          !identical(ownAiDirectContext, interaction) ||
+          _busy) {
+        return;
+      }
+      if (rows.length == _ownAiAccounts.length &&
+          rows.indexed.every((entry) {
+            final (index, row) = entry;
+            final prior = _ownAiAccounts[index];
+            return row.accountId == prior.accountId &&
+                row.displayName == prior.displayName &&
+                row.disabled == prior.disabled;
+          })) {
+        return;
+      }
+      _publishOwnAi(rows);
+      final credentials = _credentials;
+      if (credentials != null) await _saveAndroidOwnAiDirectory(credentials);
+    } catch (_) {
+      // A failed directory check is not evidence of ownership changes. Keep
+      // the cached rows available; every host mutation checks live ownership.
+    }
+  }
+
   void _publishOwnAi(List<OwnedAiAccount> rows) {
     // A fresh list is a new ownership snapshot; never leave stale confirmations.
     _invalidateOwnAiDirect();
@@ -2179,15 +2306,62 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _requireOnlineGroupSession();
     final generation = _generation;
     final session = connection!;
+    final credentials = _credentials;
     try {
       final rows = await OwnAiApi(session).list();
       if (!_ownAiContext(generation, session)) return;
       _publishOwnAi(rows);
       _ownAiNotice = null;
+      if (credentials != null) {
+        unawaited(_saveAndroidOwnAiDirectory(credentials));
+      }
     } catch (error) {
       _ownAiFailure(error, generation, session);
     }
   });
+
+  @override
+  Future<void> removeOwnAi(String accountId) {
+    final interaction = ownAiDirectContext;
+    final generation = _generation;
+    final session = connection;
+    final target = _ownAiAccounts.where((row) => row.accountId == accountId);
+    if (interaction == null || session == null || target.length != 1) {
+      return Future.value();
+    }
+    final name = target.single.displayName;
+    bool current() =>
+        _ownAiContext(generation, session) &&
+        identical(ownAiDirectContext, interaction);
+    return _run(() async {
+      if (!current() || !online) return;
+      try {
+        await OwnAiApi(session).remove(accountId);
+      } on HostRequestException catch (error) {
+        if (!current()) return;
+        _error = switch (error.failure.code) {
+          FailureCode.unauthenticated => '请重新连接宿主并刷新“我的 AI”。',
+          FailureCode.notFound || FailureCode.forbidden =>
+            '无法移除该 AI：宿主可能不支持此操作，或该 AI 已不在你名下。请刷新列表。',
+          _ => '移除结果未确认。请先刷新“我的 AI”，不要重复提交。',
+        };
+        return;
+      } catch (_) {
+        if (current()) _error = '移除结果未确认。请先刷新“我的 AI”，不要重复提交。';
+        return;
+      }
+      if (!current()) return;
+      // The server confirmed this one removal; do not leave an actionable
+      // stale row behind if a subsequent, unrelated list request would fail.
+      _ownAiAccounts = _ownAiAccounts
+          .where((row) => row.accountId != accountId)
+          .toList();
+      _invalidateOwnAiDirect();
+      _ownAiNotice = '已移除「$name」。服务器上已有的聊天记录仍保留。';
+      final credentials = _credentials;
+      if (credentials != null) await _saveAndroidOwnAiDirectory(credentials);
+    });
+  }
 
   @override
   Future<void> createOwnAi(String displayName) => _run(() async {

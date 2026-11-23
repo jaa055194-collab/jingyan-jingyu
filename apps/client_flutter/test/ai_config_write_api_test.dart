@@ -165,6 +165,102 @@ void main() {
     });
   });
 
+  AiConfigWriteApi multilineWriter() => AiConfigWriteApi(
+    connection,
+    allowMultilinePersona: true,
+    retryAuthentication: false,
+  );
+
+  test(
+    'opt-in persona writes keep whitespace, line breaks and null deletes exact',
+    () async {
+      const value = '  First line\nSecond line\twith a tab\r\n ';
+      responseJson = {
+        'aiId': 'profile',
+        'version': 2,
+        'locked': false,
+        'layers': {
+          'p0': {'name': 'Nora'},
+          'p1': {'style': value},
+          'p2': {'mood': 'calm'},
+        },
+      };
+      final writer = multilineWriter();
+      await writer.editPersona(
+        'profile',
+        expectedVersion: 1,
+        reason: 'update',
+        p0: {},
+        p1: {'style': value, 'old': null},
+        p2: {},
+      );
+      final (method, path, body) = requests.single;
+      expect(
+        (method, path),
+        ('PATCH', Routes.aiPersona.replaceFirst('{aiId}', 'profile')),
+      );
+      expect(body, {
+        'expectedVersion': 1,
+        'reason': 'update',
+        'diff': {
+          'p0': {},
+          'p1': {'style': value, 'old': null},
+          'p2': {},
+        },
+      });
+      requests.clear();
+      responseJson = {...responseJson!, 'version': 1};
+      await writer.initializePersona(
+        'profile',
+        p0: {'name': 'Nora'},
+        p1: {'style': value},
+        p2: {'mood': 'calm'},
+      );
+      expect(requests.single.$3, {
+        'p0': {'name': 'Nora'},
+        'p1': {'style': value},
+        'p2': {'mood': 'calm'},
+      });
+    },
+  );
+
+  test('persona opt-in still rejects invalid text and leaves legacy validation intact', () async {
+    Future<void> patch(AiConfigWriteApi writer, String key, String value) =>
+        writer.editPersona(
+          'profile',
+          expectedVersion: 1,
+          reason: 'update',
+          p0: {key: value},
+          p1: {},
+          p2: {},
+        );
+    final writer = multilineWriter();
+    for (final (key, value) in [
+      ('style', '\t\n '),
+      ('style', 'x\u0085x'),
+      ('bad\nkey', 'good'),
+      (' key', 'good'),
+    ]) {
+      await expectLater(
+        patch(writer, key, value),
+        throwsA(isA<FormatException>()),
+      );
+    }
+    await expectLater(
+      patch(api, 'style', 'First\nSecond'),
+      throwsA(isA<FormatException>()),
+    );
+    await expectLater(
+      writer.setChatBinding(
+        'profile',
+        providerId: 'prov-1',
+        model: 'bad\nmodel',
+      ),
+      throwsA(isA<FormatException>()),
+    );
+    expect(requests, isEmpty);
+  });
+
   test(
     'chat binding and budget use exact paths and validated bodies',
     () async {

@@ -125,4 +125,71 @@ void main() {
     expect(await api.create('x' * 100), 'created');
     expect(requests, 1);
   });
+
+  test(
+    'remove sends one exact empty DELETE and accepts only exact removed true',
+    () async {
+      final requests = <(String, String, String?, String?)>[];
+      server.listen((r) async {
+        final text = await utf8.decoder.bind(r).join();
+        requests.add((
+          r.method,
+          r.uri.toString(),
+          r.headers[HttpHeaders.authorizationHeader]?.single,
+          text.isEmpty ? null : text,
+        ));
+        r.response.write('{"removed":true}');
+        await r.response.close();
+      });
+      await api.remove('ai-1');
+      expect(requests, [
+        ('DELETE', '/api/v1/accounts/me/ai/ai-1', 'Bearer fixture', null),
+      ]);
+    },
+  );
+
+  test(
+    'remove treats malformed or uncertain responses as failures without retry',
+    () async {
+      final payloads = <(int, String)>[
+        (200, '{"removed":true,"extra":1}'),
+        (200, '{"removed":"true"}'),
+        (200, '{"removed":false}'),
+        (201, '{"removed":true}'),
+        (500, '{"removed":true}'),
+        (401, '{"error":"unauthenticated"}'),
+        (200, 'not-json'),
+      ];
+      var next = 0;
+      var requests = 0;
+      var renewals = 0;
+      final oneShot = HostConnection(
+        Uri.parse('http://127.0.0.1:${server.port}'),
+        'fixture',
+        onUnauthorized: () async {
+          renewals++;
+          return true;
+        },
+      );
+      addTearDown(oneShot.close);
+      server.listen((r) async {
+        requests++;
+        await r.drain<void>();
+        final payload = payloads[next++];
+        r.response.statusCode = payload.$1;
+        r.response.write(payload.$2);
+        await r.response.close();
+      });
+      final removing = OwnAiApi(oneShot);
+      for (var i = 0; i < payloads.length; i++) {
+        await expectLater(removing.remove('ai-1'), throwsA(anything));
+      }
+      expect(requests, payloads.length);
+      expect(renewals, 0);
+      for (final id in ['', 'bad/id', '删除']) {
+        await expectLater(removing.remove(id), throwsFormatException);
+      }
+      expect(requests, payloads.length);
+    },
+  );
 }

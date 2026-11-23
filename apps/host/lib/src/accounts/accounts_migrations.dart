@@ -48,4 +48,11 @@ CREATE TABLE invite (
 );
 CREATE INDEX invite_expiry ON invite(expires_at);
 '''),
+  // Keep the original account column layout for legacy positional inserts.
+  Migration(101, 'logical owner AI removal state', '''
+CREATE TABLE removed_ai_accounts (
+  account_id TEXT PRIMARY KEY NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+  removed_at INTEGER NOT NULL
+);
+'''),
 ];

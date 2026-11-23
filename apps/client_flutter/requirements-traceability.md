@@ -90,3 +90,16 @@ Only the Flutter history viewport changes: the host, sync order, and history sto
 4. Run real-host offline-three-message and real-device AC-16/18/30/32 acceptance.
 
 Environment: Windows11, Flutter3.50/Dart3.14, Android SDK36/JDK21, VS2022 BuildTools. Short `J:` build path avoids MSBuild MAX_PATH. Gradle proxy is process-only; no credentials/config committed. No Android device attached.
+
+## Android own-AI private chat and settings increment
+
+Scope: Android-only new entry points; existing host-mediated chats and the Windows client remain on their prior paths. Source base: `87de5f3`. “Host offline” means the Jingyu host is unreachable while the model endpoint is still reachable; it does not mean on-device inference or no network.
+
+| ID | Acceptance | Implementation and verification | Boundary |
+|---|---|---|---|
+| M11-Android-AI-01 | A previously configured phone can reopen one owned AI after a cold start, retain its current model/persona and local exchanges, and contact the configured HTTPS model with the phone's own key. | Controller restart/lock and adapter transport tests, plus a physical Android 12 run with the host stopped, a TLS fixture reply, and a cold app restart preserving the pending pair and saved settings. | First setup requires the host. The HTTPS model was a synthetic test endpoint, not a live commercial provider. |
+| M11-Android-AI-02 | After enabling synchronization, pending Android exchanges reach the host without duplicate rows. | Physical reconnect and repeated sync of one exact pair, verified by a separate synthetic-device login to the real host API; controller and host tests cover restore and duplicate suppression. | Separate from legacy conversations. Sync sends exchange text, not keys or settings. Second physical handset restoration was not exercised. |
+| M11-Android-AI-03 | The user can distinguish the configured model, API address and persona, and view or edit saved persona and supported behavior controls. | Physical device: saved model/API read, chat model/persona and behavior summary, P1 edit with revision readback, and social level L3 → L2 across normal refreshes. Widget/API tests cover multiline values, scoping and consent invalidation. | The saved persona and last-read behavior summary can be viewed offline. Editing persona and behavior settings still uses the host; offline status does not enable local scheduled or proactive behavior. |
+| M11-Android-AI-04 | Confirmed owner-only removal stops the AI and removes it from the roster without deleting or corrupting existing history. | On-device cancel and confirmation for a separate synthetic AI; fresh host read confirmed that only that AI disappeared. Host tests cover ownership, audit transaction, restart and history retention. | Logical removal, not permanent data erasure. |
+
+Native comparison: [Before](evidence/android-private-ai/before-settings.png) (`87de5f3`) and [After](evidence/android-private-ai/after-settings.png) (candidate with the Android route-lifetime fix) on the same physical handset in the initial authenticated Settings viewport. See [native acceptance record](evidence/android-private-ai/README.md) for revision and fixture details. Test-only package and trust configuration did not ship.
