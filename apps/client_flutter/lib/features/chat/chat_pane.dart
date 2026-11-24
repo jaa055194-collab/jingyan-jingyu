@@ -991,7 +991,8 @@ class _ChatPaneState extends State<ChatPane> {
                   controller: composer,
                   minLines: 1,
                   maxLines: 5,
-                  enabled: !model.busy,
+                  // Stays enabled while busy: disabling it drops focus and
+                  // closes the keyboard mid-typing. Only sending waits.
                   onChanged: model.updateDraft,
                   decoration: const InputDecoration(
                     hintText: '输入消息',
