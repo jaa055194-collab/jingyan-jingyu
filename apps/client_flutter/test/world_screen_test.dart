@@ -15,6 +15,17 @@ class _Model extends ChangeNotifier implements ShellViewModel {
   bool get authenticated => connectedAccountId != null;
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+
+  // v2 shell members (an `implements` double does not inherit the
+  // ShellViewModel defaults).
+  @override
+  bool get reduceMotion => false;
+  @override
+  Future<void> setReduceMotion(bool value) async {}
+  @override
+  bool get conversationsLoaded => true;
+  @override
+  String? get partnerConversationId => null;
 }
 
 void main() {
