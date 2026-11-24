@@ -81,6 +81,40 @@ final List<CaptureScenario> captureScenarios = [
     'conversations-error',
     () => CaptureModel(conversations: const [], error: '会话读取失败，请稍后重试'),
   ),
+  // Chat. Each scenario opens a conversation by tapping its row: on a phone
+  // the chat replaces the list, on a wide screen it fills the right pane.
+  // A group created a moment ago, without messages.
+  CaptureScenario(
+    'chat-empty',
+    () => CaptureModel(conversations: [...sampleConversations, newGroup]),
+    (tester, model) => openConversation(tester, model, newGroup.id),
+  ),
+  // A friend chat: incoming and outgoing text, an image, an edited and a
+  // recalled message, then one queued and one failed outgoing message.
+  CaptureScenario(
+    'chat',
+    () => CaptureModel(messagesById: {'linwu': friendChat}),
+    (tester, model) => openConversation(tester, model, 'linwu'),
+  ),
+  // The direct chat with the user's own AI companion 小鲸.
+  CaptureScenario(
+    'chat-companion',
+    () => CaptureModel(messagesById: {'xiaojing': companionChat}),
+    (tester, model) => openConversation(tester, model, 'xiaojing'),
+  ),
+  // The friend chat while the app is busy, with an unsent draft.
+  CaptureScenario(
+    'chat-busy',
+    () => CaptureModel(messagesById: {'linwu': friendChat}),
+    (tester, model) async {
+      await openConversation(tester, model, 'linwu');
+      await _settle(tester);
+      if (model.selectedConversationId != null) {
+        model.updateDraft('我可能会晚十分钟到。');
+      }
+      model.update((m) => m.busy = true);
+    },
+  ),
 ];
 
 const List<ShellConversation> sampleConversations = [
@@ -114,6 +148,114 @@ const List<ShellConversation> sampleConversations = [
   ),
   ShellConversation(id: 'aqing', title: '阿青', preview: '[图片]', kind: 'direct'),
 ];
+
+/// A group without messages, for chat-empty.
+const ShellConversation newGroup = ShellConversation(
+  id: 'bookclub',
+  title: '读书会',
+  kind: 'group',
+);
+
+DateTime _at(int hour, int minute) => DateTime(2026, 11, 24, hour, minute);
+
+/// The chat with 林雾, oldest first. The last two are local: one waits to be
+/// sent, one failed.
+final List<ShellMessage> friendChat = [
+  ShellMessage(
+    id: 'm-linwu-1',
+    text: '周六有空吗？想去看江边那个灯光展。',
+    outgoing: true,
+    sentAt: _at(20, 2),
+  ),
+  ShellMessage(
+    id: 'm-linwu-2',
+    text: '有空！我去看看还有没有票，听说周末人很多，可能要早点去排队。',
+    sentAt: _at(20, 5),
+  ),
+  ShellMessage(
+    id: 'm-linwu-3',
+    text: '灯光展海报.jpg',
+    attachmentId: 'att-poster',
+    attachmentName: '灯光展海报.jpg',
+    imageAttachment: true,
+    sentAt: _at(20, 6),
+  ),
+  ShellMessage(
+    id: 'm-linwu-4',
+    text: '好，晚饭的位子我来订。',
+    outgoing: true,
+    edited: true,
+    sentAt: _at(20, 8),
+  ),
+  ShellMessage(
+    id: 'm-linwu-5',
+    text: '消息已撤回',
+    outgoing: true,
+    recalled: true,
+    sentAt: _at(20, 9),
+  ),
+  ShellMessage(id: 'm-linwu-6', text: '周六的展我买到票了！', sentAt: _at(20, 31)),
+  const ShellMessage(
+    id: 'm-linwu-7',
+    text: '太好了，周六见！',
+    outgoing: true,
+    status: '等待补传',
+  ),
+  const ShellMessage(
+    id: 'm-linwu-8',
+    text: '我把餐厅地址发你。',
+    outgoing: true,
+    status: '发送失败',
+  ),
+];
+
+/// The chat with the own AI companion 小鲸, oldest first.
+final List<ShellMessage> companionChat = [
+  ShellMessage(
+    id: 'm-xiaojing-1',
+    text: '小鲸，明天天气怎么样？',
+    outgoing: true,
+    sentAt: _at(21, 40),
+  ),
+  ShellMessage(
+    id: 'm-xiaojing-2',
+    text: '明天白天多云，最高 14 度，傍晚风会大一些。',
+    sentAt: _at(21, 40),
+  ),
+  ShellMessage(
+    id: 'm-xiaojing-3',
+    text: '那早上呢？要早起去赶车。',
+    outgoing: true,
+    sentAt: _at(21, 41),
+  ),
+  ShellMessage(id: 'm-xiaojing-4', text: '明早有雨，出门记得带伞。', sentAt: _at(21, 41)),
+];
+
+/// Opens conversation [id] the way a user does, by tapping its row in the
+/// list (found by its key, else by its title). Prints CAPTURE_WARN when the
+/// row is missing or the tap did not open the conversation.
+Future<void> openConversation(
+  WidgetTester tester,
+  CaptureModel model,
+  String id,
+) async {
+  final title = model.conversations
+      .firstWhere((conversation) => conversation.id == id)
+      .title;
+  var row = find.byKey(ValueKey(id));
+  if (row.evaluate().isEmpty) row = find.text(title, findRichText: true);
+  if (row.evaluate().isEmpty) {
+    debugPrint('CAPTURE_WARN no row for conversation $id ($title)');
+    return;
+  }
+  await tester.ensureVisible(row.first);
+  await tester.pump();
+  await tester.tap(row.first, warnIfMissed: false);
+  await tester.pump();
+  if (model.selectedConversationId != id) {
+    debugPrint('CAPTURE_WARN tapping $title did not open conversation $id');
+  }
+}
 
 /// The user's own AI companion; its direct chat is `xiaojing`.
 const ShellOwnedAi sampleCompanion = ShellOwnedAi(
