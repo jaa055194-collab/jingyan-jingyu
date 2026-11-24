@@ -71,6 +71,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Timer? reconnect;
   Map<String, Object?> preferences = {};
   List<ShellConversation> _conversations = [];
+
+  /// Set once a conversation-list read for the current session has finished,
+  /// successfully or not; cleared whenever the list is reset.
+  bool _conversationsLoaded = false;
   List<ShellOwnedAi> _ownAiAccounts = [];
   String? _ownAiNotice;
   bool _ownAiLoaded = false;
@@ -459,8 +463,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
               unread: _unreadFor(conversation.id),
               kind: conversation.kind,
               ownerAccountId: conversation.ownerAccountId,
+              lastActivityAt: _lastActivityFor(conversation),
             ),
         ];
+
+  @override
+  bool get conversationsLoaded => !authenticated || _conversationsLoaded;
 
   /// The cache is already pruned to the visible history floor, so every cached
   /// canonical row above the read position is genuinely unread. The user's own
@@ -473,6 +481,18 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       if (message.seq > read && message.senderId != self) count++;
     }
     return count;
+  }
+
+  /// Newest known activity: the row's own time or the latest cached canonical
+  /// message. Queued and dropped rows are not activity yet.
+  DateTime? _lastActivityFor(ShellConversation conversation) {
+    var latest = conversation.lastActivityAt;
+    for (final message in shell.messagesFor(conversation.id)) {
+      if (latest == null || message.sentAt.isAfter(latest)) {
+        latest = message.sentAt;
+      }
+    }
+    return latest;
   }
 
   @override
@@ -1205,6 +1225,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   @override
   double get fontScale => (preferences['fontScale'] as num? ?? 1).toDouble();
   @override
+  bool get reduceMotion => preferences['reduceMotion'] == true;
+  @override
   String? get roomPreview => _preview;
   Future<void> initialize() async {
     final generation = _generation;
@@ -1550,6 +1572,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _chatEntered = false;
     _online = false;
     _conversations = [];
+    _conversationsLoaded = false;
     _ownAiAccounts = [];
     _ownAiNotice = null;
     _ownAiLoaded = false;
@@ -1744,6 +1767,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         directs: direct['conversations'],
       );
       _conversations = conversations;
+      _conversationsLoaded = true;
       _online = true;
       await sessionShell.flush();
       for (final conversation in conversations) {
@@ -1777,7 +1801,11 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         }
       }
     } catch (_) {
-      if (_current(generation) && _historySyncEpoch == epoch) _online = false;
+      if (_current(generation) && _historySyncEpoch == epoch) {
+        _online = false;
+        // A failed read still ends "loading", so the UI can show offline.
+        _conversationsLoaded = true;
+      }
     }
     if (_current(generation)) notifyListeners();
   }
@@ -1851,6 +1879,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _selected = null;
       _draft = '';
       _conversations = [];
+      _conversationsLoaded = false;
       _ownAiAccounts = [];
       _ownAiNotice = null;
       _ownAiLoaded = false;
@@ -2979,6 +3008,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   @override
   Future<void> setFontScale(double value) => _run(() async {
     preferences['fontScale'] = value;
+    await _savePreferences();
+  });
+
+  @override
+  Future<void> setReduceMotion(bool value) => _run(() async {
+    preferences['reduceMotion'] = value;
     await _savePreferences();
   });
 
