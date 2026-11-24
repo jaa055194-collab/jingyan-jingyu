@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
@@ -538,15 +539,7 @@ class SettingsScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 24),
-            Text('字体大小 · ${(model.fontScale * 100).round()}%'),
-            Slider(
-              value: model.fontScale.clamp(0.85, 1.5),
-              min: 0.85,
-              max: 1.5,
-              divisions: 13,
-              label: '${(model.fontScale * 100).round()}%',
-              onChanged: model.busy ? null : model.setFontScale,
-            ),
+            _FontScaleControl(model: model),
             const Text('此设置同时应用于导航、消息和输入区域。'),
             const Divider(height: 32),
             Text('开发者', style: Theme.of(context).textTheme.titleMedium),
@@ -874,6 +867,117 @@ class SettingsScreen extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// Completes the next time [listenable] notifies its listeners.
+Future<void> _nextNotification(Listenable listenable) {
+  final completer = Completer<void>();
+  void listener() {
+    listenable.removeListener(listener);
+    completer.complete();
+  }
+
+  listenable.addListener(listener);
+  return completer.future;
+}
+
+/// Font size slider with a live sample. Dragging only previews the size; the
+/// value is saved once, when the drag (or a key press) ends.
+class _FontScaleControl extends StatefulWidget {
+  const _FontScaleControl({required this.model});
+
+  final ShellViewModel model;
+
+  @override
+  State<_FontScaleControl> createState() => _FontScaleControlState();
+}
+
+class _FontScaleControlState extends State<_FontScaleControl> {
+  static const _min = 0.85;
+  static const _max = 1.5;
+
+  /// The dragged or released value, until the model has saved it.
+  double? _pending;
+
+  /// Bumped by every drag and save, so a superseded save neither runs late nor
+  /// clears [_pending].
+  int _generation = 0;
+
+  Future<void> _save(double value) async {
+    final model = widget.model;
+    final generation = ++_generation;
+    // The runtime drops a call made while another operation holds the model
+    // busy, so wait until it is idle rather than lose the user's choice. The
+    // wait outlives this screen, so leaving settings straight away still saves.
+    while (model.busy) {
+      await _nextNotification(model);
+      if (generation != _generation) {
+        return;
+      }
+    }
+    try {
+      await model.setFontScale(value);
+    } finally {
+      if (mounted && generation == _generation) {
+        setState(() => _pending = null);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final model = widget.model;
+    final value = _pending ?? model.fontScale;
+    final percent = '${(value * 100).round()}%';
+    final sample = theme.textTheme.bodyLarge ?? const TextStyle(fontSize: 16);
+    // The shell already scales all text by model.fontScale, so scale the sample
+    // by the ratio to show `value` without applying the scale twice.
+    final ratio = model.fontScale > 0 ? value / model.fontScale : 1.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('字体大小 · $percent'),
+        MergeSemantics(
+          child: Semantics(
+            label: '字体大小',
+            child: Slider(
+              value: value.clamp(_min, _max),
+              min: _min,
+              max: _max,
+              divisions: 13,
+              label: percent,
+              // Announce the size itself, not the thumb position (100% read
+              // as 23%).
+              semanticFormatterCallback: (v) => '${(v * 100).round()}%',
+              // Stays enabled while the model is busy; _save waits instead.
+              onChangeStart: (_) => _generation++,
+              onChanged: (v) => setState(() => _pending = v),
+              onChangeEnd: (v) {
+                setState(() => _pending = v);
+                _save(v);
+              },
+            ),
+          ),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Text(
+              '预览：消息和输入框中的文字会显示成这样。',
+              key: const Key('font-scale-preview'),
+              style: sample.copyWith(fontSize: (sample.fontSize ?? 16) * ratio),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
 }
 
 class _OwnAiDirectControls extends StatelessWidget {
