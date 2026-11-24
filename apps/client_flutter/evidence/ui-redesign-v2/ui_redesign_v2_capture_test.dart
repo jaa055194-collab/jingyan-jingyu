@@ -63,9 +63,24 @@ class CaptureScenario {
 
 /// The scenarios; capture.ps1 -Scenario takes these names.
 final List<CaptureScenario> captureScenarios = [
-  // Signed in and online with six conversations (previews, unread counts),
-  // none of them open.
+  // Shell and conversation list. Signed in and online with six
+  // conversations (previews, unread counts), none of them open.
   const CaptureScenario('conversations', CaptureModel.new),
+  // Signed in and online, no conversations yet.
+  CaptureScenario(
+    'conversations-empty',
+    () => CaptureModel(conversations: const []),
+  ),
+  // Signed in but offline; nothing loaded.
+  CaptureScenario(
+    'conversations-offline',
+    () => CaptureModel(conversations: const [], online: false),
+  ),
+  // Signed in and online, but reading the conversations failed.
+  CaptureScenario(
+    'conversations-error',
+    () => CaptureModel(conversations: const [], error: '会话读取失败，请稍后重试'),
+  ),
 ];
 
 const List<ShellConversation> sampleConversations = [
@@ -74,6 +89,7 @@ const List<ShellConversation> sampleConversations = [
     title: '小鲸',
     preview: '明早有雨，出门记得带伞。',
     unread: 1,
+    kind: 'direct',
   ),
   ShellConversation(
     id: 'linwu',
@@ -99,27 +115,69 @@ const List<ShellConversation> sampleConversations = [
   ShellConversation(id: 'aqing', title: '阿青', preview: '[图片]', kind: 'direct'),
 ];
 
-/// Signed in as account-a, online, nothing queued. Opening a conversation
-/// shows its entry in [messagesById] (no messages when there is none).
+/// The user's own AI companion; its direct chat is `xiaojing`.
+const ShellOwnedAi sampleCompanion = ShellOwnedAi(
+  accountId: 'ai-xiaojing',
+  displayName: '小鲸',
+  disabled: false,
+);
+
+/// Signed in as account-a with [sampleCompanion] as the own AI (signed out
+/// and not onboarded when [signedIn] is false), online and without an error
+/// unless [online] or [error] say otherwise, nothing queued. Opening a
+/// conversation shows its entry in [messagesById] (none when absent).
 class CaptureModel extends TestShellModel {
   CaptureModel({
     List<ShellConversation> conversations = sampleConversations,
     this.messagesById = const {},
+    bool signedIn = true,
+    bool online = true,
+    String? error,
   }) {
-    onboarded = true;
-    chatEntered = true;
-    online = true;
+    onboarded = signedIn;
+    chatEntered = signedIn;
+    connectedAccountId = signedIn ? 'account-a' : null;
+    this.online = online;
+    this.error = error;
     queuedCount = 0;
-    connectedAccountId = 'account-a';
-    this.conversations = conversations;
+    this.conversations = signedIn ? conversations : const [];
   }
 
   final Map<String, List<ShellMessage>> messagesById;
+  final Object _ownAiEpoch = Object();
+
+  @override
+  List<ShellOwnedAi> get ownAiAccounts =>
+      authenticated ? const [sampleCompanion] : const [];
+
+  @override
+  bool get ownAiLoaded => authenticated;
+
+  @override
+  Object? get ownAiDirectContext => authenticated ? _ownAiEpoch : null;
+
+  @override
+  ShellOwnAiDirectState ownAiDirectState(String aiAccountId) =>
+      authenticated && aiAccountId == sampleCompanion.accountId
+      ? const ShellOwnAiDirectState(
+          phase: ShellOwnAiDirectPhase.ready,
+          profileId: 'profile-xiaojing',
+          revision: 1,
+          enabled: true,
+          conversationId: 'xiaojing',
+        )
+      : const ShellOwnAiDirectState();
 
   @override
   Future<void> selectConversation(String id) async {
     selectedConversationId = id;
     messages = messagesById[id] ?? const [];
+    notifyListeners();
+  }
+
+  /// Applies [change] and notifies the app.
+  void update(void Function(CaptureModel model) change) {
+    change(this);
     notifyListeners();
   }
 
