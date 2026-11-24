@@ -15,6 +15,8 @@ import '../../net/owner_reply_preferences_api.dart';
 import '../../net/owner_rule_greeting_api.dart';
 import '../../net/owner_social_level_api.dart';
 import '../../net/persona_history_api.dart';
+import '../../ui/jy_palette.dart';
+import '../../ui/jy_tokens.dart';
 import 'owner_auto_memory_section.dart';
 import 'owner_memory_notes_section.dart';
 import 'owner_model_proactive_card.dart';
@@ -26,6 +28,10 @@ import 'persona_file_picker.dart';
 import 'persona_history_screen.dart';
 
 part 'android_ai_config_details.dart';
+
+/// Editor group whose write produced the current status; `null` keeps the
+/// status at page level (top of the page).
+enum _WriteGroup { persona, provider, binding, budget }
 
 /// Read-write "AI 运行配置" hub for one owned AI.
 ///
@@ -113,6 +119,9 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
   bool _busy = false;
   String? _status;
   bool _statusError = false;
+
+  /// 写入状态显示在哪一组；null 表示页级状态，显示在页顶。
+  _WriteGroup? _statusGroup;
   late final ({ShellViewModel model, bool Function() isCurrent})? _session;
   bool _sessionLost = false;
   int _profileGeneration = 0;
@@ -442,6 +451,7 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
         _resolving = false;
         _status = '无法解析该 AI 档案；请稍后重试或重新选择；不会自动重试';
         _statusError = true;
+        _statusGroup = null;
       });
     }
   }
@@ -559,9 +569,54 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
         _ => '操作失败或结果未知；不会自动重试',
       };
 
+  /// 写入结果：「成功」或「失败/未知」，下面一行是说明。
+  Widget? _groupStatus(_WriteGroup group) =>
+      _status != null && _statusGroup == group ? _writeStatusBlock() : null;
+
+  Widget _writeStatusBlock() {
+    final palette = JyPalette.of(context);
+    final color = _statusError ? palette.danger : palette.success;
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: Padding(
+        key: const Key('ai-config-write-status'),
+        padding: const EdgeInsets.symmetric(vertical: JySpace.sm),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              _statusError ? Icons.error_outline : Icons.check_circle_outline,
+              key: const Key('ai-config-write-icon'),
+              color: color,
+            ),
+            const SizedBox(width: JySpace.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _statusError ? '失败/未知' : '成功',
+                    key: const Key('ai-config-write-state'),
+                    style: TextStyle(color: color),
+                  ),
+                  Text(
+                    _status!,
+                    style: TextStyle(color: _statusError ? color : null),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _run<T>(
     Future<T> Function(AiConfigWriter writer) action,
     String success, {
+    required _WriteGroup group,
     required int profileGeneration,
     void Function(T result)? onSuccess,
     bool modelMetadataMayChange = false,
@@ -572,6 +627,7 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
     setState(() {
       _busy = true;
       _status = null;
+      _statusGroup = group;
       if (_isAndroidDetails && modelMetadataMayChange) {
         _invalidateAndroidModels();
       }
@@ -787,33 +843,7 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
               padding: EdgeInsets.only(top: 8),
               child: Text('未连接宿主；无法编辑配置。'),
             ),
-          if (_status != null)
-            Padding(
-              key: const Key('ai-config-write-status'),
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _statusError ? '失败/未知' : '成功',
-                    key: const Key('ai-config-write-state'),
-                    style: TextStyle(
-                      color: _statusError
-                          ? Theme.of(context).colorScheme.error
-                          : null,
-                    ),
-                  ),
-                  Text(
-                    _status!,
-                    style: TextStyle(
-                      color: _statusError
-                          ? Theme.of(context).colorScheme.error
-                          : null,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          if (_status != null && _statusGroup == null) _writeStatusBlock(),
           const Divider(height: 32),
           ?_ownerReplyPreferences(profileGeneration),
           ?_ownerRuleGreeting(profileGeneration),
@@ -889,6 +919,7 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
                     onPressed: !_ready
                         ? null
                         : () => _run(
+                            group: _WriteGroup.persona,
                             (writer) {
                               final p0 = _pairs(_p0.text);
                               final p1 = _pairs(_p1.text);
@@ -915,6 +946,7 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
                     onPressed: !_ready
                         ? null
                         : () => _run(
+                            group: _WriteGroup.persona,
                             (writer) => writer.editPersona(
                               _profileId!,
                               expectedVersion: _requireInt(
@@ -933,9 +965,11 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
                   ),
                 ],
               ),
+              ?_groupStatus(_WriteGroup.persona),
               _personaHistory(profileGeneration),
             ],
             helpKey: 'help-persona',
+            group: _WriteGroup.persona,
             help:
                 '人格三层：P0 核心（不可自改）、P1 风格（可自主迭代）、P2 情绪；'
                 '初始化需三层全部非空，保存修改需当前版本与原因，历史可回滚。',
@@ -982,8 +1016,10 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
               ),
             ],
           ),
+          ?_groupStatus(_WriteGroup.provider),
         ],
         helpKey: 'help-provider',
+        group: _WriteGroup.provider,
         help:
             'api_key 只经遮蔽字段提交给宿主，绝不回显、不记录；'
             '保存后宿主只返回掩码 key_mask（不是密钥），客户端不持有明文。',
@@ -1062,6 +1098,7 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
                 : () {
                     if (catalogGeneration != _catalogGeneration) return;
                     _run(
+                      group: _WriteGroup.binding,
                       (writer) => writer.setChatBinding(
                         _profileId!,
                         providerId: _bindProvider.text.trim(),
@@ -1074,8 +1111,10 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
                   },
             child: const Text('保存聊天绑定'),
           ),
+          ?_groupStatus(_WriteGroup.binding),
         ],
         helpKey: 'help-binding',
+        group: _WriteGroup.binding,
         help:
             '聊天绑定需要 Provider ID 与模型 ID同时提供；'
             '绑定到 chat 能力后该 AI 才能用于对话，未绑定不代表可用。',
@@ -1106,8 +1145,10 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
             onPressed: !_ready ? null : () => _saveBudget(profileGeneration),
             child: const Text('保存预算'),
           ),
+          ?_groupStatus(_WriteGroup.budget),
         ],
         helpKey: 'help-budget',
+        group: _WriteGroup.budget,
         help:
             '预算四字段：每日 token 上限、时区偏移（分钟）、分层限额（name=整数每行）、'
             '能力限额（name=整数每行）；保存后按本地时区切日，不代表已获批或已启用。',
@@ -1141,8 +1182,10 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
     String title,
     List<Widget> children, {
     String? helpKey,
+    _WriteGroup? group,
     String? help,
   }) => Padding(
+    key: group == null ? null : Key('ai-config-group-${group.name}'),
     padding: const EdgeInsets.only(bottom: 16),
     child: Card(
       child: Padding(
@@ -1186,6 +1229,7 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
   );
 
   Future<void> _createProvider(int profileGeneration) => _run(
+    group: _WriteGroup.provider,
     (writer) => writer.createProvider(
       name: _provName.text.trim(),
       baseUrl: _provBaseUrl.text.trim(),
@@ -1201,6 +1245,7 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
   );
 
   Future<void> _updateProvider(int profileGeneration) => _run(
+    group: _WriteGroup.provider,
     (writer) => writer.updateProvider(
       _provId.text.trim(),
       name: _provName.text.trim().isEmpty ? null : _provName.text.trim(),
@@ -1219,6 +1264,7 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
   );
 
   Future<void> _saveBudget(int profileGeneration) => _run(
+    group: _WriteGroup.budget,
     (writer) {
       final layers = _intPairs(_budgetLayers.text);
       final caps = _intPairs(_budgetCaps.text);
