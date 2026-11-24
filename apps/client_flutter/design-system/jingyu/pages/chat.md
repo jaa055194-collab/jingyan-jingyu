@@ -58,7 +58,7 @@
 证据：
 - runtime.dart:2611-2613 记下 text 和草稿版本，await enqueueTextDraft（定义在 packages/jingyu_client_kit/lib/src/shell_controller.dart:154）。
 - runtime.dart:2615-2618 草稿和版本都没变才清空 _draft，清空后没有 notifyListeners；runtime.dart:2620 接着 await sessionShell.flush()。
-- runtime.dart:1603-1616 _run 只在开始（1608）和 finally（1615）通知；runtime.dart 里没有 addListener 或 listen，flush 期间只有不相关的通知（如 1310 的重连定时器）才会碰巧刷新输入框。
+- runtime.dart:1603-1616 _run 只在开始（1608）和 finally（1615）通知；runtime.dart 里没有 addListener 或 listen，1310-1311 的 15 秒重连定时器在 _busy 时跳过，所以 flush 期间没有通知去刷新输入框（除非别的异步操作碰巧完成）。
 - chat_pane.dart:653-656 输入框只在 build 时按 model.draft 重设；chat_pane.dart:996 onChanged 调 updateDraft；chat_pane.dart:1006 忙时只禁发送键（218de50）。runtime.dart:2566-2585 updateDraft 写 _draft、版本 +1、saveDraft、通知。
 - 提及发送同样：runtime.dart:2743-2749（2746 清空不通知，2749 await flush）。
 - 入队期间改过就保留草稿是有意的（runtime_text_send_test:109 锁定）；毛病在界面没先清空，用户是在旧文后面接着打字。
