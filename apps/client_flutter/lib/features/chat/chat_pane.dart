@@ -520,7 +520,14 @@ class _ChatPaneState extends State<ChatPane> {
         model.selectedConversationId != conversation) {
       return;
     }
-    final provider = MemoryImage(image.bytes);
+    // Decode inside a bounded 1080 px box while keeping the original
+    // proportions; evicting this same provider frees the decoded pixels.
+    final provider = ResizeImage(
+      MemoryImage(image.bytes),
+      width: 1080,
+      height: 1080,
+      policy: ResizeImagePolicy.fit,
+    );
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -528,12 +535,15 @@ class _ChatPaneState extends State<ChatPane> {
         title: Text(message.attachmentName ?? '图片'),
         content: SizedBox(
           width: 360,
-          child: Image.memory(
-            image.bytes,
-            fit: BoxFit.contain,
-            cacheWidth: 1080,
-            cacheHeight: 1080,
-            errorBuilder: (_, _, _) => const Text('图片无法显示。'),
+          child: InteractiveViewer(
+            key: const Key('message-image-viewer'),
+            minScale: 1,
+            maxScale: 4,
+            child: Image(
+              image: provider,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) => const Text('图片无法显示。'),
+            ),
           ),
         ),
         actions: [
