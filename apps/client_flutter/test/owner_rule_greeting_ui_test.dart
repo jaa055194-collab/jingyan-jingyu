@@ -1,9 +1,25 @@
 import 'dart:async';
 
+import 'package:client_flutter/features/ai_config/ai_config_problem_line.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'support/owner_rule_greeting_fixture.dart';
+
+void _expectProblemIcon(Finder text) {
+  final line = find.ancestor(
+    of: text,
+    matching: find.byType(AiConfigProblemLine, skipOffstage: false),
+  );
+  expect(
+    find.descendant(
+      of: line,
+      matching: find.byIcon(Icons.error_outline, skipOffstage: false),
+      skipOffstage: false,
+    ),
+    findsOneWidget,
+  );
+}
 
 void main() {
   late GreetingConnection host;
@@ -157,6 +173,7 @@ void main() {
       await tapGreeting(t, review);
       expect(greetingKey(confirm), findsNothing);
       expect(greetingKey('owner-rule-greeting-conflict'), findsOneWidget);
+      _expectProblemIcon(greetingKey('owner-rule-greeting-conflict'));
       expect(host.writes, isEmpty);
     },
   );

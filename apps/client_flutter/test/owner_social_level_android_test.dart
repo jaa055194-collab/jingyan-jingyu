@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:client_flutter/features/ai_config/ai_config_problem_line.dart';
 import 'package:client_flutter/features/ai_config/owner_social_level_section.dart';
 import 'package:client_flutter/net/host_connection.dart';
 import 'package:client_flutter/net/owner_social_level_api.dart';
@@ -24,6 +25,21 @@ Map<String, Object?> _configured(String level) => {
   'level': level,
   'updatedAt': _at,
 };
+
+void _expectProblemIcon(Finder text) {
+  final line = find.ancestor(
+    of: text,
+    matching: find.byType(AiConfigProblemLine, skipOffstage: false),
+  );
+  expect(
+    find.descendant(
+      of: line,
+      matching: find.byIcon(Icons.error_outline, skipOffstage: false),
+      skipOffstage: false,
+    ),
+    findsOneWidget,
+  );
+}
 
 void main() {
   group('owner social-level HTTP contract', () {
@@ -312,6 +328,7 @@ void main() {
       expect(fixture.invalidations, 0);
       expect(fixture.host.calls.map((call) => call.$1), ['GET', 'PUT']);
       expect(find.textContaining('重新连接宿主'), findsOneWidget);
+      _expectProblemIcon(find.textContaining('重新连接宿主'));
       expect(find.textContaining(_privateDetail), findsNothing);
       expect(find.textContaining('未配置'), findsNothing);
       expect(_key('save'), findsNothing);

@@ -2,6 +2,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart' show HostReadCancellation;
 import '../../net/owner_reply_preferences_api.dart';
+import '../../ui/jy_tokens.dart';
+import 'ai_config_problem_line.dart';
 
 /// Inline review intentionally stays within the selected profile's widget:
 /// changing account/profile or locking the editor discards the whole review.
@@ -224,17 +226,8 @@ class _OwnerReplyPreferencesSectionState
   }
 
   Widget _note(String text, String key, {bool error = false}) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Semantics(
-      liveRegion: true,
-      child: Text(
-        text,
-        key: Key(key),
-        style: error
-            ? TextStyle(color: Theme.of(context).colorScheme.error)
-            : null,
-      ),
-    ),
+    padding: const EdgeInsets.symmetric(vertical: JySpace.xs),
+    child: AiConfigNoticeLine(text, textKey: Key(key), problem: error),
   );
 
   static String _lengthLabel(OwnerReplyLength? value) => switch (value) {

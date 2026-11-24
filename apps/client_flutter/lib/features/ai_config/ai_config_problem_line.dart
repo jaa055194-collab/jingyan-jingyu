@@ -37,3 +37,33 @@ class AiConfigProblemLine extends StatelessWidget {
     );
   }
 }
+
+/// AI 配置页的一行状态提示：平常是普通文字，[problem] 为 true 时换成 [AiConfigProblemLine]。
+///
+/// 两种样子读屏都会播报；[textKey] 照样挂在文字上。
+class AiConfigNoticeLine extends StatelessWidget {
+  const AiConfigNoticeLine(
+    this.message, {
+    super.key,
+    required this.problem,
+    this.textKey,
+  });
+
+  final String message;
+  final Key? textKey;
+
+  /// 这条提示是不是失败（读不到、写不进、冲突、宿主不认识等）。
+  final bool problem;
+
+  @override
+  Widget build(BuildContext context) {
+    if (problem) {
+      return AiConfigProblemLine(message, textKey: textKey);
+    }
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: Text(message, key: textKey),
+    );
+  }
+}

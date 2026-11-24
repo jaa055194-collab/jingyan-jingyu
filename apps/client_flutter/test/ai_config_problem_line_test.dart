@@ -76,4 +76,43 @@ void main() {
 
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('a notice stays plain text until it is a problem', (
+    tester,
+  ) async {
+    Future<void> pumpNotice({required bool problem}) => tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(extensions: const [JyPalette.light]),
+        home: Scaffold(
+          body: AiConfigNoticeLine(
+            _message,
+            textKey: const Key('notice-text'),
+            problem: problem,
+          ),
+        ),
+      ),
+    );
+    final text = find.byKey(const Key('notice-text'));
+    Finder around(Finder matching) =>
+        find.ancestor(of: text, matching: matching);
+
+    await pumpNotice(problem: false);
+    expect(tester.widget<Text>(text).data, _message);
+    expect(tester.widget<Text>(text).style, isNull);
+    expect(find.byIcon(Icons.error_outline), findsNothing);
+    expect(
+      around(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Semantics && widget.properties.liveRegion == true,
+        ),
+      ),
+      findsOneWidget,
+    );
+
+    await pumpNotice(problem: true);
+    expect(tester.widget<Text>(text).data, _message);
+    expect(around(find.byType(AiConfigProblemLine)), findsOneWidget);
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
+  });
 }

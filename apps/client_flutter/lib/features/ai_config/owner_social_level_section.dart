@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/owner_social_level_api.dart';
+import 'ai_config_problem_line.dart';
 
 /// Owner-only Android controls for the pinned AI. No request runs on build.
 class OwnerSocialLevelSection extends StatefulWidget {
@@ -193,15 +194,10 @@ class _OwnerSocialLevelSectionState extends State<OwnerSocialLevelSection> {
                   semanticsLabel: _saving ? '正在保存社交等级' : '正在读取社交等级',
                 )
               else
-                Semantics(
-                  liveRegion: true,
-                  child: Text(
-                    status,
-                    key: const Key('owner-social-level-status'),
-                    style: problem == null
-                        ? null
-                        : TextStyle(color: theme.colorScheme.error),
-                  ),
+                AiConfigNoticeLine(
+                  status,
+                  textKey: const Key('owner-social-level-status'),
+                  problem: problem != null,
                 ),
               if (!canContact && !_pending) const Text('连接宿主后才能读取或保存。'),
               if (snapshot != null) ...[

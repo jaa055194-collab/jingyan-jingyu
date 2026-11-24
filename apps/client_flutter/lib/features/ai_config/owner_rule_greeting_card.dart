@@ -2,6 +2,8 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/owner_rule_greeting_api.dart';
+import '../../ui/jy_tokens.dart';
+import 'ai_config_problem_line.dart';
 
 typedef _Schedule = ({int local, int? offset, int start, int end});
 typedef _Review = ({OwnerRuleGreetingSettings state, _Schedule schedule});
@@ -258,16 +260,11 @@ class _OwnerRuleGreetingCardState extends State<OwnerRuleGreetingCard>
   );
 
   Widget _note(String text, String key, {bool error = false}) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Semantics(
-      liveRegion: true,
-      child: Text(
-        text,
-        key: Key('owner-rule-greeting-$key'),
-        style: error
-            ? TextStyle(color: Theme.of(context).colorScheme.error)
-            : null,
-      ),
+    padding: const EdgeInsets.symmetric(vertical: JySpace.xs),
+    child: AiConfigNoticeLine(
+      text,
+      textKey: Key('owner-rule-greeting-$key'),
+      problem: error,
     ),
   );
 
