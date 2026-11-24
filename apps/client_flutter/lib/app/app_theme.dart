@@ -21,11 +21,15 @@ ColorScheme appColorScheme(Brightness brightness) =>
 /// lib/ui 的组件自己画。这里只覆盖规范定了的颜色、形状、文字和最小尺寸，
 /// 其余沿用 Material 默认，免得无关页面的布局跟着变。
 ///
-/// ColorScheme 的 secondary 系是伙伴色 ember；Material 默认拿
-/// secondaryContainer 当选中底的组件（导航指示器、Chip、分段按钮）在这里
-/// 改回 signalSoft。
+/// ColorScheme 的 secondary 系是伙伴色 ember。Material 默认拿
+/// secondaryContainer 当选中底或未激活轨道的地方（导航栏、侧栏和抽屉的
+/// 指示器，Chip，分段按钮，滑块，线性进度条，日期范围）在这里一律改成
+/// signalSoft，上面的图标、文字、刻度和按压层改成 onSignalSoft。
+/// FilledButton.tonal 和 IconButton.filledTonal 的底色在主题层改不了
+/// （按钮主题分不出变体），要在调用处换掉。
 ThemeData buildAppTheme(Brightness brightness) {
   final JyPalette p = JyPalette.fallback(brightness);
+  final ColorScheme scheme = appColorScheme(brightness);
   final TextTheme text = JyTypography.textTheme(p.text1);
   final BorderSide hairline = BorderSide(color: p.hairline);
   final BorderSide outline = BorderSide(color: p.outline);
@@ -52,6 +56,36 @@ ThemeData buildAppTheme(Brightness brightness) {
         return isSelected(states) ? p.onSignalSoft : p.text1;
       });
 
+  // 分段按钮的按压层跟着段上的文字走：选中段 onSignalSoft，其余 onSurface。
+  final WidgetStateProperty<Color?> segmentOverlay =
+      WidgetStateProperty.resolveWith<Color?>((Set<WidgetState> states) {
+        final Color layer = isSelected(states)
+            ? p.onSignalSoft
+            : scheme.onSurface;
+        if (states.contains(WidgetState.pressed) ||
+            states.contains(WidgetState.focused)) {
+          return layer.withValues(alpha: 0.1);
+        }
+        if (states.contains(WidgetState.hovered)) {
+          return layer.withValues(alpha: 0.08);
+        }
+        return null;
+      });
+
+  // 导航栏和抽屉共用：选中 onSignalSoft，未选中 text2；禁用走默认。
+  final WidgetStateProperty<IconThemeData?> navIcon =
+      WidgetStateProperty.resolveWith<IconThemeData?>((
+        Set<WidgetState> states,
+      ) {
+        if (isDisabled(states)) {
+          return null;
+        }
+        return IconThemeData(
+          size: 24,
+          color: isSelected(states) ? p.onSignalSoft : p.text2,
+        );
+      });
+
   OutlineInputBorder inputBorder(BorderSide side) => OutlineInputBorder(
     borderRadius: const BorderRadius.all(Radius.circular(JyRadius.md)),
     borderSide: side,
@@ -59,7 +93,7 @@ ThemeData buildAppTheme(Brightness brightness) {
 
   return ThemeData(
     useMaterial3: true,
-    colorScheme: appColorScheme(brightness),
+    colorScheme: scheme,
     textTheme: text,
     scaffoldBackgroundColor: p.canvas,
     dividerColor: p.hairline,
@@ -95,6 +129,9 @@ ThemeData buildAppTheme(Brightness brightness) {
       barrierColor: p.scrim,
       titleTextStyle: text.titleLarge,
       contentTextStyle: text.bodyMedium?.copyWith(color: p.text2),
+    ),
+    datePickerTheme: DatePickerThemeData(
+      rangeSelectionBackgroundColor: p.signalSoft,
     ),
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: p.overlay,
@@ -135,6 +172,7 @@ ThemeData buildAppTheme(Brightness brightness) {
         ),
         foregroundColor: segmentForeground,
         iconColor: segmentForeground,
+        overlayColor: segmentOverlay,
       ),
     ),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
@@ -192,6 +230,7 @@ ThemeData buildAppTheme(Brightness brightness) {
     sliderTheme: SliderThemeData(
       activeTrackColor: p.signal,
       inactiveTrackColor: p.signalSoft,
+      inactiveTickMarkColor: p.onSignalSoft.withValues(alpha: 0.38),
       thumbColor: p.signal,
       overlayColor: p.signal.withValues(alpha: 0.12),
     ),
@@ -263,17 +302,7 @@ ThemeData buildAppTheme(Brightness brightness) {
       shadowColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       indicatorColor: p.signalSoft,
-      iconTheme: WidgetStateProperty.resolveWith<IconThemeData?>((
-        Set<WidgetState> states,
-      ) {
-        if (isDisabled(states)) {
-          return null;
-        }
-        return IconThemeData(
-          size: 24,
-          color: isSelected(states) ? p.onSignalSoft : p.text2,
-        );
-      }),
+      iconTheme: navIcon,
     ),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: p.canvas,
@@ -281,6 +310,21 @@ ThemeData buildAppTheme(Brightness brightness) {
       indicatorColor: p.signalSoft,
       selectedIconTheme: IconThemeData(size: 24, color: p.onSignalSoft),
       unselectedIconTheme: IconThemeData(size: 24, color: p.text2),
+    ),
+    navigationDrawerTheme: NavigationDrawerThemeData(
+      elevation: 0,
+      indicatorColor: p.signalSoft,
+      iconTheme: navIcon,
+      labelTextStyle: WidgetStateProperty.resolveWith<TextStyle?>((
+        Set<WidgetState> states,
+      ) {
+        if (isDisabled(states)) {
+          return null;
+        }
+        return text.labelLarge?.copyWith(
+          color: isSelected(states) ? p.onSignalSoft : p.text2,
+        );
+      }),
     ),
   );
 }

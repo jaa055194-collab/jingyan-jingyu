@@ -35,6 +35,8 @@ class StatusPanel extends StatelessWidget {
     this.tone = StatusTone.empty,
     this.action,
     this.fill = false,
+    this.titleKey,
+    this.detailKey,
   });
 
   final IconData icon;
@@ -47,6 +49,12 @@ class StatusPanel extends StatelessWidget {
   /// large text would not fit. Use it when the panel replaces a whole list or
   /// pane; leave it off inside a list.
   final bool fill;
+
+  /// Key for the [title] text, so a caller or a test can find that line.
+  final Key? titleKey;
+
+  /// Key for the [detail] text; nothing carries it when [detail] is null.
+  final Key? detailKey;
 
   /// How long the entrance takes.
   static const Duration fadeDuration = JyDurations.standard;
@@ -70,6 +78,7 @@ class StatusPanel extends StatelessWidget {
               const SizedBox(height: JySpace.lg),
               Text(
                 title,
+                key: titleKey,
                 textAlign: TextAlign.center,
                 style: text.titleMedium?.copyWith(color: palette.text1),
               ),
@@ -77,6 +86,7 @@ class StatusPanel extends StatelessWidget {
                 const SizedBox(height: JySpace.xs),
                 Text(
                   line,
+                  key: detailKey,
                   textAlign: TextAlign.center,
                   style: text.bodyMedium?.copyWith(color: palette.text2),
                 ),

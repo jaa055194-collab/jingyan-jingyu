@@ -128,6 +128,53 @@ void main() {
         }
       });
 
+      test('points secondaryContainer defaults at signalSoft', () {
+        // secondaryContainer is ember (MASTER.md §4); every Material default
+        // that paints a selection or a track with it uses signalSoft instead.
+        final ThemeData t = buildAppTheme(brightness);
+        const Set<WidgetState> selected = <WidgetState>{WidgetState.selected};
+        expect(
+          t.navigationBarTheme.iconTheme?.resolve(selected)?.color,
+          p.onSignalSoft,
+        );
+        expect(t.navigationRailTheme.selectedIconTheme?.color, p.onSignalSoft);
+        expect(t.navigationDrawerTheme.indicatorColor, p.signalSoft);
+        expect(
+          t.navigationDrawerTheme.iconTheme?.resolve(selected)?.color,
+          p.onSignalSoft,
+        );
+        expect(
+          t.navigationDrawerTheme.labelTextStyle?.resolve(selected)?.color,
+          p.onSignalSoft,
+        );
+        expect(t.chipTheme.selectedColor, p.signalSoft);
+        expect(t.chipTheme.checkmarkColor, p.onSignalSoft);
+        expect(
+          WidgetStateProperty.resolveAs<Color?>(
+            t.chipTheme.labelStyle?.color,
+            selected,
+          ),
+          p.onSignalSoft,
+        );
+        final ButtonStyle? segment = t.segmentedButtonTheme.style;
+        expect(segment?.backgroundColor?.resolve(selected), p.signalSoft);
+        expect(segment?.foregroundColor?.resolve(selected), p.onSignalSoft);
+        expect(segment?.iconColor?.resolve(selected), p.onSignalSoft);
+        // The pressed layer on a selected segment follows its text color.
+        final Color? pressed = segment?.overlayColor?.resolve(
+          const <WidgetState>{WidgetState.selected, WidgetState.pressed},
+        );
+        expect(pressed?.a, greaterThan(0));
+        expect(pressed?.withValues(alpha: 1), p.onSignalSoft);
+        expect(t.sliderTheme.inactiveTrackColor, p.signalSoft);
+        expect(
+          t.sliderTheme.inactiveTickMarkColor,
+          p.onSignalSoft.withValues(alpha: 0.38),
+        );
+        expect(t.progressIndicatorTheme.linearTrackColor, p.signalSoft);
+        expect(t.datePickerTheme.rangeSelectionBackgroundColor, p.signalSoft);
+      });
+
       test('themes components with tokens and without elevation', () {
         final ThemeData t = buildAppTheme(brightness);
         expect(t.appBarTheme.backgroundColor, p.canvas);
@@ -283,6 +330,48 @@ void main() {
       );
       await tester.pumpAndSettle();
       semantics.dispose();
+    });
+
+    testWidgets('puts titleKey and detailKey on the title and the detail', (
+      tester,
+    ) async {
+      const Key titleKey = ValueKey<String>('inbox-gap');
+      const Key detailKey = ValueKey<String>('inbox-after-wiring');
+      await tester.pumpWidget(
+        _app(
+          Brightness.light,
+          const Scaffold(
+            body: StatusPanel(
+              icon: Icons.inbox_outlined,
+              title: '收件箱还没接上',
+              detail: '接好之后，新消息会出现在这里',
+              titleKey: titleKey,
+              detailKey: detailKey,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<Text>(find.byKey(titleKey)).data, '收件箱还没接上');
+      expect(tester.widget<Text>(find.byKey(detailKey)).data, '接好之后，新消息会出现在这里');
+
+      // Without a detail nothing carries detailKey.
+      await tester.pumpWidget(
+        _app(
+          Brightness.light,
+          const Scaffold(
+            body: StatusPanel(
+              icon: Icons.inbox_outlined,
+              title: '收件箱还没接上',
+              titleKey: titleKey,
+              detailKey: detailKey,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(titleKey), findsOneWidget);
+      expect(find.byKey(detailKey), findsNothing);
     });
 
     testWidgets('appears at once with reduced motion', (tester) async {
