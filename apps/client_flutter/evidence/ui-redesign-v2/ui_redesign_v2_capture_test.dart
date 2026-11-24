@@ -115,6 +115,72 @@ final List<CaptureScenario> captureScenarios = [
       model.update((m) => m.busy = true);
     },
   ),
+  // Settings, opened with the title-bar button: the top of the list.
+  CaptureScenario(
+    'settings',
+    () => CaptureModel(),
+    (tester, _) => openSettings(tester),
+  ),
+  // Settings scrolled to 我的 AI, which lists the own AI 小鲸.
+  CaptureScenario('settings-own-ai', () => CaptureModel(), (tester, _) async {
+    await openSettings(tester);
+    await scrollTo(tester, find.text('我的 AI'), '我的 AI', top: true);
+  }),
+  // The other tabs, opened from the navigation bar (phone) or rail (wide).
+  // CaptureModel is not a ClientRuntime, so on 0300369 the shell wires no
+  // host loaders into 联系人, 动态 and 收件箱: they show their offline state.
+  CaptureScenario(
+    'contacts',
+    () => CaptureModel(),
+    (tester, _) => openTab(tester, '联系人'),
+  ),
+  CaptureScenario(
+    'creative',
+    () => CaptureModel(),
+    (tester, _) => openTab(tester, '动态'),
+  ),
+  CaptureScenario(
+    'inbox',
+    () => CaptureModel(),
+    (tester, _) => openTab(tester, '收件箱'),
+  ),
+  CaptureScenario(
+    'world',
+    () => CaptureModel(),
+    (tester, _) => openTab(tester, '世界'),
+  ),
+  // Pages pushed from settings. Without a ClientRuntime they get no host
+  // connection on 0300369.
+  CaptureScenario(
+    'voice',
+    () => CaptureModel(),
+    (tester, _) => openFromSettings(tester, 'open-voice-profile', '语音音色'),
+  ),
+  CaptureScenario(
+    'voice-calls',
+    () => CaptureModel(),
+    (tester, _) => openFromSettings(tester, 'open-voice-call-list', '语音通话列表'),
+  ),
+  CaptureScenario(
+    'ai-config-check',
+    () => CaptureModel(),
+    (tester, _) => openFromSettings(tester, 'open-ai-config', 'AI 运行配置体检'),
+  ),
+  CaptureScenario(
+    'ai-config-edit',
+    () => CaptureModel(),
+    (tester, _) => openFromSettings(tester, 'open-ai-config-write', 'AI 运行配置'),
+  ),
+  // Onboarding, step 1/3: signed out.
+  CaptureScenario('onboarding-host', () => CaptureModel(signedIn: false)),
+  // Step 2/3: signed in as account-a, world setup not done.
+  CaptureScenario('onboarding-character', () => CaptureModel(onboarded: false)),
+  // Step 3/3: the same after tapping 下一步.
+  CaptureScenario(
+    'onboarding-room',
+    () => CaptureModel(onboarded: false),
+    (tester, _) => tapText(tester, '下一步'),
+  ),
 ];
 
 const List<ShellConversation> sampleConversations = [
@@ -257,6 +323,137 @@ Future<void> openConversation(
   }
 }
 
+/// Opens settings with the title-bar button (tooltip 设置). Prints
+/// CAPTURE_WARN when the button is missing or the conversation list still
+/// shows afterwards.
+Future<void> openSettings(WidgetTester tester) async {
+  final button = find.byTooltip('设置');
+  if (button.evaluate().isEmpty) {
+    debugPrint('CAPTURE_WARN no settings button');
+    return;
+  }
+  await tester.tap(button.first, warnIfMissed: false);
+  await _settle(tester);
+  if (_listShowing()) {
+    debugPrint('CAPTURE_WARN the settings button left the list showing');
+  }
+}
+
+/// Opens the tab [label] by tapping it in the navigation bar (phone) or the
+/// rail (wide). Prints CAPTURE_WARN when the label is missing or the
+/// conversation list still shows afterwards.
+Future<void> openTab(WidgetTester tester, String label) async {
+  final tab = find.text(label);
+  if (tab.evaluate().isEmpty) {
+    debugPrint('CAPTURE_WARN no navigation label $label');
+    return;
+  }
+  await tester.tap(tab.last, warnIfMissed: false);
+  await _settle(tester);
+  if (_listShowing()) {
+    debugPrint('CAPTURE_WARN tapping $label left the list showing');
+  }
+}
+
+/// Opens settings, scrolls to the entry with key [key] (or else the text
+/// [title]) and taps it. Prints CAPTURE_WARN when the entry is missing or
+/// the tap pushed no page.
+Future<void> openFromSettings(
+  WidgetTester tester,
+  String key,
+  String title,
+) async {
+  await openSettings(tester);
+  final entry = find.byWidgetPredicate(
+    (widget) =>
+        widget.key == ValueKey(key) || (widget is Text && widget.data == title),
+    description: 'key $key or text $title',
+  );
+  if (!await scrollTo(tester, entry, title)) return;
+  await tester.tap(entry.first, warnIfMissed: false);
+  await _settle(tester);
+  final pushed = tester
+      .stateList<NavigatorState>(find.byType(Navigator))
+      .any((navigator) => navigator.canPop());
+  if (!pushed) debugPrint('CAPTURE_WARN tapping $title pushed no page');
+}
+
+/// Taps the button labelled [text]. Prints CAPTURE_WARN when it is missing
+/// or still shows afterwards.
+Future<void> tapText(WidgetTester tester, String text) async {
+  if (!await scrollTo(tester, find.text(text), text)) return;
+  await tester.tap(find.text(text).first, warnIfMissed: false);
+  await _settle(tester);
+  if (find.text(text).evaluate().isNotEmpty) {
+    debugPrint('CAPTURE_WARN $text still shows after tapping it');
+  }
+}
+
+/// Scrolls until [target] is built, then brings it into view when it is off
+/// screen (to the top of the view when [top]). The scroll offset is set
+/// directly instead of dragged, on the vertical scrollables in order of
+/// viewport height. Prints CAPTURE_WARN with each tried scrollable's
+/// offset/extent and returns false when [target] never appears.
+Future<bool> scrollTo(
+  WidgetTester tester,
+  Finder target,
+  String what, {
+  bool top = false,
+}) async {
+  final tried = <String>[];
+  if (target.evaluate().isEmpty) {
+    final scrollables = [
+      for (final state in tester.stateList<ScrollableState>(
+        find.byType(Scrollable),
+      ))
+        if (state.position.axis == Axis.vertical &&
+            state.position.hasViewportDimension &&
+            state.position.hasContentDimensions)
+          state,
+    ];
+    scrollables.sort(
+      (a, b) =>
+          b.position.viewportDimension.compareTo(a.position.viewportDimension),
+    );
+    for (final state in scrollables) {
+      if (!state.mounted) continue;
+      final position = state.position;
+      for (var step = 0; step < 200 && target.evaluate().isEmpty; step++) {
+        if (position.pixels >= position.maxScrollExtent) break;
+        final next = position.pixels + position.viewportDimension / 2;
+        position.jumpTo(
+          next < position.maxScrollExtent ? next : position.maxScrollExtent,
+        );
+        await tester.pump();
+      }
+      tried.add(
+        '${position.pixels.round()}/${position.maxScrollExtent.round()}',
+      );
+      if (target.evaluate().isNotEmpty) break;
+    }
+  }
+  if (target.evaluate().isEmpty) {
+    debugPrint(
+      'CAPTURE_WARN $what not found; vertical scrollables at offset/max: '
+      '${tried.isEmpty ? 'none' : tried.join(', ')}',
+    );
+    return false;
+  }
+  final rect = tester.getRect(target.first);
+  final height = tester.view.physicalSize.height / tester.view.devicePixelRatio;
+  if (top || rect.top < 0 || rect.bottom > height) {
+    await tester.ensureVisible(target.first);
+    await tester.pump();
+  }
+  return true;
+}
+
+/// Whether the conversation list shows: a sample conversation title is on
+/// screen. The companion's is skipped, since settings lists 小鲸 too.
+bool _listShowing() => sampleConversations
+    .where((conversation) => conversation.id != 'xiaojing')
+    .any((conversation) => find.text(conversation.title).evaluate().isNotEmpty);
+
 /// The user's own AI companion; its direct chat is `xiaojing`.
 const ShellOwnedAi sampleCompanion = ShellOwnedAi(
   accountId: 'ai-xiaojing',
@@ -265,19 +462,22 @@ const ShellOwnedAi sampleCompanion = ShellOwnedAi(
 );
 
 /// Signed in as account-a with [sampleCompanion] as the own AI (signed out
-/// and not onboarded when [signedIn] is false), online and without an error
-/// unless [online] or [error] say otherwise, nothing queued. Opening a
-/// conversation shows its entry in [messagesById] (none when absent).
+/// and not onboarded when [signedIn] is false), onboarded unless [onboarded]
+/// is false (a signed-in user then stays in onboarding), online and without
+/// an error unless [online] or [error] say otherwise, nothing queued.
+/// Opening a conversation shows its entry in [messagesById] (none when
+/// absent).
 class CaptureModel extends TestShellModel {
   CaptureModel({
     List<ShellConversation> conversations = sampleConversations,
     this.messagesById = const {},
     bool signedIn = true,
+    bool? onboarded,
     bool online = true,
     String? error,
   }) {
-    onboarded = signedIn;
-    chatEntered = signedIn;
+    this.onboarded = onboarded ?? signedIn;
+    chatEntered = this.onboarded;
     connectedAccountId = signedIn ? 'account-a' : null;
     this.online = online;
     this.error = error;
