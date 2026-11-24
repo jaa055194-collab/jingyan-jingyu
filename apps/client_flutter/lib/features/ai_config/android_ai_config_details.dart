@@ -448,15 +448,8 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
                     title: const Text('高级配置'),
                     subtitle: const Text('Provider、聊天绑定、预算与记忆'),
                     children: [
-                      if (_status case final status?)
-                        Text(
-                          status,
-                          style: TextStyle(
-                            color: _statusError
-                                ? theme.colorScheme.error
-                                : null,
-                          ),
-                        ),
+                      if (_status != null && _statusGroup == null)
+                        _writeStatusBlock(),
                       ..._advancedSections(generation),
                       ?_ownerMemoryNotes(generation),
                       ?_ownerAutoMemory(generation),
