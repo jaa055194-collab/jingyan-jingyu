@@ -1,7 +1,12 @@
 import 'package:material_ui/material_ui.dart';
 
-/// What a [StatusPanel] explains. The tone changes only the icon color and
-/// whether assistive technology announces the panel when it appears.
+import '../ui/jy_motion.dart';
+import '../ui/jy_palette.dart';
+import '../ui/jy_tokens.dart';
+
+/// What a [StatusPanel] explains. The tone picks the colours of the icon
+/// badge and whether assistive technology announces the panel when it
+/// appears.
 enum StatusTone {
   /// Nothing to show yet. A normal, calm state.
   empty,
@@ -14,10 +19,13 @@ enum StatusTone {
 }
 
 /// A quiet explanation of why a surface is empty, offline or failed, with at
-/// most one way forward.
+/// most one way forward (MASTER.md section 6).
 ///
-/// It fades in over [fadeDuration] so a state that resolves a moment later
-/// does not flash, and appears at once when the platform disables animations.
+/// A soft icon badge sits above the title and the detail. The badge is
+/// decorative and hidden from screen readers; the text carries the message.
+/// The panel fades in and rises [JySpace.sm] over [fadeDuration], so a state
+/// that resolves a moment later does not flash; with reduced motion it
+/// appears at once.
 class StatusPanel extends StatelessWidget {
   const StatusPanel({
     super.key,
@@ -40,47 +48,41 @@ class StatusPanel extends StatelessWidget {
   /// pane; leave it off inside a list.
   final bool fill;
 
-  static const fadeDuration = Duration(milliseconds: 220);
+  /// How long the entrance takes.
+  static const Duration fadeDuration = JyDurations.standard;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    Widget panel = Semantics(
+    final TextTheme text = Theme.of(context).textTheme;
+    final JyPalette palette = JyPalette.of(context);
+    final bool reduced = JyMotion.reducedOf(context);
+    final Widget panel = Semantics(
       container: true,
       liveRegion: tone == StatusTone.error,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 420),
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(JySpace.xxl),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                size: 32,
-                color: tone == StatusTone.error
-                    ? colors.error
-                    : colors.onSurfaceVariant,
-              ),
-              const SizedBox(height: 12),
+            children: <Widget>[
+              _ToneBadge(icon: icon, tone: tone, palette: palette),
+              const SizedBox(height: JySpace.lg),
               Text(
                 title,
                 textAlign: TextAlign.center,
-                style: theme.textTheme.titleMedium,
+                style: text.titleMedium?.copyWith(color: palette.text1),
               ),
-              if (detail case final text?) ...[
-                const SizedBox(height: 4),
+              if (detail case final String line) ...<Widget>[
+                const SizedBox(height: JySpace.xs),
                 Text(
-                  text,
+                  line,
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: colors.onSurfaceVariant,
-                  ),
+                  style: text.bodyMedium?.copyWith(color: palette.text2),
                 ),
               ],
-              if (action case final button?) ...[
-                const SizedBox(height: 16),
+              if (action case final Widget button) ...<Widget>[
+                const SizedBox(height: JySpace.xl),
                 button,
               ],
             ],
@@ -88,30 +90,88 @@ class StatusPanel extends StatelessWidget {
         ),
       ),
     );
-    if (!(MediaQuery.maybeDisableAnimationsOf(context) ?? false)) {
-      panel = TweenAnimationBuilder<double>(
-        tween: Tween<double>(begin: 0, end: 1),
-        duration: fadeDuration,
-        curve: Curves.easeOut,
-        // Kept in the semantics tree from the first frame, so an error is
-        // announced at once rather than after the fade.
-        builder: (_, opacity, child) => Opacity(
-          opacity: opacity,
-          alwaysIncludeSemantics: true,
-          child: child,
-        ),
-        child: panel,
-      );
+    // With reduced motion the panel appears at once. Otherwise only opacity
+    // and a translation animate, over a repaint boundary; the panel is in the
+    // semantics tree from the first frame, so an error is announced at once
+    // rather than after the fade.
+    final Widget entering = reduced
+        ? panel
+        : TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: 0, end: 1),
+            duration: fadeDuration,
+            curve: JyCurves.enter,
+            builder: (BuildContext context, double t, Widget? child) => Opacity(
+              opacity: t,
+              alwaysIncludeSemantics: true,
+              child: Transform.translate(
+                offset: Offset(0, JySpace.sm * (1 - t)),
+                child: child,
+              ),
+            ),
+            child: RepaintBoundary(child: panel),
+          );
+    if (!fill) {
+      return Center(child: entering);
     }
-    if (!fill) return Center(child: panel);
     return LayoutBuilder(
-      builder: (_, constraints) => SingleChildScrollView(
-        primary: false,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minHeight: constraints.hasBoundedHeight ? constraints.maxHeight : 0,
+      builder: (BuildContext context, BoxConstraints constraints) =>
+          SingleChildScrollView(
+            primary: false,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: constraints.hasBoundedHeight
+                    ? constraints.maxHeight
+                    : 0,
+              ),
+              child: Center(child: entering),
+            ),
           ),
-          child: Center(child: panel),
+    );
+  }
+}
+
+/// The icon on a soft superellipse: `raised` with a hairline edge when empty
+/// or offline, `dangerSoft` for an error.
+class _ToneBadge extends StatelessWidget {
+  const _ToneBadge({
+    required this.icon,
+    required this.tone,
+    required this.palette,
+  });
+
+  final IconData icon;
+  final StatusTone tone;
+  final JyPalette palette;
+
+  static const double _size = 56;
+  static const double _iconSize = 28;
+
+  @override
+  Widget build(BuildContext context) {
+    final (Color fill, Color ink, BorderSide edge) = switch (tone) {
+      StatusTone.empty => (
+        palette.raised,
+        palette.text2,
+        BorderSide(color: palette.hairline),
+      ),
+      StatusTone.offline => (
+        palette.raised,
+        palette.warning,
+        BorderSide(color: palette.hairline),
+      ),
+      StatusTone.error => (palette.dangerSoft, palette.danger, BorderSide.none),
+    };
+    return ExcludeSemantics(
+      child: DecoratedBox(
+        decoration: ShapeDecoration(
+          color: fill,
+          shape: JyShapes.rounded(JyRadius.lg, side: edge),
+        ),
+        child: SizedBox.square(
+          dimension: _size,
+          child: Center(
+            child: Icon(icon, size: _iconSize, color: ink),
+          ),
         ),
       ),
     );

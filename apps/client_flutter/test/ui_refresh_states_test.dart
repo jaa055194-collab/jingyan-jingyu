@@ -3,6 +3,7 @@ import 'package:client_flutter/app/shell_app.dart';
 import 'package:client_flutter/app/shell_view_model.dart';
 import 'package:client_flutter/app/status_panel.dart';
 import 'package:client_flutter/features/chat/chat_pane.dart';
+import 'package:client_flutter/ui/jy_palette.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -237,21 +238,18 @@ void main() {
     });
   });
 
-  testWidgets('light and dark themes build from the single accent seed', (
+  testWidgets('light and dark themes build from the Jingyu palette', (
     tester,
   ) async {
-    expect(appAccentSeed, const Color(0xff16776e));
+    expect(appAccentSeed, JyPalette.light.signal);
     for (final brightness in Brightness.values) {
       final theme = buildAppTheme(brightness);
-      final seeded = ColorScheme.fromSeed(
-        seedColor: const Color(0xff16776e),
-        brightness: brightness,
-      );
+      final palette = JyPalette.fallback(brightness);
       expect(theme.useMaterial3, isTrue);
       expect(theme.colorScheme.brightness, brightness);
-      expect(theme.colorScheme.primary, seeded.primary);
-      expect(theme.colorScheme.onPrimary, seeded.onPrimary);
-      expect(theme.colorScheme.secondary, seeded.secondary);
+      expect(theme.colorScheme.primary, palette.signal);
+      expect(theme.colorScheme.onPrimary, palette.onSignal);
+      expect(theme.colorScheme.secondary, palette.ember);
       await tester.pumpWidget(
         MaterialApp(
           theme: theme,
