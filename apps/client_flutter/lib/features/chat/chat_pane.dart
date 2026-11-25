@@ -1,7 +1,16 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 
 import '../../app/shell_view_model.dart';
+import '../../app/status_panel.dart';
+import '../favorites/favorites_screen.dart';
+import 'chat_pins_dialog.dart';
+import 'message_favorite_action.dart';
+import 'message_operations_ui.dart';
+import 'scheduled_messages_dialog.dart';
+import 'voice_message_playback.dart';
 
 class ConversationList extends StatelessWidget {
   const ConversationList({
@@ -52,17 +61,16 @@ class ConversationList extends StatelessWidget {
         icon: const Icon(Icons.refresh),
         label: const Text('刷新会话'),
       ),
+      if (FavoritesScreen.canOpen(model))
+        TextButton.icon(
+          key: const Key('open-favorites'),
+          onPressed: () => FavoritesScreen.open(context, model),
+          icon: const Icon(Icons.bookmark_border),
+          label: const Text('我的收藏'),
+        ),
       Expanded(
         child: model.conversations.isEmpty
-            ? const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                    '暂无会话\n连接宿主后，将显示可用的聊天。',
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              )
+            ? _ConversationsStatus(model: model)
             : ListView(
                 children: [
                   for (final conversation in model.conversations)
@@ -94,6 +102,61 @@ class ConversationList extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// Why the conversation list is empty, most specific cause first: not signed
+/// in, offline, a failed read, then an account that simply has no chats yet.
+class _ConversationsStatus extends StatelessWidget {
+  const _ConversationsStatus({required this.model});
+  final ShellViewModel model;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!model.authenticated) {
+      return const StatusPanel(
+        key: ValueKey('conversations-signed-out'),
+        fill: true,
+        tone: StatusTone.offline,
+        icon: Icons.link_off,
+        title: '尚未连接宿主',
+        detail: '登录宿主后，这里会显示你的聊天。',
+      );
+    }
+    if (!model.online) {
+      return const StatusPanel(
+        key: ValueKey('conversations-offline'),
+        fill: true,
+        tone: StatusTone.offline,
+        icon: Icons.cloud_off_outlined,
+        title: '暂时离线',
+        detail: '恢复连接后，会显示你的聊天。',
+      );
+    }
+    if (model.error != null) {
+      return StatusPanel(
+        key: const ValueKey('conversations-error'),
+        fill: true,
+        tone: StatusTone.error,
+        icon: Icons.error_outline,
+        title: '没有可显示的会话',
+        detail: '出错原因见页面顶部的提示。可以重新读取，或稍后再试。',
+        action: OutlinedButton(
+          key: const Key('conversations-retry'),
+          onPressed: model.locked || model.busy
+              ? null
+              : model.refreshConversations,
+          child: const Text('重新读取'),
+        ),
+      );
+    }
+    return const StatusPanel(
+      key: ValueKey('conversations-empty'),
+      fill: true,
+      icon: Icons.forum_outlined,
+      title: '暂无会话',
+      detail: '可以创建群聊，或等好友发来消息。',
+    );
+  }
 }
 
 class _GroupActionDialog extends StatefulWidget {
@@ -317,23 +380,194 @@ class _GroupActionDialogState extends State<_GroupActionDialog> {
 }
 
 class ChatPane extends StatefulWidget {
-  const ChatPane({super.key, required this.model, this.onBack});
+  const ChatPane({
+    super.key,
+    required this.model,
+    this.onBack,
+    this.openRevision = 0,
+  });
   final ShellViewModel model;
   final VoidCallback? onBack;
+  final int openRevision;
   @override
   State<ChatPane> createState() => _ChatPaneState();
 }
 
 class _ChatPaneState extends State<ChatPane> {
   final composer = TextEditingController();
+  ModalRoute<dynamic>? _voiceRoute;
+  bool _paneActive = true;
+  int _favoriteViewRevision = 0;
+  List<Listenable> _navigationChanges = const [];
+  bool _favoriteViewRefreshQueued = false;
+  // Keep one tear-off so an old pane can stop only the attempt it owns.
+  late final bool Function() _voiceViewIsCurrent = _isVoiceViewCurrent;
+  bool _isVoiceViewCurrent() =>
+      mounted && _paneActive && (_voiceRoute?.isCurrent ?? true);
+
+  void _onFavoriteNavigationChanged() {
+    // The shell's Navigator observer reports even a push and pop between
+    // frames. Retire the old control synchronously before any callback runs.
+    _favoriteViewRevision++;
+    if (_favoriteViewRefreshQueued) return;
+    _favoriteViewRefreshQueued = true;
+    scheduleMicrotask(() {
+      _favoriteViewRefreshQueued = false;
+      if (mounted && _paneActive) setState(() {});
+    });
+  }
+
+  void _removeNavigationListeners() {
+    for (final changes in _navigationChanges) {
+      changes.removeListener(_onFavoriteNavigationChanged);
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (!identical(route, _voiceRoute) || route?.isCurrent == false) {
+      _favoriteViewRevision++;
+    }
+    _voiceRoute = route;
+    _removeNavigationListeners();
+    _navigationChanges =
+        route?.navigator?.widget.observers.whereType<Listenable>().toList() ??
+        const [];
+    for (final changes in _navigationChanges) {
+      changes.addListener(_onFavoriteNavigationChanged);
+    }
+    if (!_voiceViewIsCurrent()) _stopVoice();
+  }
+
+  @override
+  void didUpdateWidget(ChatPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.model, widget.model)) {
+      _favoriteViewRevision++;
+      oldWidget.model.stopVoicePlayback(viewIsCurrent: _voiceViewIsCurrent);
+    }
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    _paneActive = true;
+  }
+
+  @override
+  void deactivate() {
+    _paneActive = false;
+    _favoriteViewRevision++;
+    _stopVoice();
+    super.deactivate();
+  }
+
   @override
   void dispose() {
+    _removeNavigationListeners();
+    _stopVoice();
     composer.dispose();
     super.dispose();
   }
 
+  void _stopVoice() =>
+      widget.model.stopVoicePlayback(viewIsCurrent: _voiceViewIsCurrent);
+
+  void _playVoice(ShellMessage message) {
+    widget.model.playVoiceMessage(
+      message.id,
+      viewIsCurrent: _voiceViewIsCurrent,
+      waitForView: () => WidgetsBinding.instance.endOfFrame,
+    );
+  }
+
+  Future<void> _openMessageActions(
+    ShellMessage message, {
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async {
+    if (!_isVoiceViewCurrent() || !viewIsCurrent()) return;
+    await openMessageActions(
+      context,
+      model: widget.model,
+      message: message,
+      conversationId: widget.model.selectedConversationId!,
+      expectedContext: expectedContext,
+      viewIsCurrent: viewIsCurrent,
+    );
+  }
+
+  /// Explicit, bounded image open. Nothing is fetched until the user taps.
+  Future<void> _openImage(ShellMessage message) async {
+    final model = widget.model;
+    final account = model.connectedAccountId;
+    final conversation = model.selectedConversationId;
+    final image = await model.openImageAttachment(message.id);
+    if (!mounted) return;
+    if (image == null) {
+      if (!model.locked) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('图片暂不可用；不会自动重试。')));
+      }
+      return;
+    }
+    if (!model.authenticated ||
+        model.locked ||
+        model.connectedAccountId != account ||
+        model.selectedConversationId != conversation) {
+      return;
+    }
+    final provider = MemoryImage(image.bytes);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('message-image-dialog'),
+        title: Text(message.attachmentName ?? '图片'),
+        content: SizedBox(
+          width: 360,
+          child: Image.memory(
+            image.bytes,
+            fit: BoxFit.contain,
+            cacheWidth: 1080,
+            cacheHeight: 1080,
+            errorBuilder: (_, _, _) => const Text('图片无法显示。'),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              provider.evict();
+              Navigator.of(dialogContext).pop();
+            },
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+    provider.evict();
+  }
+
   Future<void> attach(String kind) async {
     final model = widget.model;
+    final account = model.connectedAccountId;
+    final conversation = model.selectedConversationId;
+    final session = model.ownAiSessionContext;
+    bool current() =>
+        mounted &&
+        identical(widget.model, model) &&
+        account != null &&
+        conversation != null &&
+        model.connectedAccountId == account &&
+        model.selectedConversationId == conversation &&
+        model.ownAiSessionContext == session &&
+        model.authenticated &&
+        !model.busy &&
+        !model.locked;
+
+    if (!current()) return;
     if (!model.aiConsentGranted) {
       final granted = await showDialog<bool>(
         context: context,
@@ -354,9 +588,9 @@ class _ChatPaneState extends State<ChatPane> {
           ],
         ),
       );
-      if (granted != true || !mounted) return;
+      if (granted != true || !current()) return;
       await model.setAiConsent(true);
-      if (!model.aiConsentGranted || model.error != null || !mounted) return;
+      if (!current() || !model.aiConsentGranted || model.error != null) return;
     }
     await model.attachFile(kind);
   }
@@ -364,9 +598,48 @@ class _ChatPaneState extends State<ChatPane> {
   @override
   Widget build(BuildContext context) {
     final model = widget.model;
-    if (model.selectedConversationId == null) {
-      return const Center(child: Text('选择一个会话，开始聊天'));
+    final conversationId = model.selectedConversationId;
+    if (conversationId == null) {
+      return const StatusPanel(
+        fill: true,
+        icon: Icons.chat_bubble_outline,
+        title: '选择一个会话，开始聊天',
+      );
     }
+    final messages = model.messages;
+    final messageIndices = {
+      for (var i = 0; i < messages.length; i++)
+        messages[i].id: messages.length - 1 - i,
+    };
+    final favoriteContext = model.messageFavoriteContext;
+    final favoriteViewRevision = _favoriteViewRevision;
+    final favoriteAccount = model.connectedAccountId;
+    final favoriteSession = model.ownAiSessionContext;
+    bool favoriteViewIsCurrent() =>
+        mounted &&
+        _paneActive &&
+        identical(widget.model, model) &&
+        _favoriteViewRevision == favoriteViewRevision &&
+        _voiceRoute?.isCurrent == true &&
+        model.authenticated &&
+        !model.locked &&
+        model.connectedAccountId == favoriteAccount &&
+        model.ownAiSessionContext == favoriteSession &&
+        model.selectedConversationId == conversationId &&
+        model.messageFavoriteContext == favoriteContext;
+
+    final operationsContext = model.messageOperationsContext;
+    // Our own sheet/confirmation routes cover this pane, so they use the
+    // session and selection pins rather than requiring the pane's route on top.
+    bool operationsViewIsCurrent() =>
+        mounted &&
+        _paneActive &&
+        identical(widget.model, model) &&
+        model.authenticated &&
+        !model.locked &&
+        model.selectedConversationId == conversationId &&
+        model.messageOperationsContext == operationsContext;
+
     if (composer.text != model.draft) {
       composer.value = TextEditingValue(
         text: model.draft,
@@ -377,6 +650,65 @@ class _ChatPaneState extends State<ChatPane> {
       (c) => c.id == model.selectedConversationId,
     );
     final title = selected.isEmpty ? '聊天' : selected.first.title;
+    final attachmentName = model.selectedAttachmentName;
+    final canManageAttachment =
+        model.authenticated && !model.busy && !model.locked;
+    final canSendAttachment = canManageAttachment && model.online;
+    final showVoice =
+        model.supportsVoicePlayback && model.authenticated && !model.locked;
+    final voice = showVoice ? model.voicePlayback : null;
+    final voiceActive =
+        voice?.phase == ShellVoicePhase.loading ||
+        voice?.phase == ShellVoicePhase.playing;
+    final scheduleScope = model.scheduledMessagesScope(conversationId);
+    final chatActions = <Widget>[
+      if (scheduleScope != null)
+        IconButton(
+          key: const Key('open-scheduled-messages'),
+          tooltip: '定时消息',
+          icon: const Icon(Icons.schedule_send_outlined),
+          onPressed: () {
+            if (!_isVoiceViewCurrent() || !scheduleScope.isCurrent()) return;
+            openScheduledMessages(
+              context,
+              model: model,
+              conversationId: conversationId,
+              scope: scheduleScope,
+            );
+          },
+        ),
+      if (model.supportsChatPins && operationsContext != null)
+        IconButton(
+          key: const Key('open-chat-pins'),
+          tooltip: '置顶消息',
+          icon: const Icon(Icons.push_pin_outlined),
+          onPressed: () {
+            if (!_isVoiceViewCurrent() || !operationsViewIsCurrent()) return;
+            openChatPins(
+              context,
+              model: model,
+              conversationId: conversationId,
+              expectedContext: operationsContext,
+              viewIsCurrent: operationsViewIsCurrent,
+            );
+          },
+        ),
+      if (model.canAddMembersToSelectedGroup)
+        IconButton(
+          key: const Key('add-group-member'),
+          tooltip: '添加成员',
+          icon: const Icon(Icons.person_add_outlined),
+          onPressed: !model.busy && model.online && !model.locked
+              ? () => showDialog<void>(
+                  context: context,
+                  builder: (_) => _GroupActionDialog(
+                    model: model,
+                    groupId: model.selectedConversationId,
+                  ),
+                )
+              : null,
+        ),
+    ];
     return Column(
       children: [
         ListTile(
@@ -389,22 +721,9 @@ class _ChatPaneState extends State<ChatPane> {
                 ),
           title: Text(title),
           subtitle: Text(model.online ? '已连接' : '离线 · 消息将加入待发送队列'),
-          trailing: model.canAddMembersToSelectedGroup
-              ? IconButton(
-                  key: const Key('add-group-member'),
-                  tooltip: '添加成员',
-                  icon: const Icon(Icons.person_add_outlined),
-                  onPressed: !model.busy && model.online && !model.locked
-                      ? () => showDialog<void>(
-                          context: context,
-                          builder: (_) => _GroupActionDialog(
-                            model: model,
-                            groupId: model.selectedConversationId,
-                          ),
-                        )
-                      : null,
-                )
-              : null,
+          trailing: chatActions.isEmpty
+              ? null
+              : Row(mainAxisSize: MainAxisSize.min, children: chatActions),
         ),
         const Divider(height: 1),
         if (model.queuedCount > 0)
@@ -416,14 +735,39 @@ class _ChatPaneState extends State<ChatPane> {
             ),
           ),
         Expanded(
-          child: model.messages.isEmpty
-              ? const Center(child: Text('还没有消息'))
+          child: messages.isEmpty
+              ? StatusPanel(
+                  key: ValueKey(('no-messages', conversationId)),
+                  fill: true,
+                  tone: model.online ? StatusTone.empty : StatusTone.offline,
+                  icon: model.online
+                      ? Icons.chat_outlined
+                      : Icons.cloud_off_outlined,
+                  title: '还没有消息',
+                  detail: model.online
+                      ? '发一条消息，开始这段对话。'
+                      : '离线时发出的文字消息会先排队，联网后会自动尝试发送。',
+                )
               : ListView.builder(
+                  key: ValueKey((
+                    model,
+                    favoriteAccount,
+                    favoriteSession,
+                    conversationId,
+                    widget.openRevision,
+                  )),
+                  // Offset zero is the newest edge, even for lazily laid-out
+                  // history. Invert indices so rows still read oldest to newest.
+                  reverse: true,
                   padding: const EdgeInsets.all(16),
-                  itemCount: model.messages.length,
+                  itemCount: messages.length,
+                  findChildIndexCallback: (key) => key is ValueKey<String>
+                      ? messageIndices[key.value]
+                      : null,
                   itemBuilder: (context, index) {
-                    final message = model.messages[index];
+                    final message = messages[messages.length - 1 - index];
                     return Align(
+                      key: ValueKey(message.id),
                       alignment: message.outgoing
                           ? Alignment.centerRight
                           : Alignment.centerLeft,
@@ -443,12 +787,114 @@ class _ChatPaneState extends State<ChatPane> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              SelectableText(message.text),
-                              const SizedBox(height: 4),
-                              Text(
-                                message.status,
-                                style: Theme.of(context).textTheme.labelSmall,
-                              ),
+                              if (message.recalled)
+                                Text(
+                                  '消息已撤回',
+                                  key: Key('message-recalled-${message.id}'),
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(fontStyle: FontStyle.italic),
+                                )
+                              else
+                                SelectableText(message.text),
+                              if (!message.recalled &&
+                                  message.imageAttachment &&
+                                  message.attachmentId != null)
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    key: Key('open-image-${message.id}'),
+                                    onPressed: model.busy || model.locked
+                                        ? null
+                                        : () => _openImage(message),
+                                    icon: const Icon(
+                                      Icons.image_outlined,
+                                      size: 18,
+                                    ),
+                                    label: const Text('查看图片'),
+                                  ),
+                                ),
+                              if (!message.recalled &&
+                                  showVoice &&
+                                  message.voiceAttachment)
+                                VoiceMessagePlaybackControl(
+                                  messageId: message.id,
+                                  phase: voice?.messageId == message.id
+                                      ? voice?.phase
+                                      : null,
+                                  onPlay:
+                                      model.online &&
+                                          !model.busy &&
+                                          !voiceActive
+                                      ? () => _playVoice(message)
+                                      : null,
+                                  onStop: _stopVoice,
+                                ),
+                              if (!message.recalled &&
+                                  message.favoriteEligible &&
+                                  favoriteContext != null &&
+                                  favoriteViewIsCurrent())
+                                MessageFavoriteAction(
+                                  key: ValueKey((
+                                    favoriteViewRevision,
+                                    favoriteContext,
+                                    conversationId,
+                                    message.id,
+                                  )),
+                                  model: model,
+                                  conversationId: conversationId,
+                                  messageId: message.id,
+                                  expectedContext: favoriteContext,
+                                  viewIsCurrent: favoriteViewIsCurrent,
+                                ),
+                              if (!message.recalled) ...[
+                                const SizedBox(height: 4),
+                                Wrap(
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  spacing: 8,
+                                  children: [
+                                    Text(
+                                      message.status,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelSmall,
+                                    ),
+                                    if (message.edited)
+                                      Text(
+                                        '已编辑',
+                                        key: Key(
+                                          'message-edited-${message.id}',
+                                        ),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelSmall,
+                                      ),
+                                    if (operationsContext != null &&
+                                        (message.canCopy ||
+                                            message.canEdit ||
+                                            message.canRecall ||
+                                            (message.operationEligible &&
+                                                (model.supportsChatPins ||
+                                                    model
+                                                        .supportsMessageReactions))))
+                                      IconButton(
+                                        key: Key(
+                                          'message-actions-${message.id}',
+                                        ),
+                                        tooltip: '消息操作',
+                                        onPressed: () => _openMessageActions(
+                                          message,
+                                          expectedContext: operationsContext,
+                                          viewIsCurrent:
+                                              operationsViewIsCurrent,
+                                        ),
+                                        icon: const Icon(
+                                          Icons.more_horiz,
+                                          size: 20,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -484,6 +930,36 @@ class _ChatPaneState extends State<ChatPane> {
               label: const Text('提及 AI 并发送'),
             ),
           ),
+        if (attachmentName != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Tooltip(
+                    message: attachmentName,
+                    child: Text(
+                      attachmentName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: canManageAttachment
+                      ? model.discardSelectedAttachment
+                      : null,
+                  child: const Text('取消附件'),
+                ),
+                FilledButton(
+                  onPressed: canSendAttachment
+                      ? model.sendSelectedAttachment
+                      : null,
+                  child: const Text('发送附件'),
+                ),
+              ],
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.all(8),
           child: Row(
@@ -491,12 +967,12 @@ class _ChatPaneState extends State<ChatPane> {
             children: [
               IconButton(
                 tooltip: '添加图片',
-                onPressed: model.busy ? null : () => attach('image'),
+                onPressed: canManageAttachment ? () => attach('image') : null,
                 icon: const Icon(Icons.image_outlined),
               ),
               IconButton(
                 tooltip: '添加文件',
-                onPressed: model.busy ? null : () => attach('file'),
+                onPressed: canManageAttachment ? () => attach('file') : null,
                 icon: const Icon(Icons.attach_file),
               ),
               Expanded(

@@ -116,18 +116,22 @@ class Outbox {
     MessageKind kind,
     Map<String, Object?> body,
   ) {
-    final id = _newId();
-    _items.add(
-      OutboxItem(
-        conversationId: conversationId,
-        clientMsgId: id,
-        kind: kind,
-        body: body,
-        queuedAt: _clock.now(),
-      ),
-    );
-    return id;
+    final item = _newItem(conversationId, kind, body);
+    _items.add(item);
+    return item.clientMsgId;
   }
+
+  OutboxItem _newItem(
+    String conversationId,
+    MessageKind kind,
+    Map<String, Object?> body,
+  ) => OutboxItem(
+    conversationId: conversationId,
+    clientMsgId: _newId(),
+    kind: kind,
+    body: body,
+    queuedAt: _clock.now(),
+  );
 
   /// 恢复持久化条目（重启后调用）。保持原 clientMsgId。
   void restore(Iterable<OutboxItem> items) => _items.addAll(items);
@@ -195,4 +199,21 @@ class Outbox {
       code == FailureCode.unavailable ||
       code == FailureCode.rateLimited ||
       code == FailureCode.internal;
+}
+
+/// Package-internal support for the shell's serialized snapshot writes.
+extension OutboxCheckpoint on Outbox {
+  /// Stages an item until the checkpoint commits. The caller serializes all
+  /// queue mutations, and the callback must fail only before committing.
+  Future<String> enqueueWithCheckpoint(
+    String conversationId,
+    MessageKind kind,
+    Map<String, Object?> body,
+    Future<void> Function(OutboxItem) checkpoint,
+  ) async {
+    final item = _newItem(conversationId, kind, body);
+    await checkpoint(item);
+    _items.add(item);
+    return item.clientMsgId;
+  }
 }

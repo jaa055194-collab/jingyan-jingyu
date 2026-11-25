@@ -63,4 +63,33 @@ class OwnAiApi {
       throw const FormatException('AI账户创建响应无效');
     }
   }
+
+  /// Explicit one-shot logical removal: no body, query, redirect, authentication
+  /// replay or automatic retry. A transport or response-validation failure may
+  /// follow a committed removal; callers must refresh instead of retrying.
+  Future<void> remove(String accountId) async {
+    final String id;
+    try {
+      id = AccountId.parse(accountId).value;
+    } on FormatException {
+      throw const FormatException('AI账户 ID 无效');
+    }
+    final path = Routes.ownAiAccount.replaceFirst(
+      '{accountId}',
+      Uri.encodeComponent(id),
+    );
+    try {
+      final result = await connection.requestBoundedObject(
+        'DELETE',
+        path,
+        maxResponseBytes: 1024,
+        expectedStatus: 200,
+      );
+      if (result.length != 1 || result['removed'] != true) {
+        throw const FormatException('AI账户移除响应无效');
+      }
+    } on FormatException {
+      throw const FormatException('AI账户移除响应无效');
+    }
+  }
 }

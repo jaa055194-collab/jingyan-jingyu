@@ -12,8 +12,11 @@ import '../features/settings/settings_screen.dart';
 import '../features/world/world_screen.dart';
 import '../features/contacts/contacts_screen.dart';
 import '../net/friends_api.dart';
+import '../features/inbox/foreground_message_notice.dart';
 import '../features/inbox/inbox_screen.dart';
 import '../features/creative/creative_screen.dart';
+import '../features/share/shared_text_panel.dart';
+import 'app_theme.dart';
 
 class WhaleChatApp extends StatefulWidget {
   const WhaleChatApp({super.key, required this.model});
@@ -24,6 +27,9 @@ class WhaleChatApp extends StatefulWidget {
 }
 
 class _WhaleChatAppState extends State<WhaleChatApp> {
+  // Built once and shared: the shell rebuilds on every model notification.
+  static final _lightTheme = buildAppTheme(Brightness.light);
+  static final _darkTheme = buildAppTheme(Brightness.dark);
   final _navigation = _NavigationIntentObserver();
   ShellViewModel get model => widget.model;
 
@@ -34,17 +40,8 @@ class _WhaleChatAppState extends State<WhaleChatApp> {
       title: '鲸言鲸语',
       navigatorObservers: [_navigation],
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff16776e)),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xff16776e),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
+      theme: _lightTheme,
+      darkTheme: _darkTheme,
       themeMode: model.themeMode,
       builder: (context, child) => MediaQuery(
         data: MediaQuery.of(context).copyWith(
@@ -70,26 +67,30 @@ class _WhaleChatAppState extends State<WhaleChatApp> {
 
 // Observes route intent without altering any push, pop, or back behavior. A
 // generation tracks transient dialogs/pages even if the source is current again.
-class _NavigationIntentObserver extends NavigatorObserver {
+class _NavigationIntentObserver extends NavigatorObserver with ChangeNotifier {
   int generation = 0;
+
+  void advance() {
+    generation++;
+    notifyListeners();
+  }
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) =>
-      generation++;
+      advance();
   @override
-  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) =>
-      generation++;
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) => advance();
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) =>
-      generation++;
+      advance();
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
-      generation++;
+      advance();
   @override
   void didStartUserGesture(
     Route<dynamic> route,
     Route<dynamic>? previousRoute,
-  ) => generation++;
+  ) => advance();
 }
 
 class _ShellHome extends StatefulWidget {
@@ -104,6 +105,7 @@ class _ShellHomeState extends State<_ShellHome> {
   int destination = 0;
   bool settings = false;
   bool mobileChat = false;
+  int _chatOpenRevision = 0;
   static const labels = ['聊天', '联系人', '动态', '收件箱', '世界'];
   static const icons = [
     Icons.chat_bubble_outline,
@@ -113,9 +115,19 @@ class _ShellHomeState extends State<_ShellHome> {
     Icons.public,
   ];
   void select(String id) async {
-    await widget.model.selectConversation(id);
-    if (mounted && widget.model.selectedConversationId == id) {
-      setState(() => mobileChat = true);
+    final model = widget.model;
+    final account = model.connectedAccountId;
+    final session = model.ownAiSessionContext;
+    await model.selectConversation(id);
+    if (mounted &&
+        identical(widget.model, model) &&
+        model.connectedAccountId == account &&
+        model.ownAiSessionContext == session &&
+        model.selectedConversationId == id) {
+      setState(() {
+        mobileChat = true;
+        _chatOpenRevision++;
+      });
     }
   }
 
@@ -243,52 +255,108 @@ class _ShellHomeState extends State<_ShellHome> {
   Widget world() =>
       WorldScreen(model: widget.model, onOpenSetup: openWorldSetup);
 
-  /// Host-backed read-only creative loaders only when the runtime exposes a live
-  /// connection; otherwise the screen keeps its honest unbound/unknown state.
-  /// The shell only wires loaders here — tab layout and settings are untouched.
+  /// Report data stays inside the authenticated session that opened 动态.
+  /// Expanding a row reuses the authorized list payload, not another request.
   Widget creative() {
     final model = widget.model;
-    final HostConnection? connection = model is ClientRuntime
-        ? model.connection
-        : null;
+    if (model is! ClientRuntime) return const CreativeScreen();
+    final connection = model.connection;
     if (connection == null) return const CreativeScreen();
     final api = CreativeApi(connection);
     return CreativeScreen(
       loadReports: api.listReports,
       loadRadio: api.listRadio,
+      sessionChanges: model,
+      sessionContext: () {
+        final epoch = model.ownAiSessionContext;
+        if (!model.authenticated ||
+            model.locked ||
+            epoch == null ||
+            !identical(model.connection, connection)) {
+          return null;
+        }
+        return (model.connectedAccountId, epoch, connection);
+      },
     );
   }
 
-  /// Wire the contacts list and explicit invite actions only when the runtime
-  /// has a host connection. The screen never submits an action on load.
+  /// Wire the existing Contacts reads and writes to the live connection.
   Widget contacts() {
     final model = widget.model;
-    final HostConnection? connection = model is ClientRuntime
-        ? model.connection
-        : null;
+    if (model is! ClientRuntime) return const ContactsScreen();
+    final connection = model.connection;
     if (connection == null) return const ContactsScreen();
     final api = FriendsApi(connection);
+    final owner = model.connectedAccountId;
+    final session = model.ownAiSessionContext;
+    final navigation = widget.navigation;
+
+    ({String accountId, Object session})? requestContext() {
+      // Use the existing explicit-confirmation epoch so even a lock followed
+      // by an unlock of the same account invalidates an older confirmation.
+      final lockEpoch = model.ownAiDirectContext;
+      if (!mounted ||
+          !identical(widget.model, model) ||
+          destination != 1 ||
+          settings ||
+          !model.authenticated ||
+          model.locked ||
+          owner == null ||
+          model.connectedAccountId != owner ||
+          session == null ||
+          model.ownAiSessionContext != session ||
+          lockEpoch == null ||
+          !identical(model.connection, connection)) {
+        return null;
+      }
+      return (
+        accountId: owner,
+        session: (model, connection, session, lockEpoch),
+      );
+    }
+
     return ContactsScreen(
+      key: ValueKey((model, connection, owner, session)),
       loadFriends: api.list,
       acceptFriend: api.acceptFriend,
       denyFriend: api.denyFriend,
+      requestFriend: requestContext() == null ? null : api.requestFriend,
+      requestContext: requestContext,
+      requestChanges: Listenable.merge([model, navigation]),
+      navigationGeneration: () => navigation.generation,
     );
   }
 
-  /// Host-backed read-only notifications loader with the same semantics as
-  /// [creative]: wire [NotificationApi.readNotifications] only when the runtime
-  /// exposes a live connection; otherwise the inbox keeps its honest gap state.
-  /// The shell only wires loaders here — tab layout and settings are untouched.
+  /// Host-backed notifications loader with the same semantics as [creative]:
+  /// wire [NotificationApi.readNotifications] only when the runtime exposes a
+  /// live connection; otherwise the inbox keeps its honest gap state.
+  ///
+  /// Pending friend-request rows additionally reuse the existing
+  /// [FriendsApi.acceptFriend]/[FriendsApi.denyFriend] writes — the same
+  /// transport the contacts tab uses, never a second one — and only while the
+  /// runtime reports an authenticated, unlocked session. The epoch is the
+  /// runtime-issued session/lock identity: it becomes null on lock or logout and
+  /// changes on an account switch, so a pending confirmation or an in-flight
+  /// result is discarded instead of being published as a stale success. The
+  /// shell only wires these callbacks; tab layout and settings are untouched.
   Widget inbox() {
     final model = widget.model;
     final HostConnection? connection = model is ClientRuntime
         ? model.connection
         : null;
     if (connection == null) return const InboxScreen();
-    final api = NotificationApi(connection);
+    final notifications = NotificationApi(connection);
+    final friends = FriendsApi(connection);
+    Object? actionContext() => model.authenticated && !model.locked
+        ? '${model.connectedAccountId}|${model.ownAiSessionContext}'
+        : null;
     return InboxScreen(
       key: ObjectKey(connection),
-      loadNotifications: () => api.readNotifications(),
+      loadNotifications: () => notifications.readNotifications(),
+      acceptFriend: friends.acceptFriend,
+      denyFriend: friends.denyFriend,
+      actionContext: actionContext,
+      actionChanges: model,
     );
   }
 
@@ -330,11 +398,17 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
+  int? _noticeViewGeneration() =>
+      mounted && !settings && (destination == 1 || destination == 3)
+      ? widget.navigation.generation
+      : null;
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final wide = constraints.maxWidth >= 720;
       final model = widget.model;
+      final activity = model.foregroundMessageActivity;
       final showChat = destination == 0 && mobileChat && !settings;
       final content = settings
           ? SettingsScreen(
@@ -364,12 +438,18 @@ class _ShellHomeState extends State<_ShellHome> {
                   child: ConversationList(model: model, onSelected: select),
                 ),
                 const VerticalDivider(width: 1),
-                Expanded(child: ChatPane(model: model)),
+                Expanded(
+                  child: ChatPane(
+                    model: model,
+                    openRevision: _chatOpenRevision,
+                  ),
+                ),
               ],
             )
           : showChat
           ? ChatPane(
               model: model,
+              openRevision: _chatOpenRevision,
               onBack: () => setState(() => mobileChat = false),
             )
           : ConversationList(model: model, onSelected: select);
@@ -420,6 +500,26 @@ class _ShellHomeState extends State<_ShellHome> {
               Expanded(
                 child: Column(
                   children: [
+                    if (model.authenticated && !model.locked)
+                      SharedTextPanel(
+                        model: model,
+                        navigationGeneration: () =>
+                            widget.navigation.generation,
+                        navigationChanges: widget.navigation,
+                        onApplied: () async {
+                          if (!mounted ||
+                              !model.authenticated ||
+                              model.locked) {
+                            return;
+                          }
+                          setState(() {
+                            destination = 0;
+                            settings = false;
+                            if (!wide) mobileChat = true;
+                            _chatOpenRevision++;
+                          });
+                        },
+                      ),
                     if (model.busy) const LinearProgressIndicator(),
                     if (model.error != null)
                       Material(
@@ -442,6 +542,17 @@ class _ShellHomeState extends State<_ShellHome> {
                             ],
                           ),
                         ),
+                      ),
+                    if (activity != null &&
+                        model.authenticated &&
+                        !model.locked &&
+                        _noticeViewGeneration() != null)
+                      ForegroundMessageNotice(
+                        key: ValueKey(destination),
+                        model: model,
+                        activity: activity,
+                        navigation: widget.navigation,
+                        activeViewGeneration: _noticeViewGeneration,
                       ),
                     Expanded(child: content),
                   ],

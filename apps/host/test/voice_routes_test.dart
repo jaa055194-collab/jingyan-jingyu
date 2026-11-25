@@ -357,6 +357,55 @@ void main() {
       );
     });
 
+    Future<void> seedAdjacentCalls() async {
+      final older = await call(
+        'POST',
+        callsPath,
+        body: {'callId': 'micro-older', 'aiId': 'ai1'},
+      );
+      expect(older.status, 200);
+      clock.advance(const Duration(microseconds: 1));
+      final newer = await call(
+        'POST',
+        callsPath,
+        body: {'callId': 'micro-newer', 'aiId': 'ai1'},
+      );
+      expect(newer.status, 200);
+    }
+
+    Future<List<Map<String, Object?>>> listedCalls({
+      Map<String, String> query = const {},
+    }) async {
+      final response = await call('GET', callsPath, query: query);
+      expect(response.status, 200);
+      final json = response.json! as Map<String, Object?>;
+      return (json['calls']! as List).cast<Map<String, Object?>>();
+    }
+
+    test('limit applies after ordering calls one microsecond apart', () async {
+      await seedAdjacentCalls();
+      final page = await listedCalls(query: {'limit': '1'});
+      expect(page.map((c) => (c['callId'], c['startedAt'])), [
+        ('micro-newer', '2026-01-01T00:00:00.000001Z'),
+      ]);
+    });
+
+    for (final (id, timestamp, olderIds) in [
+      ('micro-newer', '2026-01-01T00:00:00.000001Z', ['micro-older']),
+      ('micro-older', '2026-01-01T00:00:00.000Z', <String>[]),
+    ]) {
+      test('before $timestamp returns only strictly older calls', () async {
+        await seedAdjacentCalls();
+        final all = await listedCalls();
+        final cursor =
+            all.singleWhere((c) => c['callId'] == id)['startedAt']! as String;
+        expect(cursor, timestamp);
+
+        final page = await listedCalls(query: {'before': cursor});
+        expect(page.map((c) => c['callId']), olderIds);
+      });
+    }
+
     test('unauthenticated, bad params and body are rejected', () async {
       await seed();
       expect((await call('GET', callsPath, token: '')).status, 401);

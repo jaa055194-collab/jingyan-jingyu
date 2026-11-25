@@ -60,7 +60,19 @@ const _migrations = [
   ...personaMigrations,
 ];
 const _question = '为什么这样？请解释原因。';
+const _nextQuestion = '为什么会不同？请解释原因。';
 const _answer = 'Synthetic S2 explanation';
+const _normalChoice = {
+  'message': {'role': 'assistant', 'content': _answer},
+};
+const _blankChoice = {
+  'message': {'role': 'assistant', 'content': ' \t\n'},
+};
+const _reportedUsage = {
+  'prompt_tokens': 7,
+  'completion_tokens': 3,
+  'total_tokens': 10,
+};
 
 void main() {
   late Directory directory;
@@ -77,6 +89,7 @@ void main() {
   ); // Profile ID deliberately differs from account.
   final guard = UrlGuard(resolver: (_) async => [InternetAddress('8.8.8.8')]);
   var providerCalls = 0, responseStatus = 200;
+  Object? responseChoice, responseUsage;
   List<Map<String, Object?>> received = [];
   Completer<void>? entered, release;
 
@@ -122,19 +135,8 @@ void main() {
               jsonEncode(
                 responseStatus == 200
                     ? {
-                        'choices': [
-                          {
-                            'message': {
-                              'role': 'assistant',
-                              'content': _answer,
-                            },
-                          },
-                        ],
-                        'usage': {
-                          'prompt_tokens': 7,
-                          'completion_tokens': 3,
-                          'total_tokens': 10,
-                        },
+                        'choices': [responseChoice],
+                        'usage': ?responseUsage,
                       }
                     : {
                         'error': {
@@ -168,13 +170,17 @@ void main() {
     );
   }
 
-  Future<AppendResult> send({String? conversation}) async {
+  Future<AppendResult> send({
+    String? conversation,
+    String clientMsgId = 'owner-complex-v1',
+    String text = _question,
+  }) async {
     final appended = await incoming.append(
       conversationId: conversation ?? direct,
       senderId: 'owner',
-      clientMsgId: 'owner-complex-v1',
+      clientMsgId: clientMsgId,
       kind: MessageKind.text,
-      body: const {'text': _question},
+      body: {'text': text},
     );
     expect(appended.isOk, isTrue);
     return appended.value;
@@ -200,6 +206,8 @@ void main() {
     cipher = AesGcmColumnCipher(List<int>.generate(32, (i) => i + 1));
     providerCalls = 0;
     responseStatus = 200;
+    responseChoice = _normalChoice;
+    responseUsage = _reportedUsage;
     received = [];
     entered = null;
     release = null;
@@ -517,6 +525,185 @@ void main() {
       expect(await db.query('SELECT * FROM usage_ledger'), ledger);
     },
   );
+
+  test(
+    'blank reply settles reported usage without publishing or retrying the turn',
+    () async {
+      responseChoice = _blankChoice;
+      final source = (await send()).message;
+      await observer.onAccepted(source);
+      expect(providerCalls, 1);
+      expect(await sync(), [source.toPayload()]);
+      final failed = (await attempt(source))!;
+      expect(failed.status, OwnerReplyAttemptStatus.failed);
+      expect(failed.failureCode, FailureCode.modelUnavailable);
+      expect(failed.replyId, isNull);
+      final ledger = await db.query('SELECT * FROM usage_ledger');
+      expect(ledger.single['request_id'], failed.claim.requestId);
+      expect(ledger.single['source_usage_unknown'], 0);
+      expect(ledger.single['input_tokens'], '7');
+      expect(ledger.single['output_tokens'], '3');
+      expect(ledger.single['total_tokens'], '10');
+
+      responseChoice = _normalChoice;
+      await observer.onAccepted(source);
+      expect(providerCalls, 1);
+      expect(await sync(), [source.toPayload()]);
+      expect(await db.query('SELECT * FROM usage_ledger'), ledger);
+
+      final next = await send(
+        clientMsgId: 'owner-complex-v2',
+        text: _nextQuestion,
+      );
+      expect(next.duplicate, isFalse);
+      await observer.onAccepted(next.message);
+      expect(providerCalls, 2);
+      expect(received.last, {'role': 'user', 'content': _nextQuestion});
+      final synced = await sync();
+      expect(synced.take(2), [source.toPayload(), next.message.toPayload()]);
+      expect(synced, hasLength(3));
+      expect(synced.last['senderId'], 'ai');
+      expect(synced.last['body'], {
+        'text': _answer,
+        'source': 's2',
+        'activityRefs': [],
+      });
+      final completed = (await attempt(next.message))!;
+      expect(completed.status, OwnerReplyAttemptStatus.completed);
+      expect(completed.replyId, synced.last['messageId']);
+      expect((await attempt(source))!.status, OwnerReplyAttemptStatus.failed);
+      expect(await db.query('SELECT * FROM usage_ledger'), hasLength(2));
+      expect(
+        await db.query('SELECT * FROM usage_ledger WHERE request_id=?', [
+          failed.claim.requestId,
+        ]),
+        ledger,
+      );
+    },
+  );
+
+  for (final fixture in <String, (Object, Object?)>{
+    'inconsistent token sum': (
+      _blankChoice,
+      {..._reportedUsage, 'total_tokens': 11},
+    ),
+    'non-integer count': (
+      _blankChoice,
+      {..._reportedUsage, 'prompt_tokens': 7.0},
+    ),
+    'missing usage': (_blankChoice, null),
+    'null content': (
+      {
+        'message': {'role': 'assistant', 'content': null},
+      },
+      _reportedUsage,
+    ),
+    'malformed message': ({'message': []}, _reportedUsage),
+    'wrong role': (
+      {
+        'message': {'role': 'user', 'content': ''},
+      },
+      _reportedUsage,
+    ),
+    'tool call': (
+      {
+        'message': {
+          'role': 'assistant',
+          'content': '',
+          'tool_calls': [
+            {
+              'id': 'synthetic-tool-call',
+              'type': 'function',
+              'function': {'name': 'synthetic_tool', 'arguments': '{}'},
+            },
+          ],
+        },
+      },
+      _reportedUsage,
+    ),
+    'legacy function call': (
+      {
+        'message': {
+          'role': 'assistant',
+          'content': '',
+          'function_call': {'name': 'synthetic_tool', 'arguments': '{}'},
+        },
+      },
+      _reportedUsage,
+    ),
+    'tool call finish reason': (
+      {..._blankChoice, 'finish_reason': 'tool_calls'},
+      _reportedUsage,
+    ),
+    'malformed finish reason': (
+      {..._blankChoice, 'finish_reason': false},
+      _reportedUsage,
+    ),
+    'empty string finish reason': (
+      {..._blankChoice, 'finish_reason': ''},
+      _reportedUsage,
+    ),
+    'whitespace-only finish reason': (
+      {..._blankChoice, 'finish_reason': ' \t'},
+      _reportedUsage,
+    ),
+    'padded tool finish reason': (
+      {..._blankChoice, 'finish_reason': ' tool_calls '},
+      _reportedUsage,
+    ),
+    'audio response with blank content': (
+      {
+        'message': {
+          'role': 'assistant',
+          'content': '',
+          'audio': {
+            'id': 'synthetic-audio',
+            'data': 'AA==',
+            'expires_at': 1789980000,
+            'transcript': 'Synthetic audio response',
+          },
+        },
+      },
+      _reportedUsage,
+    ),
+  }.entries) {
+    test(
+      '${fixture.key} keeps usage unknown and blocks a separate turn',
+      () async {
+        (responseChoice, responseUsage) = fixture.value;
+        final source = (await send()).message;
+        await observer.onAccepted(source);
+        expect(providerCalls, 1);
+        expect(await sync(), [source.toPayload()]);
+        final failed = (await attempt(source))!;
+        expect(failed.status, OwnerReplyAttemptStatus.failed);
+        expect(failed.failureCode, FailureCode.modelUnavailable);
+        expect(failed.replyId, isNull);
+        final ledger = await db.query('SELECT * FROM usage_ledger');
+        expect(ledger.single['request_id'], failed.claim.requestId);
+        expect(ledger.single['source_usage_unknown'], 1);
+        expect(ledger.single['input_tokens'], isNull);
+        expect(ledger.single['output_tokens'], isNull);
+        expect(ledger.single['total_tokens'], isNull);
+
+        responseChoice = _normalChoice;
+        responseUsage = _reportedUsage;
+        final next = await send(
+          clientMsgId: 'owner-complex-v2',
+          text: _nextQuestion,
+        );
+        expect(next.duplicate, isFalse);
+        await observer.onAccepted(next.message);
+        expect(providerCalls, 1);
+        expect(await sync(), [source.toPayload(), next.message.toPayload()]);
+        final blocked = (await attempt(next.message))!;
+        expect(blocked.status, OwnerReplyAttemptStatus.failed);
+        expect(blocked.failureCode, FailureCode.unavailable);
+        expect(blocked.replyId, isNull);
+        expect(await db.query('SELECT * FROM usage_ledger'), ledger);
+      },
+    );
+  }
 
   test('ordinary group complex text never invokes owner model path', () async {
     await db.execute(

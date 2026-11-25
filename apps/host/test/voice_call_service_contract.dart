@@ -3,6 +3,7 @@
 // 内存实现与 SQLite 实现共用同一份契约：
 // * FR-32 call_id 幂等、30s 未接转 missed；
 // * FR-32 同一 call_id 换 peer 复用被拒；
+// * FR-32 接听不得越过 30s 响铃期限：迟答标 missed 并返回既有冲突；
 // * AC-13 打断取消 LLM、清 TTS 队列、停播并标记截断句。
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host/src/voice/calls.dart';
@@ -71,6 +72,63 @@ void callServiceContract(String label, Future<CallFixture> Function() create) {
         CallState.active,
       );
     });
+
+    test('FR-32 answer just before the 30s deadline still succeeds', () async {
+      await fixture.calls.start(callId: 'd1', ai: ai, peerAccountId: 'human');
+      fixture.clock.advance(const Duration(seconds: 29));
+      final result = await fixture.calls.answer(callId: 'd1');
+      expect(result.isOk, isTrue, reason: result.failureOrNull?.message);
+      expect(result.value.state, CallState.active);
+      expect(result.value.answeredAt, fixture.clock.now());
+      expect(result.value.endedAt, isNull);
+    });
+
+    test('FR-32 answer at the 30s deadline marks the call missed', () async {
+      await fixture.calls.start(callId: 'd2', ai: ai, peerAccountId: 'human');
+      fixture.clock.advance(const Duration(seconds: 30));
+      final result = await fixture.calls.answer(callId: 'd2');
+      expect(result.failureOrNull?.code, FailureCode.conflict);
+      expect(result.failureOrNull?.message, '通话已结束');
+      final stored = await fixture.calls.get(callId: 'd2');
+      expect(stored.value.state, CallState.missed);
+      expect(stored.value.answeredAt, isNull);
+      expect(stored.value.endedAt, fixture.clock.now());
+    });
+
+    test(
+      'FR-32 a rejected late answer stays missed across a sweep and retry',
+      () async {
+        await fixture.calls.start(callId: 'd3', ai: ai, peerAccountId: 'human');
+        fixture.clock.advance(const Duration(seconds: 30));
+        final missedAt = fixture.clock.now();
+        final result = await fixture.calls.answer(callId: 'd3');
+        expect(result.failureOrNull?.code, FailureCode.conflict);
+
+        fixture.clock.advance(const Duration(seconds: 1));
+        expect((await fixture.calls.sweepMissed()).value, isEmpty);
+        final retry = await fixture.calls.answer(callId: 'd3');
+        expect(retry.failureOrNull?.code, FailureCode.conflict);
+        expect(retry.failureOrNull?.message, '通话已结束');
+        final stored = await fixture.calls.get(callId: 'd3');
+        expect(stored.value.state, CallState.missed);
+        expect(stored.value.answeredAt, isNull);
+        expect(stored.value.endedAt, missedAt);
+      },
+    );
+
+    test(
+      'FR-32 an answer far past the deadline never activates the call',
+      () async {
+        await fixture.calls.start(callId: 'd4', ai: ai, peerAccountId: 'human');
+        fixture.clock.advance(const Duration(minutes: 10));
+        final result = await fixture.calls.answer(callId: 'd4');
+        expect(result.failureOrNull?.code, FailureCode.conflict);
+        final stored = await fixture.calls.get(callId: 'd4');
+        expect(stored.value.state, CallState.missed);
+        expect(stored.value.answeredAt, isNull);
+        expect(stored.value.endedAt, isNotNull);
+      },
+    );
 
     test('FR-32 reusing call_id for a different peer is rejected', () async {
       await fixture.calls.start(callId: 'c6', ai: ai, peerAccountId: 'human');

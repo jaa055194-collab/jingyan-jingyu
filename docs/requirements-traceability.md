@@ -45,6 +45,7 @@
 
 | REQ-036 | FR-16/17 / AC-20 / 收藏专用盲索引授权 | 收藏专用加密盲索引 | 已授权局部 | 只存 token HMAC 与收藏 id；密钥独立行 `favorite-index` 列加密；新增/删除维护 token；搜索候选解密校验 + 全量扫描兜底（任意子串召回与无索引扫描一致）；消息引用只索引标题、正文以实时来源为准 | messages/favorite_blind_index.dart、Migration212、FavoritesService(可选blind) | favorite_blind_index_test 真实SQLite 9项（HMAC不含明文/密钥加密/盲命中与候选范围/盲与扫描结果一致/消息来源编辑与撤回/owner隔离/损坏失败关闭/候选满额跳过扫描） | 服务端收藏搜索候选加速（命中满额时提速；常见小结果集仍会扫描）；token 等值/频率泄露，非明文FTS；不替代附件/动态搜索 |
 | REQ-037 | FR-62/63 / M03 附件与配额 | 附件上传与内容提取 | 已授权局部 | 分片顺序上传与断点续传幂等；声明大小与 sha256 校验后落 blob；文本类正文抽取（html去标签/实体、json/xml、utf8容忍非法字节、1MiB上限）加密存；owner或会话成员可见、owner删除；配额/磁盘<10% 闸门 | messages/attachments.dart、attachment_extraction.dart、attachments_module.dart、Migration213、Routes 附件路由、默认宿主装配 AttachmentsModule | attachments_test 真实SQLite/AES/临时mediaDir 17项（抽取各类型/分片往返复原/续传/大小-sha拒绝/可见性/删除/配额/磁盘<10%/HTTP 401与400/往返/恶意id拒绝/会话成员校验） | 服务端能力；对外分片 512KiB 以适配 1MiB JSON 传输；单附件≤128MiB、正文抽取仅≤4MiB；M12 真实配额/磁盘探测未接线（默认按充足，仅限 pending 上传数=3）；PDF/DOCX/图片/音视频正文未抽取（如实标 unsupported） |
+| REQ-037A | v4.2 FR-62；#131 B / R2 | 未完成分片可续传 | 已授权局部 | 按 SQLite 已提交进度继续；有效重试不改已收字节，下一片或完成时去掉未提交尾部；已提交前缀短缺、越权不写；并发完成仅发布一份 | [AttachmentService](../apps/host/lib/src/messages/attachments.dart) | Windows / Dart 3.14，基线 e43cde7：[attachments_test](../apps/host/test/attachments_test.dart) 8 个断点/并发/边界回归，附件相关定向套件 38 通过，使用真实 SQLite 和临时文件 | 单宿主进程内自动化验证通过；不覆盖跨进程协调、完成阶段崩溃恢复、客户端选文件/播放或 Android 真机 |
 | REQ-038 | FR-17 / M11 客户端搜索 | 客户端本地索引（A） | 已授权局部 | 按账号隔离正向+倒排；增/改/删；AND缩候选+contains复核；会话过滤/limit/seq升序；单CJK字与Latin子串可命中；清除账号；JSON快照导入导出 | jingyu_client_kit/local_search_index.dart | local_search_index_test 15项 + client_kit整包47项，analyze无问题 | 纯 Dart 能力；未接入 M11 Flutter 外壳（PR#8 未合并），落盘加密由外壳负责 |
 | REQ-039 | FR-17/FR-62 / M03 附件消息与文件搜索 | 附件消息引用与附件正文搜索 | 已授权局部 | 消息可引用发送者本人且上传即绑定该会话的附件；他人附件/跨会话/未知/非法引用拒绝；`GET /search?type=file` 仅在本人自有附件内按已抽取正文包含匹配并返回片段，隔离他人 | messages/attachments.dart(assertSendable/searchOwn)、messages_module._send/_search、Routes.search type=file、默认宿主装配 | attachment_message_test 真实SQLite/AES 6项（引用成功/他人404/跨会话400/未知404/非字符串400/文本发送不受影响/file搜索自有一致与他人隔离）；attachments_test 17项仍通过 | 服务端能力；文件搜索仅本人私有、基于已抽取正文（≤4MiB），非跨用户/动态搜索；二进制正文未抽取 |
 | REQ-040 | FR-16 / AC-20 收藏标签与备注 | 收藏标签与备注及按标签过滤 | 已授权局部 | 收藏可带≤20个标签（每个≤50字符）与备注（≤2000字符），标签/备注加密存储；列表返回 tags/note；`GET /favorites?tag=` 大小写不敏感按标签过滤；搜索匹配标签与备注文本；`PATCH /favorites/{id}` 整体替换标签/备注（null 清空）并重索引；旧收藏 tags/note 为空 | messages/favorites.dart、Migration214、MessagesModule._addFavorite/_listFavorites/_updateFavorite | favorite_tags_test 真实SQLite 8项（加密落库/返回/搜索标签备注/非法拒绝/无标签为空/标签过滤/更新替换与重索引/仅本人可改）；favorites_test 9项仍通过 | 服务端局部；AI“她的收藏”与客户端UI未做 |
@@ -187,3 +188,50 @@
 历史真实 `auto` 回复与 SQLite 回存证据见 [验收 §G.1](acceptance.md#g1-复跑方式与结果)：#102 的 `63f4c2e` 本地进程内集成测试显式启用 gzip，非本次复跑。M15 复跑基线 `0c23edd` 的模型子进程未显式启用 gzip；#126 仅为 `ModelRuntime.withProcess` 的模型调用显式启用 gzip，其他调用方默认行为不变。基线 `8e77c9d` 加本次测试及子进程环境隔离改动，后续实测经仓库 HTTP worker 得到真实 `auto` 回复、SQLite 重开读回及一致的用量结算，详见同节。默认宿主启动后的用户会话端到端仍未验证。
 
 M14 附件列表后续复核见 [验收 §F.3](acceptance.md#f3-汇总与限制)：宿主 #107 已合并且路由测试 4/4 通过，保留上表的历史基线记录。
+
+## R1 增量：普通文本离线发送检查点（#131 A，基线 e43cde7）
+
+| ID | 来源/范围 | 审批状态 | 可观察验收 | 实现 | 本次证据 | 状态/缺口 |
+|---|---|---|---|---|---|---|
+| REQ-R1-01 | v4.2 FR-10/13/14；AC-18/32 局部 | 已授权局部 | 普通文本入队与消费原草稿同一次提交；离线重开保留原发送 ID、不恢复已发送草稿；写入失败仍可编辑和重试、不自动发出；新草稿与其他会话不受影响 | `ClientRuntime.sendMessage` → `ClientShellController.enqueueTextDraft` → 现有账户快照和发件箱 | Windows，Flutter 3.50 / Dart 3.14：[runtime_text_send_test](../apps/client_flutter/test/runtime_text_send_test.dart) 4 个回归先见故障后通过，使用实际文件快照与隔离回环宿主 | 自动化验证通过（普通文字本地检查点）；不推断旧版快照内相同正文是否已发送，不计双端未读、真实模型/宿主联调或 Android 真机通过 |
+| REQ-R2-02 | FR-13/FR-62；#131 B 局部 | 已授权局部 | 选一个本机图片/文件后先显示安全文件名；确认“发送附件”才上传，取消不发送；切会话或锁屏后不启动下一阶段；上传失败尽力中止；写检查点失败不留下待发送的失效附件；保留文字草稿 | `ClientRuntime.attachFile` 暂存，`sendSelectedAttachment` 复核、上传和发件箱持久化；宿主 owner-only `AttachmentService.abortUpload` | Windows Dart/Flutter：[文件内容](../apps/client_flutter/test/attachment_content_test.dart) 7 项、[附件运行时](../apps/client_flutter/test/runtime_attachment_send_test.dart) 8 项、[相关宿主套件](../apps/host/test/attachments_test.dart) 共 46 项；[应用 Before/After](../apps/client_flutter/evidence/chat-attachment-send.md) | 合成文件/回环宿主验证通过；Windows、Android debug 构建通过，不覆盖原生选择器/真机、收件方下载预览、跨进程恢复或完整 FR-62 |
+| REQ-R2-03 | FR-65 / AC-29 子集；#131 C | 已授权局部 | 默认宿主导出真实有权读取的聊天后缀、可见空群与私聊；不含他人私聊或入群前记录；分页不截断；统一事务复核最终可见边界；坏密文/超限不返回成功包；明确 chat-only 覆盖范围 | `ChatHistoryExportSource`、`CombinedMembership.historySnapshot` 和默认 `ExportService`；客户端局部范围提示 | Windows Dart/Flutter：[默认认证宿主](../apps/host/test/default_host_chat_export_test.dart)、[适配器与边界](../apps/host/test/chat_history_export_source_test.dart)、[范围提示](../apps/client_flutter/test/backup_quota_actions_test.dart) | 已实现并通过定向自动化；仍非全账号导出，不含人格/记忆/附件内容，不计持久导入、密文备份或恢复演练完成 |
+| REQ-R2-04 | FR-09/FR-13，AC-16/32 局部；#131 B | 已授权局部 | Android 冷启动或运行中收到纯文本分享时，不覆盖当前草稿、不自动发消息；登录/解锁后才显示待处理文本；显式选择当前可见且草稿为空的会话并再次确认后才写入草稿，仍需普通“发送”才外发；取消/丢弃无写入；URI、二进制或非纯文本不被导为正文 | `ClientRuntime` 单一路径文本暂存/确认，`ClientShellController.saveDraft(checkActive)`，`ShellViewModel`+`SharedTextPanel` 目标确认界面 | Windows Dart/Flutter：[运行时](../apps/client_flutter/test/runtime_share_intake_test.dart) 9 项、[确认界面](../apps/client_flutter/test/share_target_confirmation_test.dart) 10 项、[draft 检查点](../packages/jingyu_client_kit/test/shell_controller_test.dart) 19 项；匹配 Before/After 见 PR/证据 | 自动化验证通过（合成原生事件/回环宿主）；内存态重启会丢失、不加二进制作导入，未跑 Android 原生 Intent/真机，也不声明完整 AC-16 |
+| REQ-R2-05 | FR-65 / AC-29 子集；#131 C | 已授权局部 | 一次显式导出成功后，用户可再次显式选择本地位置把同一 chat-only 版本1包保存为 JSON；取消/失败不改变宿主或界面状态，不自动重试；只显示文件名/大小，不显示路径或聊天明文；明确提示文件为明文且当前宿主导入不持久 | `LifecycleExportBundle.exportFileContents`、`BackupFileStore`/`NativeBackupFileStore`、`NativePlatform.saveBackupFile`；Windows/Android 原生保存对话框 | Windows Dart/Flutter：[文件包往返/上限](../apps/client_flutter/test/lifecycle_export_file_test.dart)、[桥接边界](../apps/client_flutter/test/native_platform_save_test.dart)、[保存交互](../apps/client_flutter/test/backup_quota_actions_test.dart)；[应用 Before/After](../apps/client_flutter/evidence/export-save.md) | 合成导出包和回环宿主自动化验证通过；Windows/Android debug 构建和原生对话框真机/覆盖写未验收，不覆盖文件选入、持久导入、加密备份或完整 AC-29 |
+| REQ-008A | C-1 / FR-14 / AC-18 局部；#131 A | 已授权局部 | 仅入群后可见时，客户端接收当前成员有权看的首条消息并持续分页；空页确认边界，重开仍从已存游标同步；重新加入按新下限移除活动缓存中的旧消息；真实缺口、异会话或坏页不写入 | 宿主 HTTP 差集的可选 `firstVisibleSeq`；`HostConnection.sync` 与 `ClientShellController.applySyncHistoryFloor` | 基线 `4d08323`，Windows Dart/Flutter：[host](../apps/host/test/host_test.dart) 的认证 SQLite 验证、[shell](../packages/jingyu_client_kit/test/shell_controller_test.dart) 的检查点和失败回归、[runtime](../apps/client_flutter/test/runtime_joined_group_sync_test.dart) 的回环 HTTP/真实文件快照回归 | 自动化验证通过（群聊差集子集）；不改变既有宿主访问判定，不代表离线缓存安全擦除、全量 ACK/未读一致性、WebSocket 或设备验收 |
+
+## 第一期候选：本人 AI 私聊、人格导入和聊天内消息操作
+
+基线 `d9dc55d`（同树 `38cd86c`）。以下状态区分局部证据与整条 AC；不改动前述历史记录。
+
+| ID | 规格范围 | 可观察验收 | 验证与证据 | 状态与未覆盖 |
+|---|---|---|---|---|
+| REQ-P1-01 | FR-10 / FR-46 / AC-31、AC-33 局部 | 文档化源码入口既未设置两个覆盖变量，也能注册和启动配套 worker；两者显式成对时保持优先；缺文件时不启动模型；本人文本在已授权配置下可收到一条回复并重启读回 | [默认装配与启动](phase-one/runtime.md)、[隔离宿主基线对照](phase-one/release-verification-plan.md#a-用户报告缺陷的基线复现redgreen) | 局部验证；模型调用的回复证据为合成 worker，实际生产 worker 验证启动与原有出站拒绝，不将两段证据说成真实 Provider 验收 |
+| REQ-P1-02 | FR-41 / 已合入 #174 人格卡编辑 | 从文件或粘贴读合规 JSON，仅填入表单；用户显式初始化/保存才写；取消或错误不改表单 | [格式与限制](persona-card-format.md)、[客户端流程测试](../apps/client_flutter/test/persona_import_ui_test.dart) | 保留既有实现；不包含记忆或原生选择器真机验收 |
+| REQ-P1-03 | FR-15 / AC-19 子集 | 复制可见文本；本人文本编辑保留其余字段；本人允许撤回的消息经确认后显示墓碑；未知回执不重放或误报成功；游标/ACK 不变 | [客户端及宿主回归](phase-one/msgops.md)、[同场景 Flutter 前后对照](../apps/client_flutter/evidence/message-operations.md) | 本机可用切片；不声称已缓存的其他端收到变更，不含完整 FR-15 |
+| REQ-P1-04 | FR-09/11、AC-16/30 子集 | 当前账号可读待处理邀请、确认处理并刷新；已拉取会话显示未读数 | [通知证据与缺口](phase-one/notify-gap.md) | 基线定向回归通过；系统通知、消息点击定位和锁屏通知正文隐私未实现 |
+| REQ-P1-05 | FR-42–44/49/50、AC-04/05/09 | 记忆需独立确认后方可注入；撤权停止；主动联系需独立许可、静默时段与预算 | [原始审计](phase-one/memory-proactive-gap.md)、[独立偏好授权与范围](phase-one/owner-reply-preferences.md) | 基础授权保持不变；仅在受控的本人私聊中实现明确保存的回复长短及排版，聊天历史记忆、第三方来源和主动联系未实现 |
+| REQ-P1-06 | FR-64/65、AC-15/29 | 聊天明文导出只取本人可读取数据；生产加密备份另需轮转和干净宿主恢复验证 | [导出与恢复审计](phase-one/backup-restore.md) | 仅导出及预览定向回归；历史恢复演练非生产备份，完整恢复、轮转未实现 |
+
+## 第一期续做：主干 #175 后的验收增量
+
+基线 `80828d8`（本地 `1a04fad` 同树）。前表为原候选的历史边界，不据此推断续做已验收整条 AC。
+
+| ID | 规格范围 | 可观察验收 | 验证与证据 | 状态与未覆盖 |
+|---|---|---|---|---|
+| REQ-P1-07 | FR-15 / AC-19 置顶子集 | 当前会话可查看本机已同步的有效置顶，经确认置顶及取消；未知结果不重发；服务端核对历史下界、发帖权限及撤回，状态修改与无正文审计同一事务提交 | [置顶流程与边界](phase-one/chat-pins.md)、[同场景前后对照](../apps/client_flutter/evidence/chat-pins.md) | 局部通过；不回填历史、不新增跨端推送或其它 FR-15 操作 |
+| REQ-P1-08 | FR-64 / AC-15 停机数据库子集 | 操作者在停机且无 SQLite 侧车的条件下，加密备份数据库与 DPAPI 保护的密钥文件；同机同用户验证摘要、解密及完整性，只恢复到从未存在的目录；错误身份、坏包或密钥不配套均不得发布目标 | [运维说明和实测](testing/age-sqlite-operator.md) | Windows 隔离闭环通过；不覆盖媒体、运行中快照、异机、轮转、远端或删除后清除 |
+| REQ-P1-09 | FR-11 前置子集 | Windows 已登录且解锁的前台联系人或收件箱中，仅基线之后确认同步的新入站消息触发一条通用提示；首轮历史、重连、本人与撤回消息静默；不显示正文，不改未读/游标 | [同场景应用捕获与回归](../apps/client_flutter/evidence/foreground-message-notice.md) | Windows Flutter 回环验证通过；不计系统通知、后台推送、Android 提示或锁屏验收 |
+| REQ-P1-10 | FR-15 / AC-19 表情回应子集 | 当前同步且可见的消息可读取常用回应的计数，点表情添加或取消；回执与读回一致才显示成功。宿主同事务核对可见历史和发帖权限，只对成功变更留无正文审计 | [客户端流程](phase-one/chat-reactions.md)、[宿主证据](phase-one/chat-reactions-host.md)、[同一场景实际 Flutter 对照](../apps/client_flutter/evidence/chat-reactions.md) | 隔离宿主及手机尺寸 Flutter 验证；不增加实时推送、历史回填或 Android 系统提醒 |
+| REQ-P1-11 | FR-42–45/48、AC-04/09 本人规则问候子集 | 只有另行开启的本人私聊可在 L3+、非静默及预算充足情况下收到标记为规则的固定问候；默认关、可单独或全局撤销，重启不补发，失败不留下消息或发送审计 | [宿主契约与回归](phase-one/owner-rule-greeting.md)、[客户端设置](phase-one/owner-rule-greeting-ui.md)、[真实 Flutter 前后图](../apps/client_flutter/evidence/owner-rule-greeting.md) | 局部通过；无外部模型、历史/他人数据、真机或全量生活引擎验收 |
+| REQ-P1-12 | FR-20 / AC-19 定时消息子集 | 当前已认证、解锁、在线普通群聊可显式安排一条未来的普通文字：严格本地日期/时刻与固定 UTC 偏移、确认页显示绝对时刻；本人状态只读有界；仅已知 pending 记录确认后取消；未知创建/取消不重试、不猜测 ID；保留聊天草稿 | [定时消息流程与边界](phase-one/scheduled-messages-ui.md)、[同场景 Flutter 捕获](../apps/client_flutter/evidence/scheduled-messages.md) | 客户端回环/Widget 验证通过；不覆盖 Android 真机、真实发送、手机通知、AI 触发或跨设备同步 |
+| REQ-P1-13 | FR-49/50 子集（本人便签） | 主人可手动新增/编辑/删除非敏感便签；独立默认关闭授权后才可注入本人私聊 B2 回复，撤销/清空后不得继续使用，旧接受消息不继承新便签 | [宿主契约](phase-one/owner-memory-notes.md)、[客户端设置](phase-one/owner-memory-notes-ui.md)、[真实 Flutter 前后图](../apps/client_flutter/evidence/owner-memory-notes.md) | 局部通过；不是聊天历史自动采集、T1/T2 分类器或通用记忆管理器 |
+
+## 第一期硬门槛：聊天历史自动记忆与模型主动联系
+
+两条独立、默认关闭、按 AI 单独开启、可撤回的授权。均以真实默认宿主、真实 SQLite、真实回环 HTTP 与真实子进程模型 worker 做端到端实测，非仅内部单测。
+
+| ID | 规格范围 | 可观察验收 | 验证与证据 | 状态与未覆盖 |
+|---|---|---|---|---|
+| REQ-P1-14 | FR-49/50 子集（聊天历史自动记忆） | 仅采集主人本人在**已授权私聊**中的文字：显式记忆指令（记住/记下/别忘了/以后/别忘）且长度有界→T0 active，其余→T1 pending；绝不 T2，绝不群聊或第三人内容；每 AI 最多 50 条、单条 ≤512 UTF-8 字节；默认关闭、开启需精确核对接收目标 token；可查看/删除/清空；仅 active 的 T0/T1 以独立 `untrusted_owner_memory` user 段注入 B2（≤5 条、≤1024 字节），pending 不注入；撤销后不再采集，旧来源不补采 | [宿主契约](phase-one/owner-auto-memory.md)、[客户端设置](phase-one/owner-auto-memory-ui.md)、`owner_auto_memory_test` 19 项、[端到端实测](../apps/host/test/phase_one_memory_proactive_e2e_test.dart) | 实测通过（隔离宿主/合成账号/合成 worker）；不是通用记忆管理器，不含 T2 打码、自然语言遗忘、跨用户检索、导出或客户端真机 |
+| REQ-P1-15 | FR-42–44/48 子集（模型主动联系） | 仅主人本人 AI 私聊；默认关闭；开启需固定 UTC 偏移、L3/L4、有效私聊、未全局停止、B3 预算就绪及三项已审核 revision；静默窗顺延不发送；`interval_minutes`(60–10080) 频率上限；到点调用模型（B3/chat）生成短句后原子 append + 水位 + 无正文审计；预算缺失/未知/耗尽或模型失败一律静默、不补发、不重放、不伪装成规则问候；`clientMsgId` + 水位双重去重；全局停止撤销全部且解除不复活 | [宿主契约](phase-one/owner-model-proactive.md)、[客户端设置](phase-one/owner-model-proactive-ui.md)、`owner_model_proactive_test` 28 项 + `model_gateway_test` B3、[端到端实测](../apps/host/test/phase_one_memory_proactive_e2e_test.dart) | 实测通过（隔离宿主/合成账号/合成 worker）；不含真实外部 Provider、真机、AI-AI 私信、朋友圈/串门或完整生活引擎 |

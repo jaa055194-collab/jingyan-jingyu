@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 import 'package:jingyu_core/jingyu_core.dart';
@@ -9,16 +10,33 @@ import 'package:jingyu_protocol/jingyu_protocol.dart';
 
 import '../data/file_persistence.dart';
 import '../data/account_snapshots.dart';
+import '../data/android_private_ai_vault.dart';
+import '../attachments/attachment_content.dart';
+import '../features/inbox/foreground_message_activity.dart';
 import '../net/account_auth.dart';
+import '../net/attachment_api.dart';
+import '../net/attachment_send_flow.dart';
+import '../net/attachment_upload_api.dart';
+import '../net/chat_pins_api.dart';
+import '../net/favorites_api.dart';
 import '../net/host_connection.dart';
 import '../net/group_api.dart';
+import '../net/message_operations_api.dart';
+import '../net/message_reactions_api.dart';
 import '../net/own_ai_api.dart';
 import '../net/owner_ai_direct_api.dart';
+import '../net/scheduled_messages_scope.dart';
+import '../net/voice_message_api.dart';
 import '../platform/native_platform.dart';
 import 'conversation_mapping.dart';
 import 'shell_view_model.dart';
 
 class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
+  @override
+  final foregroundMessageActivity = Platform.isWindows
+      ? ForegroundMessageActivity()
+      : null;
+
   final native = NativePlatform();
   final authenticator = AccountAuthenticator();
   late Directory _dataRoot;
@@ -26,6 +44,9 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Future<void>? _refreshWork;
   // A completed refresh also supersedes visibility seen by an earlier shortcut.
   int _refreshGeneration = 0;
+  int _historySyncEpoch = 0;
+  int _attachmentSelectionRevision = 0;
+  _AttachmentDraft? _attachmentDraft;
   Future<bool>? _renewWork;
   Future<void> _secureTail = Future<void>.value();
   ClientCredentials? _credentials;
@@ -34,6 +55,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   int _generation = 0;
   bool _disposed = false;
   bool _switching = false;
+  bool _earlyLockRequested = false;
+  bool _earlyLogoutRequested = false;
+  bool _initialSessionRestore = true;
+  ShellIncomingShare? _sharedText;
+  String? _shareNotice;
+  Object _shareEpoch = Object();
+  _ShareInteractionContext? _shareContext;
   late FilePersistence storage;
   late ClientShellController shell;
   late AppLockController appLock;
@@ -48,6 +76,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool _ownAiLoaded = false;
   final _ownAiDirect = <String, ShellOwnAiDirectState>{};
   Object _ownAiDirectEpoch = Object();
+  static int _nextVoiceRequestId = 0;
+  bool _androidVoicePlayback = false;
+  bool _voiceFlutterResumed = true;
+  bool _voiceNativeResumed = false;
+  int? _voiceForegroundEpoch;
+  _VoiceAttempt? _voiceAttempt;
 
   void _invalidateOwnAiDirect() {
     _ownAiDirectEpoch = Object();
@@ -71,13 +105,112 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool get ownAiLoaded => _ownAiLoaded;
   @override
   List<ShellOwnedAi> get ownAiAccounts => List.unmodifiable(_ownAiAccounts);
+
+  String? androidPrivateAiScope(String purpose, [String? aiAccount]) {
+    final credentials = _credentials;
+    if (!Platform.isAndroid ||
+        credentials == null ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _disposed) {
+      return null;
+    }
+    return _privateAiScope(credentials, purpose, aiAccount);
+  }
+
+  static String _privateAiScope(
+    ClientCredentials credentials,
+    String purpose, [
+    String? aiAccount,
+  ]) => sha256
+      .convert(utf8.encode(jsonEncode([
+        'jingyu.android-private-ai.v1',
+        credentials.host.origin,
+        credentials.accountId,
+        credentials.deviceId,
+        purpose,
+        aiAccount,
+      ])))
+      .toString();
+
+  Future<Map<String, Object?>?> readAndroidPrivateAiVault(
+    String purpose, [
+    String? aiAccount,
+  ]) async {
+    final scope = androidPrivateAiScope(purpose, aiAccount);
+    if (scope == null) throw StateError('Private AI session is unavailable');
+    return const AndroidPrivateAiVault().read(scope);
+  }
+
+  Future<void> writeAndroidPrivateAiVault(
+    String purpose,
+    String? aiAccount,
+    Map<String, Object?> record,
+  ) async {
+    final scope = androidPrivateAiScope(purpose, aiAccount);
+    if (scope == null) throw StateError('Private AI session is unavailable');
+    await const AndroidPrivateAiVault().write(scope, record);
+  }
+
+  Future<void> _saveAndroidOwnAiDirectory(ClientCredentials credentials) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await const AndroidPrivateAiVault().write(
+        _privateAiScope(credentials, 'directory'),
+        {
+          'version': 1,
+          'accounts': [
+            for (final ai in _ownAiAccounts)
+              {
+                'accountId': ai.accountId,
+                'displayName': ai.displayName,
+                'disabled': ai.disabled,
+              },
+          ],
+        },
+      );
+    } catch (_) {
+      // Do not lose the server result just because the device vault is absent.
+    }
+  }
+
+  Future<void> _restoreAndroidOwnAiDirectory(
+    ClientCredentials credentials,
+    int generation,
+  ) async {
+    if (!Platform.isAndroid) return;
+    try {
+      final saved = await const AndroidPrivateAiVault().read(
+        _privateAiScope(credentials, 'directory'),
+      );
+      if (!_current(generation) || _credentials != credentials || saved == null) {
+        return;
+      }
+      final records = saved['accounts'];
+      if (saved['version'] != 1 || records is! List) return;
+      _publishOwnAi(records.map(OwnedAiAccount.fromJson).toList());
+    } catch (_) {
+      // An unavailable or unreadable device catalog is not an empty host list.
+    }
+  }
   @override
   String? get ownAiNotice => _ownAiNotice;
   bool _ready = false, _busy = false, _online = false, _onboarded = false;
   bool _chatEntered = false;
   bool _sessionRejected = false;
   bool _controllersReady = false;
-  String? _error, _selected, _preview;
+  String? _error, _selectedConversation, _preview;
+  int _favoriteSelectionRevision = 0;
+  final _submittedMessageFavorites = <(String, String)>{};
+  final _messageWrites = <(ClientShellController, String, String)>{};
+  final _unconfirmedMessageWrites = <(ClientShellController, String, String)>{};
+  String? get _selected => _selectedConversation;
+  set _selected(String? value) {
+    if (_selectedConversation != value) _favoriteSelectionRevision++;
+    _selectedConversation = value;
+  }
+
   String _draft = '';
   final _draftRevisions = <String, int>{};
   ({
@@ -106,39 +239,948 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool get online => _online;
   @override
   String? get error => _error;
+
+  bool get _shareIntakeOpen =>
+      !_disposed &&
+      !_switching &&
+      !_sessionRejected &&
+      !_earlyLogoutRequested &&
+      (_initialSessionRestore || authenticated);
+
+  ShellIncomingShare? get _sharedTextView => _sharedText;
+
+  bool get _canShowSharedText =>
+      _controllersReady &&
+      authenticated &&
+      !_sessionRejected &&
+      !locked &&
+      !_switching &&
+      !_disposed;
+
+  @override
+  ShellIncomingShare? get incomingSharedText =>
+      _canShowSharedText ? _sharedTextView : null;
+
+  @override
+  String? get incomingShareNotice => _canShowSharedText ? _shareNotice : null;
+
+  @override
+  Object? get shareInteractionContext {
+    if (!_canShowSharedText || _sharedText == null) return null;
+    final context = _shareContext;
+    if (context != null &&
+        identical(context.epoch, _shareEpoch) &&
+        identical(context.credentials, _credentials) &&
+        identical(context.share, _sharedText)) {
+      return context;
+    }
+    final next = _ShareInteractionContext(
+      _shareEpoch,
+      _credentials,
+      _sharedText!,
+    );
+    _shareContext = next;
+    return next;
+  }
+
+  void _invalidateSharedTextContext({bool discard = false}) {
+    _shareEpoch = Object();
+    _shareContext = null;
+    if (discard) {
+      _sharedText = null;
+      _shareNotice = null;
+    }
+  }
+
+  void _registerNativeHandler() {
+    NativePlatform.channel.setMethodCallHandler((call) async {
+      if (_disposed) return;
+      if (call.method == 'event') {
+        final type = (call.arguments as Map?)?['type'];
+        if (type == 'lock') {
+          _invalidateSharedTextContext();
+          if (!_controllersReady) {
+            _earlyLockRequested = true;
+          } else {
+            appLock.lock();
+            notifyListeners();
+          }
+        } else if (type == 'logout') {
+          _invalidateSharedTextContext(discard: true);
+          if (_initialSessionRestore) {
+            _earlyLogoutRequested = true;
+            return;
+          }
+          await _logout();
+        }
+      } else if (call.method == 'shareReceived') {
+        _acceptSharePayload(call.arguments);
+      } else if (call.arguments case final Map arguments) {
+        switch (call.method) {
+          case 'voicePlaybackForeground':
+            _setNativeVoiceForeground(arguments['epoch'], arguments['resumed']);
+          case 'voicePlaybackFinished':
+            _finishNativeVoice(arguments['requestId'], arguments['failed']);
+        }
+      }
+    });
+  }
+
+  void _acceptSharePayload(Object? raw) {
+    if (!_shareIntakeOpen) return;
+    if (_sharedText != null) {
+      _shareNotice = '已有分享待处理';
+      if (_canShowSharedText) notifyListeners();
+      return;
+    }
+    if (raw is! Map ||
+        !raw.containsKey('text') ||
+        raw['text'] is! String ||
+        (raw['text'] as String).trim().isEmpty ||
+        (raw['mimeType'] != null && raw['mimeType'] != 'text/plain') ||
+        (raw['uris'] != null &&
+            (raw['uris'] is! List || (raw['uris'] as List).isNotEmpty))) {
+      _shareNotice = '无法使用此分享内容';
+      if (_canShowSharedText) notifyListeners();
+      return;
+    }
+    final text = raw['text'] as String;
+    if (utf8.encode(text).length > 64 * 1024) {
+      _shareNotice = '分享内容过长，无法暂存';
+      if (_canShowSharedText) notifyListeners();
+      return;
+    }
+    _sharedText = ShellIncomingShare(text: text);
+    _shareNotice = null;
+    _invalidateSharedTextContext();
+    if (_canShowSharedText) notifyListeners();
+  }
+
+  @override
+  Future<void> discardSharedText() async {
+    _invalidateSharedTextContext(discard: true);
+    notifyListeners();
+  }
+
+  @override
+  Future<bool> useSharedTextInDraft(
+    String conversationId, {
+    required Object interactionContext,
+  }) async {
+    final pending = _sharedText;
+    if (!_canShowSharedText ||
+        _busy ||
+        pending == null ||
+        !identical(interactionContext, shareInteractionContext)) {
+      return false;
+    }
+    final sessionShell = shell;
+    final generation = _generation;
+    final selected = _selected;
+    final targetRevision = _draftRevisions[conversationId] ?? 0;
+    var saved = false;
+    void checkActive() {
+      if (!_canShowSharedText ||
+          !_current(generation) ||
+          !identical(shell, sessionShell) ||
+          !identical(_sharedText, pending) ||
+          !identical(interactionContext, shareInteractionContext) ||
+          _selected != selected ||
+          (_draftRevisions[conversationId] ?? 0) != targetRevision ||
+          !_conversations.any(
+            (conversation) => conversation.id == conversationId,
+          )) {
+        throw const _SharedTextInterrupted();
+      }
+      if (sessionShell.draftFor(conversationId).isNotEmpty ||
+          (_selected == conversationId && _draft.isNotEmpty)) {
+        throw const _SharedTextInterrupted();
+      }
+    }
+
+    try {
+      checkActive();
+      _busy = true;
+      notifyListeners();
+      await sessionShell.saveDraft(
+        conversationId,
+        pending.text,
+        checkActive: checkActive,
+      );
+      saved = true;
+      final canPublish =
+          _canShowSharedText &&
+          _current(generation) &&
+          identical(shell, sessionShell) &&
+          identical(interactionContext, shareInteractionContext) &&
+          _selected == selected &&
+          (_draftRevisions[conversationId] ?? 0) == targetRevision &&
+          _conversations.any(
+            (conversation) => conversation.id == conversationId,
+          );
+      if (identical(_sharedText, pending)) {
+        _invalidateSharedTextContext(discard: true);
+      }
+      if (!canPublish) return false;
+      _selected = conversationId;
+      _draft = pending.text;
+      _draftRevisions[conversationId] = targetRevision + 1;
+      unawaited(_clearAttachmentSelection());
+      return true;
+    } on _SharedTextInterrupted {
+      return false;
+    } catch (_) {
+      if (_current(generation) && !saved) _shareNotice = '分享草稿保存失败';
+      return false;
+    } finally {
+      if (_current(generation)) _busy = false;
+      notifyListeners();
+    }
+  }
+
   @override
   String? get selectedConversationId => _selected;
+
   @override
-  List<ShellConversation> get conversations => _conversations;
+  String draftFor(String conversationId) {
+    if (_selected == conversationId) return _draft;
+    return _controllersReady ? shell.draftFor(conversationId) : '';
+  }
+
   @override
-  List<ShellMessage> get messages => _selected == null
-      ? []
+  List<ShellConversation> get conversations => !_controllersReady
+      ? _conversations
       : [
-          for (final message in shell.messagesFor(_selected!))
-            ShellMessage(
-              id: message.messageId,
-              text:
-                  message.body['text']?.toString() ?? '[${message.kind.wire}]',
-            ),
-          for (final item in shell.outbox.items.where(
-            (e) => e.conversationId == _selected,
-          ))
-            ShellMessage(
-              id: item.clientMsgId,
-              text: item.body['text']?.toString() ?? '[${item.kind.wire}]',
-              outgoing: true,
-              status: '等待补传',
-            ),
-          for (final drop in shell.dropped.where(
-            (e) => e.item.conversationId == _selected,
-          ))
-            ShellMessage(
-              id: drop.item.clientMsgId,
-              text: drop.item.body['text']?.toString() ?? '',
-              outgoing: true,
-              status: '发送失败',
+          for (final conversation in _conversations)
+            ShellConversation(
+              id: conversation.id,
+              title: conversation.title,
+              preview: conversation.preview,
+              unread: _unreadFor(conversation.id),
+              kind: conversation.kind,
+              ownerAccountId: conversation.ownerAccountId,
             ),
         ];
+
+  /// The cache is already pruned to the visible history floor, so every cached
+  /// canonical row above the read position is genuinely unread. The user's own
+  /// messages never badge, and outbox/dropped rows are not canonical messages.
+  int _unreadFor(String conversationId) {
+    final read = shell.readSeqFor(conversationId);
+    final self = connectedAccountId;
+    var count = 0;
+    for (final message in shell.messagesFor(conversationId)) {
+      if (message.seq > read && message.senderId != self) count++;
+    }
+    return count;
+  }
+
+  @override
+  List<ShellMessage> get messages {
+    if (_selected == null) return [];
+    final selected = _selected!;
+    return [
+      for (final message in shell.messagesFor(selected))
+        _canonicalShellMessage(message),
+      for (final item in shell.outbox.items.where(
+        (e) => e.conversationId == selected,
+      ))
+        ShellMessage(
+          id: item.clientMsgId,
+          text: _messageLabel(item.kind, item.body),
+          outgoing: true,
+          status: '等待补传',
+        ),
+      for (final drop in shell.dropped.where(
+        (e) => e.item.conversationId == selected,
+      ))
+        ShellMessage(
+          id: drop.item.clientMsgId,
+          text: _messageLabel(drop.item.kind, drop.item.body, fallback: ''),
+          outgoing: true,
+          status: '发送失败',
+        ),
+    ];
+  }
+
+  ShellMessage _canonicalShellMessage(MessageEventFrame message) {
+    final recalled = message.body['recalled'] == true;
+    return ShellMessage(
+      id: message.messageId,
+      text: recalled
+          ? '消息已撤回'
+          : _messageLabel(message.kind, message.body),
+      outgoing: message.senderId == connectedAccountId,
+      attachmentId: !recalled && message.body['attachmentId'] is String
+          ? message.body['attachmentId'] as String
+          : null,
+      attachmentName: recalled ? null : _attachmentName(message.kind, message.body),
+      imageAttachment:
+          message.kind == MessageKind.image &&
+          message.body['attachmentId'] is String &&
+          !recalled,
+      voiceAttachment: _voiceAttachmentOf(message) != null,
+      favoriteEligible: _favoriteSource(message),
+      operationEligible: _favoriteSource(message),
+      copyText: _favoriteSource(message)
+          ? _liveText(message.kind, message.body)
+          : null,
+      sentAt: message.sentAt,
+      edited: !recalled && shell.isMessageEdited(
+        message.conversationId,
+        message.messageId,
+      ),
+      recalled: recalled,
+    );
+  }
+
+  static String? _liveText(MessageKind kind, Map<String, Object?> body) {
+    if (kind != MessageKind.text || body['recalled'] == true) return null;
+    if (body['attachmentId'] is String) return null;
+    final text = body['text'];
+    if (text is! String || text.trim().isEmpty) return null;
+    return text;
+  }
+  static String? _attachmentName(MessageKind kind, Map<String, Object?> body) {
+    if (kind != MessageKind.image && kind != MessageKind.file) return null;
+    if (body['attachmentId'] is! String) return null;
+    final name = body['name'];
+    return name is String ? FileAttachmentContent.safeDisplayName(name) : null;
+  }
+
+  static String _messageLabel(
+    MessageKind kind,
+    Map<String, Object?> body, {
+    String? fallback,
+  }) {
+    final text = body['text'];
+    if (text != null) return text.toString();
+    final name = body['name'];
+    if ((kind == MessageKind.image || kind == MessageKind.file) &&
+        body['attachmentId'] is String &&
+        name is String) {
+      return FileAttachmentContent.safeDisplayName(name);
+    }
+    return fallback ?? '[${kind.wire}]';
+  }
+
+  @override
+  Future<MessageImage?> openImageAttachment(String messageId) async {
+    final conversationId = _selected;
+    final sessionConnection = connection;
+    final sessionShell = shell;
+    if (conversationId == null ||
+        sessionConnection == null ||
+        _busy ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected ||
+        !_online) {
+      return null;
+    }
+    final generation = _generation;
+    final epoch = _historySyncEpoch;
+    bool current() =>
+        _current(generation) &&
+        generation == _generation &&
+        epoch == _historySyncEpoch &&
+        _selected == conversationId &&
+        identical(connection, sessionConnection) &&
+        identical(shell, sessionShell) &&
+        authenticated &&
+        !locked &&
+        !_switching &&
+        !_sessionRejected &&
+        _online;
+    final visible = sessionShell
+        .messagesFor(conversationId)
+        .any(
+          (message) =>
+              message.messageId == messageId &&
+              message.kind == MessageKind.image &&
+              message.body['attachmentId'] is String &&
+              message.body['recalled'] != true,
+        );
+    if (!visible || !current()) return null;
+    try {
+      final image = await AttachmentApi(
+        sessionConnection,
+      ).readMessageImage(conversationId: conversationId, messageId: messageId);
+      // A lock, switch or reconnect while the bytes were in flight discards
+      // them instead of publishing a stale plaintext image.
+      return current() ? image : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // The synced cache has already applied the authorized history floor. A
+  // present but malformed recall marker also fails closed for this write.
+  static bool _favoriteSource(MessageEventFrame row) =>
+      row.seq > 0 &&
+      (!row.body.containsKey('recalled') || row.body['recalled'] == false);
+
+  @override
+  Object? get messageFavoriteContext {
+    final transport = connection;
+    final owner = connectedAccountId;
+    final selected = _selected;
+    if (_disposed ||
+        !_controllersReady ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected ||
+        transport == null ||
+        owner == null ||
+        selected == null ||
+        !_conversations.any((row) => row.id == selected)) {
+      return null;
+    }
+    return (
+      owner,
+      _generation,
+      _historySyncEpoch,
+      _favoriteSelectionRevision,
+      transport,
+      shell,
+    );
+  }
+
+  @override
+  bool hasSubmittedMessageFavorite(String messageId) =>
+      messageFavoriteContext != null &&
+      _submittedMessageFavorites.contains((_selected!, messageId));
+
+  @override
+  Future<FavoriteSaveOutcome> saveMessageFavorite({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async {
+    final transport = connection;
+    bool current() =>
+        viewIsCurrent() &&
+        messageFavoriteContext == expectedContext &&
+        identical(transport, connection) &&
+        _selected == conversationId &&
+        shell
+            .messagesFor(conversationId)
+            .any(
+              (row) =>
+                  row.conversationId == conversationId &&
+                  row.messageId == messageId &&
+                  _favoriteSource(row),
+            );
+
+    // Keep the attempt spent even if the response never arrives. The host
+    // does not deduplicate this POST and an interrupted request may commit.
+    if (transport == null ||
+        !_online ||
+        _busy ||
+        !current() ||
+        !_submittedMessageFavorites.add((conversationId, messageId))) {
+      return FavoriteSaveOutcome.cancelled;
+    }
+    final outcome = await FavoritesApi(transport)
+        .saveMessage(conversationId: conversationId, messageId: messageId);
+    return current() ? outcome : FavoriteSaveOutcome.cancelled;
+  }
+
+  @override
+  ScheduledMessagesScope? scheduledMessagesScope(String conversationId) {
+    final transport = connection;
+    final context = messageOperationsContext;
+    if (transport == null ||
+        context == null ||
+        _selected != conversationId ||
+        !_online ||
+        _busy ||
+        !_conversations.any((row) => row.id == conversationId && row.kind == 'group')) {
+      return null;
+    }
+    bool current() =>
+        !_disposed &&
+        identical(connection, transport) &&
+        _selected == conversationId &&
+        messageOperationsContext == context &&
+        _online &&
+        !_busy;
+    return ScheduledMessagesScope(
+      transport: transport,
+      conversationId: conversationId,
+      isCurrent: current,
+      canContactHost: current,
+    );
+  }
+
+  // Same authenticated, unlocked, visible selection as the favorite action.
+  @override
+  Object? get messageOperationsContext => messageFavoriteContext;
+
+  @override
+  bool get messageOperationsAvailable =>
+      messageOperationsContext != null && _online && !_busy;
+
+  @override
+  bool get supportsChatPins => true;
+
+  bool _currentPinView(String conversationId, Object expectedContext) =>
+      _selected == conversationId &&
+      messageOperationsContext == expectedContext;
+
+  @override
+  Future<ChatPinsRead> readChatPins({
+    required String conversationId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+    HostReadCancellation? cancellation,
+  }) async {
+    final transport = connection;
+    bool current() =>
+        identical(connection, transport) &&
+        _online &&
+        _currentPinView(conversationId, expectedContext) &&
+        viewIsCurrent();
+    if (transport == null || !current()) return const ChatPinsUnavailable();
+    final result = await ChatPinsApi(transport).read(
+      conversationId,
+      cancellation: cancellation,
+    );
+    if (result is! ChatPinsLoaded || !current()) {
+      return const ChatPinsUnavailable();
+    }
+    // Pin metadata may precede the joined-history floor (older hosts), name a
+    // tombstone, or refer to a row this device hasn't synced. Only current
+    // visible canonical rows may leave this runtime boundary.
+    final visible = {
+      for (final row in shell.messagesFor(conversationId))
+        if (_favoriteSource(row)) row.messageId,
+    };
+    return ChatPinsLoaded(result.ids.where(visible.contains));
+  }
+
+  @override
+  Future<ChatPinWrite> setMessagePinned({
+    required String conversationId,
+    required String messageId,
+    required bool pinned,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async {
+    final transport = connection;
+    bool current() =>
+        identical(connection, transport) &&
+        _currentPinView(conversationId, expectedContext) &&
+        viewIsCurrent();
+    if (transport == null || !messageOperationsAvailable || !current()) {
+      return ChatPinWrite.cancelled;
+    }
+    bool visible() => shell.messagesFor(conversationId).any(
+      (row) => row.messageId == messageId && _favoriteSource(row),
+    );
+    if (!visible()) return ChatPinWrite.cancelled;
+    // Pins are shared by the conversation. Author/pinner IDs are not proof
+    // of permission; the host applies canPost and the source visibility rule.
+    final key = (shell, conversationId, messageId);
+    if (!_messageWrites.add(key)) return ChatPinWrite.cancelled;
+    try {
+      final result = await ChatPinsApi(transport).setPinned(
+        conversationId,
+        messageId,
+        pinned: pinned,
+      );
+      return current() && visible() ? result : ChatPinWrite.cancelled;
+    } finally {
+      _messageWrites.remove(key);
+    }
+  }
+
+  @override
+  bool get supportsMessageReactions => true;
+
+  bool _currentReactionMessage(
+    HostConnection transport,
+    String conversationId,
+    String messageId,
+    Object expectedContext,
+    bool Function() viewIsCurrent,
+  ) =>
+      identical(connection, transport) &&
+      _online &&
+      _selected == conversationId &&
+      messageOperationsContext == expectedContext &&
+      viewIsCurrent() &&
+      shell.messagesFor(conversationId).any(
+        (row) => row.conversationId == conversationId &&
+            row.messageId == messageId && _favoriteSource(row),
+      );
+
+  @override
+  Future<ReactionRead> readMessageReactions({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+    HostReadCancellation? cancellation,
+  }) async {
+    final transport = connection;
+    final owner = connectedAccountId;
+    bool current() => transport != null && _currentReactionMessage(
+      transport, conversationId, messageId, expectedContext, viewIsCurrent,
+    );
+    if (owner == null || !current()) return const ReactionsUnavailable();
+    final result = await MessageReactionsApi(transport!).read(
+      conversationId,
+      messageId,
+      ownAccountId: owner,
+      cancellation: cancellation,
+    );
+    return current() ? result : const ReactionsUnavailable();
+  }
+
+  @override
+  Future<ReactionWrite> toggleMessageReaction({
+    required String conversationId,
+    required String messageId,
+    required ChatReaction choice,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) async {
+    final transport = connection;
+    bool current() => transport != null && _currentReactionMessage(
+      transport, conversationId, messageId, expectedContext, viewIsCurrent,
+    );
+    if (!messageOperationsAvailable || !current()) return const ReactionCancelled();
+    final key = (shell, conversationId, messageId);
+    if (!_messageWrites.add(key)) return const ReactionCancelled();
+    try {
+      final result = await MessageReactionsApi(transport!).toggle(
+        conversationId, messageId, choice,
+      );
+      return current() ? result : const ReactionCancelled();
+    } finally {
+      _messageWrites.remove(key);
+    }
+  }
+
+  @override
+  Future<MessageWriteOutcome> editMessage({
+    required String conversationId,
+    required String messageId,
+    required String expectedText,
+    required String text,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) => _mutateOwnMessage(
+    conversationId: conversationId,
+    messageId: messageId,
+    expectedContext: expectedContext,
+    viewIsCurrent: viewIsCurrent,
+    edit: (expectedText: expectedText, text: text),
+  );
+
+  @override
+  Future<MessageWriteOutcome> recallMessage({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+  }) => _mutateOwnMessage(
+    conversationId: conversationId,
+    messageId: messageId,
+    expectedContext: expectedContext,
+    viewIsCurrent: viewIsCurrent,
+  );
+
+  Future<MessageWriteOutcome> _mutateOwnMessage({
+    required String conversationId,
+    required String messageId,
+    required Object expectedContext,
+    required bool Function() viewIsCurrent,
+    ({String expectedText, String text})? edit,
+  }) async {
+    final transport = connection;
+    bool currentView() =>
+        viewIsCurrent() &&
+        _selected == conversationId &&
+        messageOperationsContext == expectedContext;
+    if (transport == null || !messageOperationsAvailable || !currentView()) {
+      return const MessageWriteCancelled();
+    }
+    final sessionShell = shell;
+    final generation = _generation;
+    final epoch = _historySyncEpoch;
+    bool currentSession() =>
+        _canSync(generation, epoch) &&
+        authenticated &&
+        identical(shell, sessionShell) &&
+        identical(connection, transport);
+    final source = sessionShell.messagesFor(conversationId)
+        .where((row) => row.messageId == messageId).firstOrNull;
+    if (source == null ||
+        !_favoriteSource(source) ||
+        source.senderId != connectedAccountId) {
+      return const MessageWriteRejected();
+    }
+    if (edit != null) {
+      if (_liveText(source.kind, source.body) != edit.expectedText) {
+        return const MessageWriteCancelled();
+      }
+    } else if (DateTime.now().difference(source.sentAt) > const Duration(hours: 24)) {
+      return const MessageWriteRejected();
+    }
+
+    final key = (sessionShell, conversationId, messageId);
+    if (_unconfirmedMessageWrites.contains(key)) return const MessageWriteUnknown();
+    if (!_messageWrites.add(key)) return const MessageWriteCancelled();
+    try {
+      final api = MessageOperationsApi(transport);
+      final result = edit == null
+          ? await api.recallMessage(conversationId: conversationId, messageId: messageId)
+          : await api.editMessage(source: source, text: edit.text);
+      if (!currentSession()) return const MessageWriteCancelled();
+      final body = switch (result) {
+        EditAccepted(:final body) => body,
+        MessageWriteAccepted() => const <String, Object?>{'recalled': true},
+        _ => null,
+      };
+      if (body == null) {
+        if (result is MessageWriteUnknown) _unconfirmedMessageWrites.add(key);
+        return currentView() ? result : const MessageWriteCancelled();
+      }
+      try {
+        await sessionShell.applyMessageRevisions(
+          conversationId,
+          [MessageEventFrame(
+            id: source.id,
+            at: source.at,
+            conversationId: source.conversationId,
+            seq: source.seq,
+            messageId: source.messageId,
+            senderId: source.senderId,
+            kind: source.kind,
+            body: body,
+            sentAt: source.sentAt,
+          )],
+          markEdited: edit == null ? null : messageId,
+          checkActive: () {
+            if (!currentSession()) throw const _SyncInterrupted();
+          },
+        );
+      } on _SyncInterrupted {
+        return const MessageWriteCancelled();
+      } catch (_) {
+        if (!currentSession()) return const MessageWriteCancelled();
+        _unconfirmedMessageWrites.add(key);
+        return currentView() ? const MessageWriteUnknown() : const MessageWriteCancelled();
+      }
+      if (!currentSession()) return const MessageWriteCancelled();
+      notifyListeners();
+      return currentView() ? const MessageWriteAccepted() : const MessageWriteCancelled();
+    } finally {
+      _messageWrites.remove(key);
+    }
+  }
+
+  @override
+  bool get supportsVoicePlayback => _androidVoicePlayback;
+
+  bool get _voiceForeground =>
+      _androidVoicePlayback && _voiceNativeResumed && _voiceFlutterResumed;
+
+  bool get _canReadVoice =>
+      !_disposed &&
+      _controllersReady &&
+      authenticated &&
+      !locked &&
+      !_switching &&
+      _online &&
+      _voiceForeground;
+
+  @override
+  ShellVoicePlayback? get voicePlayback {
+    final attempt = _voiceAttempt;
+    return attempt == null || !_voiceIsCurrent(attempt)
+        ? null
+        : ShellVoicePlayback(attempt.messageId, attempt.phase);
+  }
+
+  static String? _voiceAttachmentOf(MessageEventFrame message) {
+    final id = message.body['attachmentId'];
+    return message.kind == MessageKind.audio &&
+            message.body['recalled'] != true &&
+            id is String &&
+            id.isNotEmpty
+        ? id
+        : null;
+  }
+
+  String? _visibleVoiceAttachment(String conversationId, String messageId) {
+    if (!_conversations.any((row) => row.id == conversationId)) return null;
+    for (final row in shell.messagesFor(conversationId)) {
+      if (row.messageId == messageId) return _voiceAttachmentOf(row);
+    }
+    return null;
+  }
+
+  bool _voiceIsCurrent(_VoiceAttempt attempt) =>
+      identical(_voiceAttempt, attempt) &&
+      _canReadVoice &&
+      _current(attempt.generation) &&
+      _voiceForegroundEpoch == attempt.epoch &&
+      identical(connection, attempt.connection) &&
+      identical(shell, attempt.shell) &&
+      _selected == attempt.conversationId &&
+      attempt.viewIsCurrent() &&
+      _visibleVoiceAttachment(attempt.conversationId, attempt.messageId) ==
+          attempt.attachmentId;
+
+  @override
+  Future<void> playVoiceMessage(
+    String messageId, {
+    required bool Function() viewIsCurrent,
+    Future<void> Function()? waitForView,
+  }) async {
+    final conversation = _selected;
+    final transport = connection;
+    final epoch = _voiceForegroundEpoch;
+    if (!_canReadVoice ||
+        _busy ||
+        (_voiceAttempt?.active ?? false) ||
+        conversation == null ||
+        transport == null ||
+        epoch == null ||
+        !viewIsCurrent()) {
+      return;
+    }
+    final attachment = _visibleVoiceAttachment(conversation, messageId);
+    if (attachment == null) return;
+    final attempt = _VoiceAttempt(
+      requestId: ++_nextVoiceRequestId,
+      epoch: epoch,
+      generation: _generation,
+      connection: transport,
+      shell: shell,
+      conversationId: conversation,
+      messageId: messageId,
+      attachmentId: attachment,
+      viewIsCurrent: viewIsCurrent,
+    );
+    _voiceAttempt = attempt;
+    notifyListeners();
+    if (!_voiceIsCurrent(attempt)) return;
+    try {
+      final voice = await VoiceMessageApi(transport).read(
+        conversationId: conversation,
+        messageId: messageId,
+        cancellation: attempt.read,
+      );
+      if (!_voiceIsCurrent(attempt)) return;
+      // A shell tab/back change may have scheduled a rebuild but not yet
+      // removed this pane. Wait for that frame before handing bytes to Android.
+      if (waitForView != null) {
+        await Future.any<void>([waitForView(), attempt.stopped.future]);
+      }
+      if (!_voiceIsCurrent(attempt)) return;
+      attempt.nativeStarted = true;
+      final started = await Future.any<bool>([
+        native.playVoiceMessage(
+          requestId: attempt.requestId,
+          epoch: attempt.epoch,
+          bytes: voice.bytes,
+        ).timeout(const Duration(seconds: 12)),
+        attempt.stopped.future.then((_) => false),
+      ]);
+      if (!_voiceIsCurrent(attempt) || !attempt.active) return;
+      if (!started) {
+        _setVoiceFailure(attempt, ShellVoicePhase.unavailable);
+      } else {
+        attempt.phase = ShellVoicePhase.playing;
+        notifyListeners();
+      }
+    } catch (error) {
+      if (!_voiceIsCurrent(attempt) || !attempt.active) return;
+      final denied = error is HostRequestException &&
+          const {
+            FailureCode.unauthenticated,
+            FailureCode.forbidden,
+            FailureCode.notFound,
+          }.contains(error.failure.code);
+      _setVoiceFailure(
+        attempt,
+        denied ? ShellVoicePhase.denied : ShellVoicePhase.unavailable,
+      );
+    } finally {
+      if (identical(_voiceAttempt, attempt) && !_voiceIsCurrent(attempt)) {
+        _discardVoice();
+        notifyListeners();
+      }
+    }
+  }
+
+  void _setVoiceFailure(_VoiceAttempt attempt, ShellVoicePhase phase) {
+    _stopNativeVoice(attempt);
+    attempt.phase = phase;
+    notifyListeners();
+  }
+
+  void _stopNativeVoice(_VoiceAttempt attempt) {
+    if (!attempt.nativeStarted) return;
+    attempt.nativeStarted = false;
+    native.stopVoiceMessage(attempt.requestId).ignore();
+  }
+
+  bool _discardVoice() {
+    final attempt = _voiceAttempt;
+    if (attempt == null) return false;
+    _voiceAttempt = null;
+    attempt.read.cancel();
+    attempt.stopped.complete();
+    _stopNativeVoice(attempt);
+    return true;
+  }
+
+  @override
+  void stopVoicePlayback({bool Function()? viewIsCurrent}) {
+    if (viewIsCurrent != null &&
+        !identical(viewIsCurrent, _voiceAttempt?.viewIsCurrent)) {
+      return;
+    }
+    if (_discardVoice()) {
+      // A pane can stop during Flutter's build/disposal pass.
+      scheduleMicrotask(notifyListeners);
+    }
+  }
+
+  void _setNativeVoiceForeground(Object? epoch, Object? resumed) {
+    if (epoch is! int || epoch < 0 || resumed is! bool) return;
+    final before = _voiceForegroundEpoch;
+    if (before != null && epoch <= before) return;
+    _voiceForegroundEpoch = epoch;
+    _voiceNativeResumed = resumed;
+    if (_discardVoice()) notifyListeners();
+  }
+
+  void _finishNativeVoice(Object? requestId, Object? failed) {
+    final attempt = _voiceAttempt;
+    if (attempt == null ||
+        !attempt.nativeStarted ||
+        requestId != attempt.requestId ||
+        failed is! bool) {
+      return;
+    }
+    attempt.nativeStarted = false;
+    if (failed && _voiceIsCurrent(attempt)) {
+      attempt.phase = ShellVoicePhase.unavailable;
+    } else {
+      _discardVoice();
+    }
+    notifyListeners();
+  }
+
   @override
   int get queuedCount => _controllersReady ? shell.outbox.items.length : 0;
   @override
@@ -166,9 +1208,29 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   String? get roomPreview => _preview;
   Future<void> initialize() async {
     final generation = _generation;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _voiceFlutterResumed = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    foregroundMessageActivity?.setForeground(
+      lifecycle == AppLifecycleState.resumed,
+    );
     WidgetsBinding.instance.addObserver(this);
+    _registerNativeHandler();
     try {
-      await native.invoke<Object?>('initialize');
+      final nativeState = await native.invoke<Object?>('initialize');
+      if (!_current(generation)) return;
+      if (nativeState is Map) {
+        _androidVoicePlayback = nativeState['platform'] == 'android' &&
+            nativeState['voicePlaybackEpoch'] is int;
+        if (_androidVoicePlayback) {
+          _setNativeVoiceForeground(
+            nativeState['voicePlaybackEpoch'],
+            nativeState['voicePlaybackResumed'],
+          );
+        }
+        if (nativeState['pendingShare'] != null) {
+          _acceptSharePayload(nativeState['pendingShare']);
+        }
+      }
       final directory = await native.invoke<String>('getDataDirectory');
       if (directory == null) throw const FileSystemException('本地目录不可用');
       _dataRoot = Directory(directory);
@@ -184,7 +1246,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       appLock = _OwnAiEpochAppLock(
         persistence: _settingsStorage,
         auth: native,
-        invalidate: _invalidateOwnAiDirect,
+        invalidate: () {
+          _discardVoice();
+          _invalidateOwnAiDirect();
+          _invalidateSharedTextContext();
+          if (appLock.enabled) _historySyncEpoch++;
+        },
       );
       await appLock.initialize();
       final guest = await _prepareSnapshot(
@@ -194,8 +1261,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       );
       if (!_current(generation)) return;
       _publishSnapshot(guest);
-      final saved = await native.invoke<String>('readSession');
-      if (saved != null) {
+      final saved = _earlyLogoutRequested
+          ? null
+          : await native.invoke<String>('readSession');
+      if (_earlyLogoutRequested) {
+        await native.invoke<void>('clearSession');
+      }
+      if (saved != null && !_earlyLogoutRequested) {
         try {
           final decoded = jsonDecode(saved);
           if (decoded is! Map<String, dynamic>) throw const FormatException();
@@ -212,42 +1284,27 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
             await prepared.transport?.close();
             return;
           }
-          _credentials = credentials;
-          _publishSnapshot(prepared);
-          connection = _newConnection(credentials, generation);
-          _onboarded = decoded['onboarded'] == true;
-          _chatEntered = _chatEntered || _onboarded;
+          if (_earlyLogoutRequested) {
+            await prepared.transport?.close();
+            await native.invoke<void>('clearSession');
+          } else {
+            _credentials = credentials;
+            _publishSnapshot(prepared);
+            connection = _newConnection(credentials, generation);
+            _onboarded = decoded['onboarded'] == true;
+            _chatEntered = _chatEntered || _onboarded;
+            await _restoreAndroidOwnAiDirectory(credentials, generation);
+          }
         } on FormatException {
           // Old unscoped credentials are not paired with private legacy data.
           _error = '旧登录记录缺少账号或设备身份，请重新登录；本地旧数据保持不变';
         }
       }
       if (!_current(generation)) return;
-      NativePlatform.channel.setMethodCallHandler((call) async {
-        if (_disposed) return;
-        if (call.method == 'event' &&
-            (call.arguments as Map?)?['type'] == 'lock') {
-          appLock.lock();
-          notifyListeners();
-        }
-        if (call.method == 'event' &&
-            (call.arguments as Map?)?['type'] == 'logout') {
-          await _logout();
-        }
-        if (call.method == 'shareReceived') {
-          final data = call.arguments as Map;
-          if (_selected != null) {
-            _draftRevisions.update(
-              _selected!,
-              (revision) => revision + 1,
-              ifAbsent: () => 1,
-            );
-          }
-          _draft = data['text']?.toString() ?? '';
-          if (_selected != null) await shell.saveDraft(_selected!, _draft);
-          notifyListeners();
-        }
-      });
+      _initialSessionRestore = false;
+      _earlyLogoutRequested = false;
+      if (!authenticated) _invalidateSharedTextContext(discard: true);
+      if (_earlyLockRequested) appLock.lock();
       _ready = true;
       if (connection != null && !locked) unawaited(_refresh());
       reconnect = Timer.periodic(const Duration(seconds: 15), (_) {
@@ -264,7 +1321,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   void notifyListeners() {
-    if (!_disposed) super.notifyListeners();
+    if (_disposed) return;
+    final voice = _voiceAttempt;
+    if (voice != null && !_voiceIsCurrent(voice)) _discardVoice();
+    super.notifyListeners();
   }
 
   Future<void> _migrateSettings() async {
@@ -380,6 +1440,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         return false;
       }
       _credentials = rotated;
+      _invalidateSharedTextContext();
       _pendingRenewal = null;
       connection?.updateAccessToken(rotated.accessToken);
       _submissionTransport?.updateAccessToken(rotated.accessToken);
@@ -389,6 +1450,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         if (error is HostRequestException &&
             error.failure.code == FailureCode.unauthenticated) {
           _sessionRejected = true;
+          _invalidateSharedTextContext(discard: true);
           _invalidateOwnAiDirect();
           _ownAiAccounts = [];
           _ownAiNotice = null;
@@ -426,10 +1488,15 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         );
       },
       requestSync: (frame) async {
-        if (!_current(generation)) return;
-        await transport?.sync(frame, (message) async {
-          if (_current(generation)) await next.acceptMessage(message);
-        });
+        if (transport != null) {
+          await _syncConversation(
+            transport,
+            next,
+            frame,
+            generation,
+            _historySyncEpoch,
+          );
+        }
       },
     );
     final nextConsent = ConversationConsentController(snapshot);
@@ -453,6 +1520,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   void _publishSnapshot(_PreparedSnapshot prepared) {
     _submissionTransport = prepared.transport;
     storage = prepared.storage;
+    _unconfirmedMessageWrites.clear();
     shell = prepared.shell;
     consent = prepared.consent;
     _chatEntered = prepared.chatEntered;
@@ -462,7 +1530,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   HostConnection? _submissionTransport;
 
   Future<void> _logout() async {
+    _discardVoice();
+    _invalidateSharedTextContext(discard: true);
     final generation = ++_generation;
+    _submittedMessageFavorites.clear();
     _invalidateOwnAiDirect();
     _pendingMention = null;
     _credentials = null;
@@ -482,12 +1553,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _ownAiAccounts = [];
     _ownAiNotice = null;
     _ownAiLoaded = false;
+    final clearingAttachment = _clearAttachmentSelection();
     _selected = null;
     _draft = '';
     appLock.lock();
     notifyListeners();
     final clear = _secureOperation(() => native.invoke<void>('clearSession'));
     await Future.wait<void>([
+      clearingAttachment,
       if (previous != null) previous.close(),
       if (submission != null) submission.close(),
       if (oldPlugins != null) oldPlugins.unloadAll(),
@@ -514,10 +1587,15 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_controllersReady) return;
-    if (shouldLockForLifecycle(state)) {
+    if (_disposed) return;
+    _voiceFlutterResumed = state == AppLifecycleState.resumed;
+    foregroundMessageActivity?.setForeground(_voiceFlutterResumed);
+    final voiceStopped = !_voiceFlutterResumed && _discardVoice();
+    if (_controllersReady && shouldLockForLifecycle(state)) {
       appLock.lock();
       unawaited(native.invoke<void>('lock'));
+      notifyListeners();
+    } else if (voiceStopped) {
       notifyListeners();
     }
   }
@@ -548,18 +1626,86 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     final active = _refreshWork;
     if (active != null) return active;
     _refreshGeneration++;
-    final work = _performRefresh(connection!, shell, _generation);
+    final work = _performRefresh(
+      connection!,
+      shell,
+      _generation,
+      _historySyncEpoch,
+    );
     _refreshWork = work;
     return work.whenComplete(() {
       if (identical(_refreshWork, work)) _refreshWork = null;
     });
   }
 
+  bool _canSync(int generation, int epoch) =>
+      _current(generation) &&
+      _historySyncEpoch == epoch &&
+      !locked &&
+      !_switching &&
+      !_sessionRejected;
+
+  Future<bool> _syncConversation(
+    HostConnection transport,
+    ClientShellController sessionShell,
+    SyncRequestFrame frame,
+    int generation,
+    int epoch, {
+    ForegroundMessageRefresh? activity,
+  }) async {
+    var incoming = false;
+    var floor = 1;
+    void checkActive() {
+      if (!_canSync(generation, epoch)) throw const _SyncInterrupted();
+    }
+
+    try {
+      await transport.sync(
+        frame,
+        (message) async {
+          final outcome = await sessionShell.acceptMessage(
+            message,
+            checkActive: checkActive,
+          );
+          if (!incoming &&
+              outcome == MergeOutcome.applied &&
+              activity?.isIncoming(message) == true) {
+            incoming = true;
+          }
+        },
+        applyHistoryFloor: (firstVisibleSeq) {
+          if (firstVisibleSeq > floor) floor = firstVisibleSeq;
+          return sessionShell.applySyncHistoryFloor(
+            frame.conversationId,
+            firstVisibleSeq,
+            checkActive: checkActive,
+          );
+        },
+        checkActive: checkActive,
+      );
+      checkActive();
+      activity?.observe(frame.conversationId, floor, incoming: incoming);
+      return true;
+    } on _SyncInterrupted {
+      return false;
+    }
+  }
+
   Future<void> _performRefresh(
     HostConnection sessionConnection,
     ClientShellController sessionShell,
     int generation,
+    int epoch,
   ) async {
+    final activity = foregroundMessageActivity;
+    final self = connectedAccountId;
+    final notice = self == null
+        ? null
+        : activity?.begin(
+            session: (generation, epoch),
+            self: self,
+            wasOnline: _online,
+          );
     try {
       // `/host` is administrator-only on the current host. A friend client
       // legitimately receives 403; that must mean isHostMachine=false rather
@@ -574,7 +1720,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           rethrow;
         }
       }
-      if (!_current(generation)) return;
+      if (!_canSync(generation, epoch)) return;
       plugins ??= PluginHost(
         environment: PluginEnvironment(
           platform: Platform.isWindows ? 'windows' : 'android',
@@ -587,11 +1733,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         },
       );
       final list = await sessionConnection.request('GET', Routes.conversations);
+      if (!_canSync(generation, epoch)) return;
       final direct = await sessionConnection.request(
         'GET',
         Routes.directConversations,
       );
-      if (!_current(generation) || locked) return;
+      if (!_canSync(generation, epoch)) return;
       final conversations = mapConversations(
         groups: list['conversations'],
         directs: direct['conversations'],
@@ -600,24 +1747,37 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _online = true;
       await sessionShell.flush();
       for (final conversation in conversations) {
-        if (!_current(generation) || locked) return;
-        await sessionConnection.sync(
+        if (!_canSync(generation, epoch)) return;
+        final completed = await _syncConversation(
+          sessionConnection,
+          sessionShell,
           SyncRequestFrame(
             id: 'refresh-${conversation.id}',
             at: DateTime.now().toUtc(),
             conversationId: conversation.id,
             afterSeq: sessionShell.lastSeqFor(conversation.id),
           ),
-          (message) async {
-            if (_current(generation)) await sessionShell.acceptMessage(message);
-          },
+          generation,
+          epoch,
+          activity: notice,
         );
+        if (!completed) return;
       }
-      if (_current(generation) && Platform.isAndroid) {
+      if (notice != null &&
+          _canSync(generation, epoch) &&
+          authenticated &&
+          identical(connection, sessionConnection) &&
+          identical(shell, sessionShell)) {
+        activity?.complete(notice);
+      }
+      if (_canSync(generation, epoch) && Platform.isAndroid) {
         await native.invoke<bool>('setForegroundService', {'enabled': true});
+        if (_canSync(generation, epoch) && _ownAiLoaded && !_busy) {
+          await _refreshAndroidOwnAiDirectory(generation, sessionConnection);
+        }
       }
     } catch (_) {
-      if (_current(generation)) _online = false;
+      if (_current(generation) && _historySyncEpoch == epoch) _online = false;
     }
     if (_current(generation)) notifyListeners();
   }
@@ -652,6 +1812,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     }
     if (!_current(generation)) return;
     _switching = true;
+    _discardVoice();
+    _invalidateSharedTextContext(discard: true);
     _PreparedSnapshot? prepared;
     var published = false;
     try {
@@ -671,6 +1833,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       final submission = _submissionTransport;
       final oldPlugins = plugins;
       ++_generation;
+      _submittedMessageFavorites.clear();
       _invalidateOwnAiDirect();
       _pendingMention = null;
       _credentials = credentials;
@@ -684,6 +1847,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       plugins = null;
       _online = false;
       _onboarded = false;
+      final clearingAttachment = _clearAttachmentSelection();
       _selected = null;
       _draft = '';
       _conversations = [];
@@ -691,6 +1855,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _ownAiNotice = null;
       _ownAiLoaded = false;
       await Future.wait<void>([
+        clearingAttachment,
         if (previous != null) previous.close(),
         if (submission != null) submission.close(),
         if (oldPlugins != null) oldPlugins.unloadAll(),
@@ -886,6 +2051,38 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   bool _ownAiContext(int generation, HostConnection session) =>
       _ownAiCurrentSession(generation, session) && !locked;
 
+  Future<void> _refreshAndroidOwnAiDirectory(
+    int generation,
+    HostConnection session,
+  ) async {
+    final interaction = ownAiDirectContext;
+    if (interaction == null) return;
+    try {
+      final rows = await OwnAiApi(session).list();
+      if (!_ownAiContext(generation, session) ||
+          !identical(ownAiDirectContext, interaction) ||
+          _busy) {
+        return;
+      }
+      if (rows.length == _ownAiAccounts.length &&
+          rows.indexed.every((entry) {
+            final (index, row) = entry;
+            final prior = _ownAiAccounts[index];
+            return row.accountId == prior.accountId &&
+                row.displayName == prior.displayName &&
+                row.disabled == prior.disabled;
+          })) {
+        return;
+      }
+      _publishOwnAi(rows);
+      final credentials = _credentials;
+      if (credentials != null) await _saveAndroidOwnAiDirectory(credentials);
+    } catch (_) {
+      // A failed directory check is not evidence of ownership changes. Keep
+      // the cached rows available; every host mutation checks live ownership.
+    }
+  }
+
   void _publishOwnAi(List<OwnedAiAccount> rows) {
     // A fresh list is a new ownership snapshot; never leave stale confirmations.
     _invalidateOwnAiDirect();
@@ -911,6 +2108,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         error.failure.code == FailureCode.unauthenticated &&
         error.failure.details['authenticationRenewalFailed'] != true) {
       _sessionRejected = true;
+      _invalidateSharedTextContext(discard: true);
       _invalidateOwnAiDirect();
       _online = false;
       _ownAiAccounts = [];
@@ -1108,15 +2306,62 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _requireOnlineGroupSession();
     final generation = _generation;
     final session = connection!;
+    final credentials = _credentials;
     try {
       final rows = await OwnAiApi(session).list();
       if (!_ownAiContext(generation, session)) return;
       _publishOwnAi(rows);
       _ownAiNotice = null;
+      if (credentials != null) {
+        unawaited(_saveAndroidOwnAiDirectory(credentials));
+      }
     } catch (error) {
       _ownAiFailure(error, generation, session);
     }
   });
+
+  @override
+  Future<void> removeOwnAi(String accountId) {
+    final interaction = ownAiDirectContext;
+    final generation = _generation;
+    final session = connection;
+    final target = _ownAiAccounts.where((row) => row.accountId == accountId);
+    if (interaction == null || session == null || target.length != 1) {
+      return Future.value();
+    }
+    final name = target.single.displayName;
+    bool current() =>
+        _ownAiContext(generation, session) &&
+        identical(ownAiDirectContext, interaction);
+    return _run(() async {
+      if (!current() || !online) return;
+      try {
+        await OwnAiApi(session).remove(accountId);
+      } on HostRequestException catch (error) {
+        if (!current()) return;
+        _error = switch (error.failure.code) {
+          FailureCode.unauthenticated => '请重新连接宿主并刷新“我的 AI”。',
+          FailureCode.notFound || FailureCode.forbidden =>
+            '无法移除该 AI：宿主可能不支持此操作，或该 AI 已不在你名下。请刷新列表。',
+          _ => '移除结果未确认。请先刷新“我的 AI”，不要重复提交。',
+        };
+        return;
+      } catch (_) {
+        if (current()) _error = '移除结果未确认。请先刷新“我的 AI”，不要重复提交。';
+        return;
+      }
+      if (!current()) return;
+      // The server confirmed this one removal; do not leave an actionable
+      // stale row behind if a subsequent, unrelated list request would fail.
+      _ownAiAccounts = _ownAiAccounts
+          .where((row) => row.accountId != accountId)
+          .toList();
+      _invalidateOwnAiDirect();
+      _ownAiNotice = '已移除「$name」。服务器上已有的聊天记录仍保留。';
+      final credentials = _credentials;
+      if (credentials != null) await _saveAndroidOwnAiDirectory(credentials);
+    });
+  }
 
   @override
   Future<void> createOwnAi(String displayName) => _run(() async {
@@ -1200,6 +2445,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         ownerAccountId: group.ownerAccountId,
       ),
     ]..sort((left, right) => left.title.compareTo(right.title));
+    unawaited(_clearAttachmentSelection());
     _selected = group.id;
     _draft = sessionShell.draftFor(group.id);
   });
@@ -1224,30 +2470,119 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
 
   @override
   Future<void> selectConversation(String id) async {
+    if (_selected != id) {
+      _discardVoice();
+      _invalidateSharedTextContext();
+      unawaited(_clearAttachmentSelection());
+    }
     _selected = id;
     _draft = shell.draftFor(id);
     notifyListeners();
+    // Selection stays synchronous: the durable mark and its receipt run off the
+    // shell serial queue (a flush can hold it across network IO) and are guarded
+    // so a stale result never publishes. Re-selecting re-checks the head so a
+    // message that arrived while the chat was open can still clear the badge.
+    unawaited(_markConversationRead(id));
+  }
+
+  /// Persists the read position for [id] and reports it once. Nothing happens
+  /// when the position is already at the head, so repeated opens never send a
+  /// duplicate receipt.
+  Future<void> _markConversationRead(String id) async {
+    final generation = _generation;
+    final sessionShell = shell;
+    final sessionConnection = connection;
+    final epoch = _historySyncEpoch;
+    if (sessionConnection == null ||
+        !_controllersReady ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected ||
+        !_online ||
+        !identical(shell, sessionShell)) {
+      return;
+    }
+    final head = sessionShell.lastSeqFor(id);
+    if (head < 1 || sessionShell.readSeqFor(id) >= head) return;
+    bool current() =>
+        _current(generation) &&
+        epoch == _historySyncEpoch &&
+        _selected == id &&
+        identical(shell, sessionShell) &&
+        identical(connection, sessionConnection) &&
+        authenticated &&
+        !locked &&
+        !_switching &&
+        !_sessionRejected;
+    try {
+      await sessionShell.markRead(
+        id,
+        head,
+        checkActive: () {
+          if (!current()) throw const _ReadInterrupted();
+        },
+      );
+    } catch (_) {
+      return;
+    }
+    if (!current()) return;
+    await _sendReadReceipt(id, head, generation, epoch, sessionConnection);
+  }
+
+  /// Exactly one best-effort receipt per successful advance. A failure is
+  /// silent and is never retried; a later lock/logout/switch discards it.
+  Future<void> _sendReadReceipt(
+    String id,
+    int head,
+    int generation,
+    int epoch,
+    HostConnection sessionConnection,
+  ) async {
+    if (!_current(generation) ||
+        epoch != _historySyncEpoch ||
+        _selected != id ||
+        !authenticated ||
+        locked ||
+        _switching ||
+        _sessionRejected) {
+      return;
+    }
+    try {
+      await sessionConnection.request(
+        'POST',
+        Routes.messageAck.replaceAll(
+          '{conversationId}',
+          Uri.encodeComponent(id),
+        ),
+        body: {'seq': head},
+      );
+    } catch (_) {
+      // Reading must never be blocked by a best-effort read receipt.
+    }
   }
 
   @override
   void updateDraft(String value) {
-    if (_selected != null) {
+    _draft = value;
+    final selected = _selected;
+    if (selected != null) {
+      final generation = _generation;
       _draftRevisions.update(
-        _selected!,
+        selected,
         (revision) => revision + 1,
         ifAbsent: () => 1,
       );
-    }
-    _draft = value;
-    notifyListeners();
-    if (_selected != null) {
+      // Schedule the save before listeners can request a send of this draft.
       unawaited(
-        shell.saveDraft(_selected!, value).catchError((Object e) {
+        shell.saveDraft(selected, value).catchError((Object e) {
+          if (!_current(generation)) return;
           _error = '草稿保存失败';
           notifyListeners();
         }),
       );
     }
+    notifyListeners();
   }
 
   @override
@@ -1274,10 +2609,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     final sessionShell = shell;
     final selected = _selected!;
     final text = _draft;
-    await sessionShell.enqueue(selected, MessageKind.text, {'text': text});
-    await sessionShell.saveDraft(selected, '');
+    final draftRevision = _draftRevisions[selected] ?? 0;
+    await sessionShell.enqueueTextDraft(selected, text);
     if (!_current(generation)) return;
-    if (_selected == selected && _draft == text) _draft = '';
+    if (_selected == selected &&
+        _draft == text &&
+        (_draftRevisions[selected] ?? 0) == draftRevision) {
+      _draft = '';
+    }
     if (_online && !locked) await sessionShell.flush();
   });
   @override
@@ -1421,9 +2760,175 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   });
 
   @override
+  String? get selectedAttachmentName {
+    final draft = _attachmentDraft;
+    return draft != null && !locked && _isAttachmentDraftCurrent(draft)
+        ? draft.name
+        : null;
+  }
+
+  @override
   Future<void> attachFile(String kind) => _run(() async {
-    throw const FileSystemException('附件上传接口尚未提供，内容未发送');
+    if (kind != 'image' && kind != 'file') {
+      throw const FormatException('不支持的附件类型');
+    }
+    final generation = _generation;
+    final sessionConnection = connection;
+    final selected = _selected;
+    if (sessionConnection == null ||
+        selected == null ||
+        locked ||
+        !_attachmentContext(generation, sessionConnection, selected) ||
+        !aiConsentGranted) {
+      throw const FormatException('请先解锁并确认当前会话的附件设置');
+    }
+    final revision = _attachmentSelectionRevision;
+    final PickedAttachment? picked;
+    try {
+      picked = await native.pickAttachment(kind);
+    } catch (_) {
+      throw const FormatException('无法选择附件，未发送内容');
+    }
+    if (picked == null) return;
+
+    // Android's system picker can pause and lock the app. Its result is only
+    // staged in memory for the same chat, hidden until unlock, never uploaded.
+    if (revision != _attachmentSelectionRevision ||
+        !_attachmentContext(generation, sessionConnection, selected)) {
+      await _releasePickedAttachment(picked);
+      return;
+    }
+    final name = FileAttachmentContent.safeDisplayName(picked.name);
+    final previous = _attachmentDraft;
+    _attachmentDraft = _AttachmentDraft(
+      picked: picked,
+      name: name,
+      kind: kind,
+      generation: generation,
+      connection: sessionConnection,
+      conversationId: selected,
+    );
+    if (previous != null) await _releasePickedAttachment(previous.picked);
   });
+
+  @override
+  Future<void> discardSelectedAttachment() => _run(_clearAttachmentSelection);
+
+  @override
+  Future<void> sendSelectedAttachment() {
+    final draft = _attachmentDraft;
+    final lockEpoch = _historySyncEpoch;
+    return _run(() async {
+      if (draft == null || !_isAttachmentDraftCurrent(draft) || locked) return;
+      if (!_online || !aiConsentGranted) {
+        throw const FormatException('请联网并确认当前会话的附件设置后再发送');
+      }
+      final sessionShell = shell;
+      void checkActive() {
+        if (!_isAttachmentDraftCurrent(draft) ||
+            !identical(shell, sessionShell) ||
+            _historySyncEpoch != lockEpoch ||
+            locked ||
+            !_online ||
+            !aiConsentGranted) {
+          throw const AttachmentSendCancelled();
+        }
+      }
+
+      final FileAttachmentContent content;
+      try {
+        content = await FileAttachmentContent.load(
+          draft.picked.path,
+          kind: draft.kind,
+          displayName: draft.name,
+          declaredMime: draft.picked.mime,
+        );
+      } on FormatException {
+        rethrow;
+      } catch (_) {
+        throw const FormatException('所选文件不可用，未发送内容');
+      }
+
+      final AttachmentSendResult uploaded;
+      try {
+        uploaded =
+            await AttachmentSendFlow(
+              AttachmentUploadApi(draft.connection),
+              abortOnFailure: true,
+            ).upload(
+              source: content,
+              conversationId: draft.conversationId,
+              checkActive: checkActive,
+            );
+      } on AttachmentSendCancelled {
+        return;
+      } catch (_) {
+        throw const FormatException('附件上传失败，未发送内容');
+      }
+
+      try {
+        checkActive();
+        await sessionShell.enqueueDurable(draft.conversationId, uploaded.kind, {
+          'attachmentId': uploaded.attachmentId,
+          'name': content.displayName,
+        }, checkActive: checkActive);
+      } catch (error) {
+        await _deleteUnsentAttachment(draft.connection, uploaded.attachmentId);
+        if (error is AttachmentSendCancelled) return;
+        throw const FormatException('附件消息保存失败，请重试发送');
+      }
+      if (identical(_attachmentDraft, draft)) await _clearAttachmentSelection();
+      if (_current(draft.generation) && _online && !locked) {
+        await sessionShell.flush();
+      }
+    });
+  }
+
+  bool _isAttachmentDraftCurrent(_AttachmentDraft draft) =>
+      identical(_attachmentDraft, draft) &&
+      _attachmentContext(
+        draft.generation,
+        draft.connection,
+        draft.conversationId,
+      );
+
+  bool _attachmentContext(
+    int generation,
+    HostConnection sessionConnection,
+    String conversationId,
+  ) =>
+      _current(generation) &&
+      authenticated &&
+      !_sessionRejected &&
+      !_switching &&
+      identical(connection, sessionConnection) &&
+      _selected == conversationId &&
+      _conversations.any((entry) => entry.id == conversationId);
+
+  Future<void> _clearAttachmentSelection() async {
+    _attachmentSelectionRevision++;
+    final previous = _attachmentDraft;
+    _attachmentDraft = null;
+    if (previous != null) await _releasePickedAttachment(previous.picked);
+  }
+
+  Future<void> _releasePickedAttachment(PickedAttachment picked) async {
+    if (!picked.temporary) return;
+    try {
+      await File(picked.path).delete();
+    } catch (_) {}
+  }
+
+  Future<void> _deleteUnsentAttachment(
+    HostConnection sessionConnection,
+    String attachmentId,
+  ) async {
+    try {
+      await AttachmentApi(sessionConnection)
+          .deleteAttachment(attachmentId, retryAuthentication: false);
+    } catch (_) {}
+  }
+
   @override
   Future<void> setAppLock(bool enabled, String pin) => _run(() async {
     if (enabled) {
@@ -1434,10 +2939,23 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   });
   @override
   Future<void> unlock(String pin) => _run(() async {
+    _invalidateSharedTextContext();
     if (!await appLock.unlockWithPin(pin)) {
       throw const FormatException('PIN 不正确');
     }
-    if (connection != null) unawaited(_refresh());
+    if (connection == null) return;
+    final generation = _generation;
+    final previous = _refreshWork;
+    if (previous == null) {
+      unawaited(_refresh());
+    } else {
+      // The superseded flight must stop before refresh takes a new cursor.
+      unawaited(
+        previous.then((_) async {
+          if (_current(generation)) await _refresh();
+        }),
+      );
+    }
   });
   @override
   Future<void> setHideNotificationBody(bool value) => _run(() async {
@@ -1474,13 +2992,17 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _discardVoice();
+    _invalidateSharedTextContext(discard: true);
     ++_generation;
     _invalidateOwnAiDirect();
     _pendingMention = null;
+    unawaited(_clearAttachmentSelection());
     _credentials = null;
     _pendingRenewal = null;
     reconnect?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    foregroundMessageActivity?.dispose();
     NativePlatform.channel.setMethodCallHandler(null);
     unawaited(connection?.close());
     unawaited(_submissionTransport?.close());
@@ -1488,6 +3010,44 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _submissionTransport = null;
     super.dispose();
   }
+}
+
+class _VoiceAttempt {
+  _VoiceAttempt({
+    required this.requestId,
+    required this.epoch,
+    required this.generation,
+    required this.connection,
+    required this.shell,
+    required this.conversationId,
+    required this.messageId,
+    required this.attachmentId,
+    required this.viewIsCurrent,
+  });
+
+  final int requestId, epoch, generation;
+  final HostConnection connection;
+  final ClientShellController shell;
+  final String conversationId, messageId, attachmentId;
+  final bool Function() viewIsCurrent;
+  final read = HostReadCancellation();
+  final stopped = Completer<void>();
+  ShellVoicePhase phase = ShellVoicePhase.loading;
+  bool nativeStarted = false;
+
+  bool get active =>
+      phase == ShellVoicePhase.loading || phase == ShellVoicePhase.playing;
+}
+
+class _SharedTextInterrupted implements Exception {
+  const _SharedTextInterrupted();
+}
+
+class _ShareInteractionContext {
+  const _ShareInteractionContext(this.epoch, this.credentials, this.share);
+  final Object epoch;
+  final ClientCredentials? credentials;
+  final ShellIncomingShare share;
 }
 
 /// Capture even direct appLock.lock() calls without changing lock behavior or
@@ -1504,6 +3064,31 @@ class _OwnAiEpochAppLock extends AppLockController {
     super.lock();
     invalidate();
   }
+}
+
+class _AttachmentDraft {
+  const _AttachmentDraft({
+    required this.picked,
+    required this.name,
+    required this.kind,
+    required this.generation,
+    required this.connection,
+    required this.conversationId,
+  });
+  final PickedAttachment picked;
+  final String name;
+  final String kind;
+  final int generation;
+  final HostConnection connection;
+  final String conversationId;
+}
+
+class _SyncInterrupted implements Exception {
+  const _SyncInterrupted();
+}
+
+class _ReadInterrupted implements Exception {
+  const _ReadInterrupted();
 }
 
 class _PreparedSnapshot {

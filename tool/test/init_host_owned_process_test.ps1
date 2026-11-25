@@ -60,6 +60,9 @@ if (-not $Integration) { return }
 
 if (-not $Dart) { throw 'Integration requires an SDK dart.exe path.' }
 $Dart = (Resolve-Path -LiteralPath $Dart).Path
+$controlVm = Join-Path (Split-Path -Parent $Dart) 'dartvm.exe'
+if (-not (Test-Path -LiteralPath $controlVm -PathType Leaf)) { $controlVm = $Dart }
+$null = Get-Command Get-NetTCPConnection -ErrorAction Stop
 $repo = Split-Path -Parent $tool
 $hostApp = Join-Path $repo 'apps/host'
 if (Test-Path Env:JINGYU_DATA_DIR) { throw 'Run the integration in a clean test shell.' }
@@ -88,8 +91,16 @@ function Reserve-TestPorts {
 }
 
 function Test-Health([int]$Port) {
-    try { (Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/v1/health" -TimeoutSec 1).status -eq 'ok' }
+    try { (Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/v1/health" -TimeoutSec 1 -UseBasicParsing).status -eq 'ok' }
     catch { $false }
+}
+
+function Assert-OwnedListener([Diagnostics.Process]$Process, [int]$Port) {
+    $listeners = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen)
+    if ($null -eq $Process -or $Process.HasExited -or $listeners.Count -ne 1 -or
+        $listeners[0].OwningProcess -ne $Process.Id) {
+        throw 'The launched process does not own the temporary listener.'
+    }
 }
 
 try {
@@ -103,21 +114,57 @@ try {
     $env:JINGYU_BIND = '127.0.0.1'
     $env:JINGYU_PORT = "$controlPort"
     $controlLog = Join-Path $fixtureRoot 'control.out'
-    $control = Start-Process -FilePath $Dart -ArgumentList 'bin/server.dart' -WorkingDirectory $hostApp -PassThru `
+    $control = Start-Process -FilePath $controlVm -ArgumentList 'bin/server.dart' -WorkingDirectory $hostApp -PassThru `
         -RedirectStandardOutput $controlLog -RedirectStandardError (Join-Path $fixtureRoot 'control.err')
+    $null = $control.Handle
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     do {
         if ($control.HasExited -or $deadline.Elapsed.TotalSeconds -ge 20) { throw 'Owned control host did not start.' }
         $ownedReady = (Get-Content -LiteralPath $controlLog -Raw) -match "listening on 127\.0\.0\.1:$controlPort\b"
         if (-not $ownedReady) { Start-Sleep -Milliseconds 100 }
     } until ($ownedReady)
+    Assert-OwnedListener $control $controlPort
     if (-not (Test-Health $controlPort)) { throw 'Owned control host was not healthy.' }
 
-    # Invoke in this test shell with an explicitly constructed fresh data path.
-    # Both the account and its passphrase are synthetic and never rendered.
-    $pass = 'synthetic-' + [guid]::NewGuid().ToString('N')
-    & $script -DataDir $bootstrapData -AdminName 'Synthetic Bootstrap' -AdminPassword $pass `
-        -BindAddress '127.0.0.1' -Port $bootstrapPort -Dart $Dart 6>$null
+    # Observe the actual process and socket before forwarding any HTTP, without
+    # substituting a fake host or changing how the bootstrap launches it.
+    $pass = 'fixture-' + [guid]::NewGuid().ToString('N')
+    & {
+        $observed = @{ Process = $null; Checked = $false; OwnershipError = $null }
+        function Start-Process {
+            param($FilePath, $ArgumentList, $WorkingDirectory, $RedirectStandardOutput,
+                  $RedirectStandardError, [switch]$PassThru, $WindowStyle)
+            $observed.Process = Microsoft.PowerShell.Management\Start-Process @PSBoundParameters
+            $observed.Process
+        }
+        function Invoke-RestMethod {
+            param($Uri, $TimeoutSec, $Method, $ContentType, $Body, $Headers)
+            $target = [uri]$Uri
+            if ($target.Scheme -ne 'http' -or $target.Host -ne '127.0.0.1' -or $target.Port -ne $bootstrapPort) {
+                throw 'Unexpected bootstrap HTTP destination.'
+            }
+            # The bootstrap handles health failures and retries. Preserve the
+            # underlying assertion without repeating the OS query on each retry.
+            if ($observed.OwnershipError) { throw $observed.OwnershipError }
+            if (-not $observed.Checked) {
+                try { Assert-OwnedListener $observed.Process $bootstrapPort }
+                catch {
+                    $observed.OwnershipError = $_
+                    throw
+                }
+                $observed.Checked = $true
+            }
+            Microsoft.PowerShell.Utility\Invoke-RestMethod @PSBoundParameters -UseBasicParsing
+        }
+        try {
+            & $script -DataDir $bootstrapData -AdminName 'Synthetic Bootstrap' -AdminPassword $pass `
+                -BindAddress '127.0.0.1' -Port $bootstrapPort -Dart $Dart 6>$null
+        } catch {
+            if ($observed.OwnershipError) { throw $observed.OwnershipError }
+            throw
+        }
+        if (-not $observed.Checked) { throw 'Temporary listener was not observed.' }
+    }
     if ($control.HasExited -or -not (Test-Health $controlPort)) { throw 'Bootstrap stopped the independent control host.' }
     if (Test-Health $bootstrapPort) { throw 'Bootstrap left its temporary host running.' }
     # Verify port release, not just the disappearance of a healthy response.

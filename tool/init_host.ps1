@@ -12,7 +12,7 @@
 #     -AdminName Root `
 #     -AdminPassword '<至少12位的口令>' `
 #     [-BindAddress 100.x.y.z] [-Port 8787] [-Dart <官方 SDK dart.exe 绝对路径>]
-# Flutter 的 dart.bat 可用于初始化 SDK 缓存，但临时宿主始终由 SDK dart.exe 直接启动。
+# Flutter 的 dart.bat 可用于初始化 SDK 缓存；临时宿主使用 SDK 中实际运行脚本的进程。
 #
 # 说明：密钥/口令只经进程环境变量传入子进程，不写入仓库、不打印。脚本只修改
 # $DataDir 下的数据，不改动源码；不 push / PR / merge。
@@ -45,8 +45,8 @@ if (-not (Test-Path (Join-Path $hostApp 'bin/server.dart'))) {
 }
 $dartPath = Resolve-Dart $Dart
 
-# Only an official SDK dart.exe is supported for the owned server launch.
-# This checks the SDK layout, not the authenticity of caller-supplied binaries.
+# Resolve the listener process from the same SDK as the CLI, not from PATH.
+# The layout checks do not authenticate caller-supplied binaries.
 function Resolve-ServerDart([string]$cliPath) {
   $candidate = $cliPath
   if ([IO.Path]::GetExtension($cliPath) -in @('.bat', '.cmd')) {
@@ -58,7 +58,13 @@ function Resolve-ServerDart([string]$cliPath) {
       -not (Test-Path -LiteralPath $candidate -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $sdk 'version') -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $sdk 'lib/_internal/vm_platform_strong.dill') -PathType Leaf)) {
-    throw '临时宿主必须由官方 SDK dart.exe 直接启动，请用 -Dart 指定 SDK 中的 dart.exe（不支持 shim）。'
+    throw '临时宿主需要官方 Dart SDK，请用 -Dart 指定 SDK 中的 dart.exe（不支持 shim）。'
+  }
+  # In split SDKs dart.exe launches dartvm.exe, which owns the socket. Use
+  # the VM directly to keep the process handle bound to the real listener.
+  $vm = Join-Path $bin 'dartvm.exe'
+  if (Test-Path -LiteralPath $vm -PathType Leaf) {
+    return (Resolve-Path -LiteralPath $vm).Path
   }
   return (Resolve-Path -LiteralPath $candidate).Path
 }
@@ -120,8 +126,8 @@ try {
 Write-Host "== 2/4 启动临时宿主（$BindAddress`:$Port）=="
 $logOut = Join-Path $dataRoot 'init-server.out.log'
 $logErr = Join-Path $dataRoot 'init-server.err.log'
-# Dependencies are resolved above. Running the script directly avoids the
-# intermediate `dart run` process; the returned object owns the listener.
+# Dependencies are resolved above. Launch the VM itself rather than the SDK
+# CLI wrapper so the retained process handle owns the temporary listener.
 $serverDart = Resolve-ServerDart $dartPath
 $server = Start-Process -FilePath $serverDart `
   -ArgumentList 'bin/server.dart' `

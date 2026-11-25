@@ -93,6 +93,14 @@ class SqliteCallService implements CallService, CallRuntimeDriver {
         switch (session.state) {
           case CallState.ringing:
             final now = clock.now().toUtc();
+            // 接听时直接执行响铃期限，不等待下一次 sweepMissed。
+            if (now.difference(session.startedAt) >= ringTimeout) {
+              await tx.execute(
+                'UPDATE voice_calls SET state=?,ended_at=? WHERE call_id=?',
+                [CallState.missed.name, now.toIso8601String(), callId],
+              );
+              return err<CallSession>(FailureCode.conflict, '通话已结束');
+            }
             await tx.execute(
               'UPDATE voice_calls SET state=?,answered_at=? WHERE call_id=?',
               [CallState.active.name, now.toIso8601String(), callId],
@@ -154,6 +162,12 @@ class SqliteCallService implements CallService, CallRuntimeDriver {
     if (limit < 1 || limit > 100) {
       return err<List<CallSession>>(FailureCode.invalidArgument, 'limit 非法');
     }
+    // Dart UTC ISO 文本只有在微秒余数为零时以 .sssZ 结尾。
+    // 比较键补齐到 .sssuuuZ，避免 Z 排在数字之后；不改原始时间戳。
+    const startedAtKey =
+        "CASE WHEN substr(started_at, -5, 1) = '.' "
+        "THEN substr(started_at, 1, length(started_at) - 1) || '000Z' "
+        'ELSE started_at END';
     final conditions = <String>[];
     final args = <Object?>[];
     if (accountId != null) {
@@ -165,14 +179,18 @@ class SqliteCallService implements CallService, CallRuntimeDriver {
       args.add(status.name);
     }
     if (before != null) {
-      conditions.add('started_at<?');
-      args.add(before.toUtc().toIso8601String());
+      final utc = before.toUtc();
+      final iso = utc.toIso8601String();
+      conditions.add('($startedAtKey) < ?');
+      args.add(
+        utc.microsecond == 0 ? '${iso.substring(0, iso.length - 1)}000Z' : iso,
+      );
     }
     final where = conditions.isEmpty
         ? ''
         : ' WHERE ${conditions.join(' AND ')}';
     final rows = await database.query(
-      'SELECT * FROM voice_calls$where ORDER BY started_at DESC LIMIT ?',
+      'SELECT * FROM voice_calls$where ORDER BY $startedAtKey DESC LIMIT ?',
       [...args, limit],
     );
     return Ok<List<CallSession>>(

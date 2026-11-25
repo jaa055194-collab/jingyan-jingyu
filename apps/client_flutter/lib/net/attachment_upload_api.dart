@@ -116,6 +116,24 @@ class AttachmentUploadApi {
     }
   }
 
+  /// Aborts one pending upload owned by the current account. Only an explicit
+  /// caller failure path should invoke this; it is never retried automatically.
+  Future<void> abort(String uploadId) async {
+    validateId(uploadId, kind: 'upload');
+    try {
+      final body = await connection.request(
+        'DELETE',
+        Routes.attachmentUpload.replaceAll(
+          '{uploadId}',
+          Uri.encodeComponent(uploadId),
+        ),
+      );
+      if (body['aborted'] != true) throw const FormatException();
+    } on FormatException {
+      throw const FormatException('附件取消响应无效');
+    }
+  }
+
   Future<CompletedAttachmentUpload> complete({
     required String uploadId,
     String? expectedSha256,

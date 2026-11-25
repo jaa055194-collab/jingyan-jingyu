@@ -306,6 +306,89 @@ void main() {
       },
     );
 
+    test('GET devices marks only the validated current bearer device', () async {
+      const name = 'Same device name';
+      final account =
+          json(await redeem(await invite()))['accountId']! as String;
+      final first = await login(account, name);
+      final second = await login(account, name);
+      final firstId = first['deviceId']! as String;
+      final secondId = second['deviceId']! as String;
+      final firstBearer = first['accessToken']! as String;
+      final secondBearer = second['accessToken']! as String;
+      expect(firstId, isNot(secondId));
+      expect(firstBearer != secondBearer, isTrue);
+
+      Future<void> expectDevices(
+        String bearer,
+        String current,
+        Set<String> others,
+      ) async {
+        final response = await request(
+          'GET',
+          Routes.authDevices,
+          bearer: bearer,
+        );
+        expect(response.status, 200);
+        final rows = (response.json as List).cast<Map<String, Object?>>();
+        expect(
+          rows.map((row) => row['id']),
+          unorderedEquals([current, ...others]),
+        );
+        expect(
+          rows.where((row) => row['current'] == true).map((row) => row['id']),
+          [current],
+        );
+        for (final row in rows) {
+          // Assert the exact keys without logging response values or credentials.
+          expect(
+            row.keys,
+            unorderedEquals([
+              'id',
+              'deviceName',
+              'lastUsedAt',
+              if (row['id'] == current) 'current',
+            ]),
+          );
+          expect(row['deviceName'], name);
+          expect(row['lastUsedAt'], clock.now().toIso8601String());
+        }
+      }
+
+      // Names, timestamps and ordering do not identify the calling device.
+      await expectDevices(firstBearer, firstId, {secondId});
+      await expectDevices(secondBearer, secondId, {firstId});
+
+      final foreignAccount =
+          json(await redeem(await invite()))['accountId']! as String;
+      final foreign = await login(foreignAccount, name);
+      await expectDevices(
+        foreign['accessToken']! as String,
+        foreign['deviceId']! as String,
+        {},
+      );
+      await expectDevices(secondBearer, secondId, {firstId});
+
+      final revokePath = Routes.authDeviceRevoke.replaceFirst(
+        '{deviceId}',
+        secondId,
+      );
+      expect(
+        (await request('POST', revokePath, bearer: firstBearer)).status,
+        200,
+      );
+      for (final unusable in [null, '0000000000000000000000', secondBearer]) {
+        final response = await request(
+          'GET',
+          Routes.authDevices,
+          bearer: unusable,
+        );
+        expect(response.status, 401);
+        expect((response.json as Map)['error'], 'unauthenticated');
+      }
+      await expectDevices(firstBearer, firstId, {});
+    });
+
     test(
       'HTTP invite limiter shares code budget across distinct trusted peer IPs',
       () async {

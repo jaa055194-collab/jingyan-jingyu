@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
@@ -196,8 +199,65 @@ class AttachmentListItem {
   }
 }
 
-/// Read-only GET of one attachment's metadata by explicit attachment id.
+/// One bounded image fetched through a message-scoped route.
 ///
+/// The adapter verifies the declared size, digest and MIME type, and never
+/// exposes decrypted text or a local path.
+class MessageImage {
+  const MessageImage({
+    required this.mime,
+    required this.bytes,
+    required this.sha256,
+  });
+
+  final String mime;
+  final Uint8List bytes;
+  final String sha256;
+
+  static const int maxBytes = 8 * 1024 * 1024;
+  static const Set<String> allowedMimes = {
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+    'image/webp',
+    'image/bmp',
+  };
+
+  factory MessageImage.fromJson(Map<String, Object?> json) {
+    const keys = {'mime', 'size', 'sha256', 'dataBase64'};
+    if (json.length != keys.length ||
+        json.keys.any((key) => !keys.contains(key))) {
+      throw const FormatException();
+    }
+    final mime = json['mime'];
+    final size = json['size'];
+    final digest = json['sha256'];
+    final encoded = json['dataBase64'];
+    if (mime is! String ||
+        !allowedMimes.contains(mime) ||
+        size is! int ||
+        size < 1 ||
+        size > maxBytes ||
+        digest is! String ||
+        digest.length != 64 ||
+        encoded is! String) {
+      throw const FormatException();
+    }
+    final Uint8List bytes;
+    try {
+      bytes = base64Decode(encoded);
+    } on FormatException {
+      throw const FormatException();
+    }
+    if (bytes.length != size ||
+        crypto.sha256.convert(bytes).toString() != digest) {
+      throw const FormatException();
+    }
+    return MessageImage(mime: mime, bytes: bytes, sha256: digest);
+  }
+}
+
+/// Read-only GET of one attachment's metadata by explicit attachment id.///
 /// Also provides an owner-scoped metadata list ([listAttachments]); both routes
 /// are read-only and the adapter never requests, parses or surfaces decrypted
 /// text or file bytes. Existing [HostConnection] bounded 401 renewal is
@@ -228,6 +288,93 @@ class AttachmentApi {
       return AttachmentMetadata.fromJson(json);
     } on FormatException {
       throw const FormatException('附件元数据响应无效');
+    } on SocketException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on HttpException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on TimeoutException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    }
+  }
+
+  /// Owner-only cleanup for a completed but unsent attachment.
+  Future<void> deleteAttachment(
+    String attachmentId, {
+    bool retryAuthentication = true,
+  }) async {
+    String path;
+    try {
+      path = Routes.attachment.replaceAll(
+        '{attachmentId}',
+        Uri.encodeComponent(validateId(attachmentId, kind: 'attachment')),
+      );
+    } on FormatException {
+      throw const FormatException('附件标识参数无效');
+    }
+    try {
+      final body = await connection.request(
+        'DELETE',
+        path,
+        retryAuthentication: retryAuthentication,
+      );
+      if (body['removed'] != true) throw const FormatException();
+    } on FormatException {
+      throw const FormatException('附件删除响应无效');
+    } on SocketException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on HttpException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    } on TimeoutException {
+      throw const HostRequestException(
+        Failure(FailureCode.unavailable, '宿主暂不可用'),
+      );
+    }
+  }
+
+  /// Message-scoped bounded image bytes.
+  ///
+  /// The host authorizes this against the message, its conversation and its
+  /// sender, so a caller cannot turn an attachment id into a download channel.
+  Future<MessageImage> readMessageImage({
+    required String conversationId,
+    required String messageId,
+    bool retryAuthentication = true,
+  }) async {
+    String path;
+    try {
+      path = Routes.messageAttachment
+          .replaceFirst(
+            '{conversationId}',
+            Uri.encodeComponent(
+              validateId(conversationId, kind: 'conversation'),
+            ),
+          )
+          .replaceFirst(
+            '{messageId}',
+            Uri.encodeComponent(validateId(messageId, kind: 'message')),
+          );
+    } on FormatException {
+      throw const FormatException('消息标识参数无效');
+    }
+    try {
+      final json = await connection.request(
+        'GET',
+        path,
+        retryAuthentication: retryAuthentication,
+      );
+      return MessageImage.fromJson(json);
+    } on FormatException {
+      throw const FormatException('消息图片响应无效');
     } on SocketException {
       throw const HostRequestException(
         Failure(FailureCode.unavailable, '宿主暂不可用'),

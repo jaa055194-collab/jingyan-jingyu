@@ -5,6 +5,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_host_kit/jingyu_host_kit.dart';
@@ -132,6 +133,7 @@ class MessagesModule extends HostModule {
     router.post(Routes.messageEdit, _edit);
     router.get(Routes.messageEdits, _editHistory, access: Access.admin);
     router.post(Routes.scheduledMessages, _schedule);
+    router.get(Routes.scheduledMessages, _listScheduled);
     router.delete(Routes.scheduledMessage, _cancelScheduled);
     router.post(Routes.messageReactions, _react);
     router.get(Routes.messageReactions, _reactionsList);
@@ -145,6 +147,90 @@ class MessagesModule extends HostModule {
     router.get(Routes.conversationPins, _pinsList);
     router.post(Routes.messageAck, _ack);
     router.get(Routes.sync, _sync);
+    router.get(
+      Routes.messageAttachment,
+      (request) => _messageAttachment(request, MessageKind.image),
+    );
+    router.get(
+      Routes.messageVoiceAttachment,
+      (request) => _messageAttachment(request, MessageKind.audio),
+    );
+  }
+
+  /// Message-scoped bounded attachment bytes. Authorization precedes any read:
+  /// membership, history floor, then the message, then the attachment. Every
+  /// authorization/missing/invalid-content failure is a uniform 404.
+  Future<HostResponse> _messageAttachment(
+    HostRequest request,
+    MessageKind kind,
+  ) async {
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    final messageId = request.pathParams['messageId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+      validateId(messageId, kind: 'message');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    final notFound = HostResponse.failure(
+      const Failure(FailureCode.notFound, 'not visible'),
+    );
+    if (!await _members.canRead(principal.accountId, conversationId)) {
+      return notFound;
+    }
+    final history = _services.maybeGet<HistoryMembershipCheck>();
+    // Byte-serving must fail closed: without the history boundary we cannot
+    // prove the message is inside the viewer's visible range.
+    if (history == null) return notFound;
+    final first = await history.firstVisibleSeq(
+      principal.accountId,
+      conversationId,
+    );
+    if (first == null) return notFound;
+    final message = await _store.read(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+    if (message.isErr || message.value.seq < first) return notFound;
+    final attachments = _attachments;
+    if (attachments == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'attachments unavailable'),
+      );
+    }
+    final stored = message.value;
+    final body = stored.body;
+    if (body['recalled'] == true || stored.kind != kind) {
+      return notFound;
+    }
+    final attachmentId = body['attachmentId'];
+    if (attachmentId is! String) return notFound;
+    final readContent = kind == MessageKind.audio
+        ? attachments.readVoiceContent
+        : attachments.readImageContent;
+    final content = await readContent(
+      attachmentId: attachmentId,
+      conversationId: stored.conversationId,
+      senderId: stored.senderId,
+    );
+    if (content.isErr) return notFound;
+    final media = content.value;
+    return HostResponse(
+      200,
+      json: {
+        'mime': media.mime,
+        'size': media.size,
+        'sha256': media.sha256,
+        'dataBase64': base64Encode(media.bytes),
+      },
+      headers: const {
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    );
   }
 
   Future<int?> _favoriteVisibility(String owner, String conversationId) async {
@@ -329,11 +415,6 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'pins unavailable'),
       );
     }
-    if (!await _members.canPost(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
     final result = await pins.pin(
       conversationId: conversationId,
       messageId: messageId,
@@ -360,14 +441,10 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'pins unavailable'),
       );
     }
-    if (!await _members.canPost(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
     final result = await pins.unpin(
       conversationId: conversationId,
       messageId: messageId,
+      accountId: principal.accountId,
     );
     return HostResponse.fromResult(result, (_) => {'pinned': false});
   }
@@ -388,12 +465,10 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'pins unavailable'),
       );
     }
-    if (!await _members.canRead(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
-    final result = await pins.list(conversationId: conversationId);
+    final result = await pins.list(
+      conversationId: conversationId,
+      accountId: principal.accountId,
+    );
     return HostResponse.fromResult(result, (items) => {'pins': items});
   }
 
@@ -527,11 +602,6 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'reactions unavailable'),
       );
     }
-    if (!await _members.canPost(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
     final body = request.jsonObject();
     if (body is Err<Map<String, Object?>> || body.value['emoji'] is! String) {
       return HostResponse.failure(
@@ -565,14 +635,10 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.internal, 'reactions unavailable'),
       );
     }
-    if (!await _members.canRead(principal.accountId, conversationId)) {
-      return HostResponse.failure(
-        const Failure(FailureCode.notFound, 'not visible'),
-      );
-    }
     final result = await reactions.list(
       conversationId: conversationId,
       messageId: messageId,
+      accountId: principal.accountId,
     );
     return HostResponse.fromResult(
       result,
@@ -623,14 +689,70 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.invalidArgument, 'bad body'),
       );
     }
+    final scheduledBody = content.cast<String, Object?>();
+    final attachments = _attachments;
     final result = await scheduled.schedule(
       conversationId: conversationId,
       senderId: principal.accountId,
       kind: kind,
-      body: content.cast<String, Object?>(),
+      body: scheduledBody,
       deliverAt: deliverAt,
+      attachmentCheck: attachments == null
+          ? null
+          : (
+              tx, {
+              required ownerAccountId,
+              required attachmentId,
+              required conversationId,
+            }) => attachments.assertSendableInTransaction(
+              tx,
+              ownerAccountId: ownerAccountId,
+              attachmentId: attachmentId,
+              conversationId: conversationId,
+            ),
     );
     return HostResponse.fromResult(result);
+  }
+
+  Future<HostResponse> _listScheduled(HostRequest request) async {
+    final scheduled = _scheduled;
+    final principal = request.principal!;
+    final conversationId = request.pathParams['conversationId']!;
+    try {
+      validateId(conversationId, kind: 'conversation');
+    } on FormatException {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad id'),
+      );
+    }
+    if (scheduled == null) {
+      return HostResponse.failure(
+        const Failure(FailureCode.internal, 'scheduled messages unavailable'),
+      );
+    }
+    if (request.query.keys.any((key) => key != 'scheduledId') ||
+        request.query.length > 1) {
+      return HostResponse.failure(
+        const Failure(FailureCode.invalidArgument, 'bad query'),
+      );
+    }
+    final scheduledId = request.query['scheduledId'];
+    if (scheduledId != null) {
+      try {
+        validateId(scheduledId, kind: 'scheduledMessage');
+      } on FormatException {
+        return HostResponse.failure(
+          const Failure(FailureCode.invalidArgument, 'bad id'),
+        );
+      }
+    }
+    return HostResponse.fromResult(
+      await scheduled.readOwn(
+        conversationId: conversationId,
+        senderId: principal.accountId,
+        scheduledId: scheduledId,
+      ),
+    );
   }
 
   Future<HostResponse> _cancelScheduled(HostRequest request) async {
@@ -803,11 +925,39 @@ class MessagesModule extends HostModule {
         const Failure(FailureCode.invalidArgument, 'bad body'),
       );
     }
+    final newBody = (body.value['body']! as Map).cast<String, Object?>();
+    // An edit must not introduce a reference to an attachment the editor could
+    // not have sent. Reuse the same send-time check as _send; a body without an
+    // attachmentId (including one that removes a reference) keeps old behavior.
+    final attachmentRef = newBody['attachmentId'];
+    if (attachmentRef != null) {
+      if (attachmentRef is! String) {
+        return HostResponse.failure(
+          const Failure(FailureCode.invalidArgument, 'bad attachmentId'),
+        );
+      }
+      final attachments = _attachments;
+      if (attachments == null) {
+        return HostResponse.failure(
+          const Failure(FailureCode.internal, 'attachments unavailable'),
+        );
+      }
+      final check = await attachments.assertSendable(
+        ownerAccountId: principal.accountId,
+        attachmentId: attachmentRef,
+        conversationId: conversationId,
+      );
+      if (check.isErr) {
+        return HostResponse.failure(
+          const Failure(FailureCode.notFound, 'not visible'),
+        );
+      }
+    }
     final result = await _store.edit(
       conversationId: conversationId,
       messageId: messageId,
       senderId: principal.accountId,
-      body: (body.value['body']! as Map).cast<String, Object?>(),
+      body: newBody,
     );
     if (result.isErr) return HostResponse.failure(result.failureOrNull!);
     final edited = result.value;
@@ -994,6 +1144,7 @@ class MessagesModule extends HostModule {
       );
     }
     var visibleAfter = afterSeq;
+    int? firstVisibleSeq;
     final history = _services.maybeGet<HistoryMembershipCheck>();
     if (history != null) {
       final first = await history.firstVisibleSeq(
@@ -1006,6 +1157,7 @@ class MessagesModule extends HostModule {
         );
       }
       if (first - 1 > visibleAfter) visibleAfter = first - 1;
+      if (first > 1) firstVisibleSeq = first;
     }
     final page = await _store.since(
       conversationId: conversationId,
@@ -1017,6 +1169,7 @@ class MessagesModule extends HostModule {
       (p) => {
         'messages': [for (final m in p.messages) m.toPayload()],
         'hasMore': p.hasMore,
+        'firstVisibleSeq': ?firstVisibleSeq,
       },
     );
   }

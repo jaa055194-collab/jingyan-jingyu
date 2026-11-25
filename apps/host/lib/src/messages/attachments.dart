@@ -4,9 +4,11 @@
 /// 上传中写 `.part`，完成后校验声明大小与 sha256 再改名落库。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:jingyu_core/jingyu_core.dart';
@@ -18,6 +20,31 @@ import 'attachment_extraction.dart';
 
 /// 磁盘剩余/总容量探测。注入假实现即可在测试里控制配额分支。
 typedef DiskSpaceProbe = Future<({int freeBytes, int totalBytes})> Function();
+
+/// Bounded message attachment bytes, without paths or extracted text.
+class AttachmentContent {
+  const AttachmentContent({
+    required this.mime,
+    required this.size,
+    required this.sha256,
+    required this.bytes,
+  });
+
+  final String mime;
+  final int size;
+  final String sha256;
+  final List<int> bytes;
+}
+
+/// Image bytes with the existing image preview API.
+class AttachmentImageContent extends AttachmentContent {
+  const AttachmentImageContent({
+    required super.mime,
+    required super.size,
+    required super.sha256,
+    required super.bytes,
+  });
+}
 
 /// 附件服务。调用方负责 database/cipher 生命周期与 mediaDir 可写性。
 class AttachmentService {
@@ -59,6 +86,18 @@ class AttachmentService {
 
   /// 每账号最多同时存在的 pending 上传会话数（并发上传闸门，DB 计数，不会泄漏）。
   static const int _maxPendingUploadsPerAccount = 3;
+
+  /// 预览路由的绝对字节上限：base64 JSON 单次传输，不做通用下载通道。
+  static const int _maxPreviewBytes = 8 * 1024 * 1024;
+
+  /// 只允许光栅图片；SVG 等可执行/可外链格式不在预览范围。
+  static const Set<String> _imageMimeTypes = {
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+    'image/webp',
+    'image/bmp',
+  };
 
   static const Set<String> _kinds = {
     'file',
@@ -104,6 +143,64 @@ class AttachmentService {
   }
 
   String _ownerDir(String ownerAccountId) => '$_mediaDir/$ownerAccountId';
+
+  // The default host shares this service across HTTP handlers. SQLite serializes
+  // its own calls, not the part-file I/O between a ledger read and commit.
+  final _uploadTails = <(String, String), Future<void>>{};
+
+  Future<T> _serializeUpload<T>(
+    String ownerAccountId,
+    String uploadId,
+    Future<T> Function() action,
+  ) async {
+    final key = (ownerAccountId, uploadId);
+    final previous = _uploadTails[key];
+    final done = Completer<void>();
+    _uploadTails[key] = done.future;
+    try {
+      if (previous != null) await previous;
+      return await action();
+    } finally {
+      done.complete();
+      if (_uploadTails[key] == done.future) _uploadTails.remove(key);
+    }
+  }
+
+  // The committed ledger is authoritative. Never recreate or pad a missing
+  // committed prefix; only a suffix beyond that boundary can be discarded.
+  // A duplicate only checks the prefix; a write or completion can trim it.
+  Future<Failure?> _preparePart(
+    File part,
+    int received, {
+    List<int>? bytes,
+    bool verifyOnly = false,
+  }) async {
+    final exists = await part.exists();
+    if (!exists && received != 0) {
+      return const Failure(FailureCode.internal, 'upload part missing');
+    }
+    final length = exists ? await part.length() : 0;
+    if (length < received) {
+      return const Failure(FailureCode.invalidArgument, 'stored size mismatch');
+    }
+    if (verifyOnly || (bytes == null && exists && length == received)) {
+      return null;
+    }
+    if (!exists) await part.parent.create(recursive: true);
+    final handle = await part.open(mode: FileMode.append);
+    try {
+      if (length > received) await handle.truncate(received);
+      if (bytes != null) {
+        await handle.setPosition(received);
+        await handle.writeFrom(bytes);
+      }
+      // Persist the new file state before the caller can commit the ledger.
+      await handle.flush();
+    } finally {
+      await handle.close();
+    }
+    return null;
+  }
 
   /// 初始化一次上传会话。返回 uploadId 与建议分片大小。
   Future<Result<Map<String, Object?>>> initiateUpload({
@@ -206,6 +303,19 @@ class AttachmentService {
     if (index < 0) {
       return err(FailureCode.invalidArgument, 'invalid chunk index');
     }
+    return _serializeUpload(
+      ownerAccountId,
+      uploadId,
+      () => _uploadChunk(ownerAccountId, uploadId, index, bytes),
+    );
+  }
+
+  Future<Result<Map<String, Object?>>> _uploadChunk(
+    String ownerAccountId,
+    String uploadId,
+    int index,
+    List<int> bytes,
+  ) async {
     final rows = await _database.query(
       'SELECT * FROM attachment_uploads WHERE id = ? AND owner_account_id = ?',
       [uploadId, ownerAccountId],
@@ -218,6 +328,7 @@ class AttachmentService {
     final declared = row['declared_size'] as int;
     final received = row['received_bytes'] as int;
     final nextChunk = row['next_chunk'] as int;
+    final part = File('${_ownerDir(ownerAccountId)}/$uploadId.part');
 
     // 幂等重发：允许重发上一条已接收的分片（大小一致时）。
     if (index == nextChunk - 1 && nextChunk > 0) {
@@ -228,6 +339,8 @@ class AttachmentService {
       );
       if (existing.isNotEmpty &&
           (existing.single['size'] as int) == bytes.length) {
+        final failure = await _preparePart(part, received, verifyOnly: true);
+        if (failure != null) return Err(failure);
         return Ok(<String, Object?>{
           'received': received,
           'nextChunk': nextChunk,
@@ -242,15 +355,8 @@ class AttachmentService {
       return err(FailureCode.invalidArgument, 'chunk exceeds declared size');
     }
 
-    final ownerDir = Directory(_ownerDir(ownerAccountId));
-    await ownerDir.create(recursive: true);
-    final part = File('${ownerDir.path}/$uploadId.part');
-    final handle = await part.open(mode: FileMode.append);
-    try {
-      await handle.writeFrom(bytes);
-    } finally {
-      await handle.close();
-    }
+    final failure = await _preparePart(part, received, bytes: bytes);
+    if (failure != null) return Err(failure);
 
     final newReceived = received + bytes.length;
     final newNext = index + 1;
@@ -281,6 +387,18 @@ class AttachmentService {
     } on FormatException {
       return err(FailureCode.invalidArgument, 'invalid id');
     }
+    return _serializeUpload(
+      ownerAccountId,
+      uploadId,
+      () => _completeUpload(ownerAccountId, uploadId, expectedSha256),
+    );
+  }
+
+  Future<Result<Map<String, Object?>>> _completeUpload(
+    String ownerAccountId,
+    String uploadId,
+    String? expectedSha256,
+  ) async {
     final rows = await _database.query(
       'SELECT * FROM attachment_uploads WHERE id = ? AND owner_account_id = ?',
       [uploadId, ownerAccountId],
@@ -297,15 +415,8 @@ class AttachmentService {
     }
 
     final part = File('${_ownerDir(ownerAccountId)}/$uploadId.part');
-    if (!await part.exists()) {
-      if (declared != 0) {
-        return err(FailureCode.internal, 'upload part missing');
-      }
-      await part.writeAsBytes(const <int>[], flush: true);
-    }
-    if (await part.length() != declared) {
-      return err(FailureCode.invalidArgument, 'stored size mismatch');
-    }
+    final failure = await _preparePart(part, received);
+    if (failure != null) return Err(failure);
     // Stream-hash the blob instead of loading it fully into memory.
     final digest = (await sha256.bind(part.openRead()).single).toString();
     if (expectedSha256 != null && expectedSha256 != digest) {
@@ -370,11 +481,78 @@ class AttachmentService {
     });
   }
 
-  /// 读取附件元数据；owner 或可读该会话的成员可见。extracted 时附带解密正文。
+  /// 中止一次尚未完成的 pending 上传（仅 owner）。
+  ///
+  /// 标记为 aborted、删除分片账本与 `.part`。不存在或非本人一律 notFound；
+  /// 已 aborted 幂等成功；completed 等其它状态返回 conflict。与分片/完成共用
+  /// 每上传串行队列，避免中止与并发分片/完成交错。
+  Future<Result<void>> abortUpload({
+    required String ownerAccountId,
+    required String uploadId,
+  }) async {
+    try {
+      validateId(ownerAccountId, kind: 'account');
+      validateId(uploadId, kind: 'upload');
+    } on FormatException {
+      return err(FailureCode.invalidArgument, 'invalid id');
+    }
+    return _serializeUpload(
+      ownerAccountId,
+      uploadId,
+      () => _abortUpload(ownerAccountId, uploadId),
+    );
+  }
+
+  Future<Result<void>> _abortUpload(
+    String ownerAccountId,
+    String uploadId,
+  ) async {
+    final rows = await _database.query(
+      'SELECT status FROM attachment_uploads '
+      'WHERE id = ? AND owner_account_id = ?',
+      [uploadId, ownerAccountId],
+    );
+    if (rows.isEmpty) return err(FailureCode.notFound, 'upload not found');
+    final status = rows.single['status'] as String;
+    if (status == 'aborted') {
+      await _deletePartFile(ownerAccountId, uploadId);
+      return const Ok<void>(null);
+    }
+    if (status != 'pending') {
+      return err(FailureCode.conflict, 'upload is not pending');
+    }
+    await _database.transaction((tx) async {
+      await tx.execute(
+        'DELETE FROM attachment_upload_chunks WHERE upload_id = ?',
+        [uploadId],
+      );
+      await tx.execute(
+        "UPDATE attachment_uploads SET status = 'aborted' WHERE id = ?",
+        [uploadId],
+      );
+    });
+    await _deletePartFile(ownerAccountId, uploadId);
+    return const Ok<void>(null);
+  }
+
+  Future<void> _deletePartFile(String ownerAccountId, String uploadId) async {
+    try {
+      final part = File('${_ownerDir(ownerAccountId)}/$uploadId.part');
+      if (await part.exists()) await part.delete();
+    } catch (_) {
+      // 状态已持久化；孤立 .part 由后续清理负责，中止接口保持成功。
+    }
+  }
+
+  /// 读取附件元数据；owner 或可读该会话的成员可见。
+  ///
+  /// 解密正文只对 owner 且 [includeExtractedText] 为真时返回；其他可见成员
+  /// 只拿到元数据。其余字段与 notFound 语义保持不变。
   Future<Result<Map<String, Object?>>> getAttachment({
     required String accountId,
     required String attachmentId,
     Future<bool> Function(String, String)? canReadConversation,
+    bool includeExtractedText = false,
   }) async {
     try {
       validateId(accountId, kind: 'account');
@@ -388,7 +566,8 @@ class AttachmentService {
     );
     if (rows.isEmpty) return err(FailureCode.notFound, 'attachment not found');
     final row = rows.single;
-    var allowed = row['owner_account_id'] == accountId;
+    final isOwner = row['owner_account_id'] == accountId;
+    var allowed = isOwner;
     if (!allowed) {
       final conversationId = row['conversation_id'] as String?;
       if (conversationId != null && canReadConversation != null) {
@@ -411,7 +590,9 @@ class AttachmentService {
       'extractionStatus': row['extraction_status'],
       'createdAt': row['created_at'],
     };
-    if (row['extraction_status'] == 'extracted' &&
+    if (includeExtractedText &&
+        isOwner &&
+        row['extraction_status'] == 'extracted' &&
         row['extracted_text'] != null) {
       final decoded = _cipher.decrypt(
         row['extracted_text'] as String,
@@ -426,6 +607,216 @@ class AttachmentService {
       metadata['extractedText'] = decoded.value;
     }
     return Ok(metadata);
+  }
+
+  /// 读取一条消息所引用的图片字节（消息作用域、有界）。
+  ///
+  /// 只接受光栅图片 MIME、声明大小不超过 [maxBytes] 且与 blob 实际长度一致，
+  /// 且附件的会话与 owner 必须与消息一致。任何不满足一律 notFound，绝不返回
+  /// 路径或抽取正文。
+  Future<Result<AttachmentImageContent>> readImageContent({
+    required String attachmentId,
+    required String conversationId,
+    required String senderId,
+    int maxBytes = _maxPreviewBytes,
+  }) async {
+    final result = await _readMessageContent(
+      attachmentId: attachmentId,
+      conversationId: conversationId,
+      senderId: senderId,
+      maxBytes: maxBytes,
+      voice: false,
+    );
+    return result.map(
+      (content) => AttachmentImageContent(
+        mime: content.mime,
+        size: content.size,
+        sha256: content.sha256,
+        bytes: content.bytes,
+      ),
+    );
+  }
+
+  /// A completed audio/mp4 voice attachment belonging to the message sender.
+  /// Accepts bounded, non-fragmented containers with one sound track. Does not
+  /// certify the codec, sample rate, channels, or that the media can play.
+  Future<Result<AttachmentContent>> readVoiceContent({
+    required String attachmentId,
+    required String conversationId,
+    required String senderId,
+  }) => _readMessageContent(
+    attachmentId: attachmentId,
+    conversationId: conversationId,
+    senderId: senderId,
+    maxBytes: _maxPreviewBytes,
+    voice: true,
+  );
+
+  Future<Result<AttachmentContent>> _readMessageContent({
+    required String attachmentId,
+    required String conversationId,
+    required String senderId,
+    required int maxBytes,
+    required bool voice,
+  }) async {
+    try {
+      validateId(attachmentId, kind: 'attachment');
+      validateId(conversationId, kind: 'conversation');
+      validateId(senderId, kind: 'account');
+    } on FormatException {
+      return err(FailureCode.notFound, 'attachment not found');
+    }
+    if (maxBytes < 1 || maxBytes > _maxPreviewBytes) {
+      return err(FailureCode.invalidArgument, 'invalid image byte limit');
+    }
+    final rows = await _database.query(
+      'SELECT conversation_id, owner_account_id, kind, mime, size, sha256, rel_path '
+      'FROM attachments WHERE id = ?',
+      [attachmentId],
+    );
+    if (rows.isEmpty) return err(FailureCode.notFound, 'attachment not found');
+    final row = rows.single;
+    final mime = row['mime'];
+    final declared = row['size'];
+    final digest = row['sha256'];
+    final path = row['rel_path'];
+    if (row['conversation_id'] != conversationId ||
+        row['owner_account_id'] != senderId ||
+        mime is! String ||
+        digest is! String ||
+        path is! String ||
+        declared is! int ||
+        declared < 0 ||
+        declared > maxBytes) {
+      return err(FailureCode.notFound, 'attachment not found');
+    }
+    if (voice) {
+      if (row['kind'] != 'voice' ||
+          mime != 'audio/mp4' ||
+          path != '$senderId/$attachmentId') {
+        return err(FailureCode.notFound, 'attachment not found');
+      }
+    } else if (!_imageMimeTypes.contains(mime)) {
+      return err(FailureCode.notFound, 'attachment not found');
+    }
+    final bytes = await _readBoundedBlob(File('$_mediaDir/$path'), declared);
+    if (bytes == null ||
+        (voice &&
+            (!_isVoiceMp4Container(bytes) ||
+                sha256.convert(bytes).toString() != digest))) {
+      return err(FailureCode.notFound, 'attachment not found');
+    }
+    return Ok(
+      AttachmentContent(
+        mime: mime,
+        size: declared,
+        sha256: digest,
+        bytes: bytes,
+      ),
+    );
+  }
+
+  static Future<Uint8List?> _readBoundedBlob(File file, int size) async {
+    try {
+      if (!await file.exists()) return null;
+      final handle = await file.open();
+      try {
+        if (await handle.length() != size) return null;
+        // Read at most one extra byte to detect growth without an unbounded read.
+        final bytes = await handle.read(size + 1);
+        return bytes.length == size ? bytes : null;
+      } finally {
+        await handle.close();
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static bool _isVoiceMp4Container(Uint8List bytes) {
+    final view = ByteData.sublistView(bytes);
+    const ftyp = 0x66747970, moov = 0x6d6f6f76, mdat = 0x6d646174;
+    const trak = 0x7472616b, mdia = 0x6d646961, hdlr = 0x68646c72;
+    const soun = 0x736f756e, moof = 0x6d6f6f66, mvex = 0x6d766578;
+
+    // Walk only bounded box headers at known levels, not sample tables or
+    // nested structures of arbitrary depth. Reject sizes that run to EOF.
+    var boxesLeft = 1024;
+    bool walk(
+      int offset,
+      int end,
+      bool Function(int type, int payload, int boxEnd) visit,
+    ) {
+      while (offset < end) {
+        if (--boxesLeft < 0 || end - offset < 8) return false;
+        var size = view.getUint32(offset);
+        var header = 8;
+        if (size == 1) {
+          if (end - offset < 16 || view.getUint32(offset + 8) != 0) {
+            return false;
+          }
+          size = view.getUint32(offset + 12);
+          header = 16;
+        }
+        if (size < header || size > end - offset) return false;
+        final boxEnd = offset + size;
+        if (!visit(view.getUint32(offset + 4), offset + header, boxEnd)) {
+          return false;
+        }
+        offset = boxEnd;
+      }
+      return true;
+    }
+
+    bool soundTrack(int start, int end) {
+      var sawMedia = false;
+      return walk(start, end, (type, payload, boxEnd) {
+            if (type != mdia) return true;
+            if (sawMedia) return false;
+            sawMedia = true;
+            var sawHandler = false;
+            return walk(payload, boxEnd, (type, payload, boxEnd) {
+                  if (type != hdlr) return true;
+                  if (sawHandler || boxEnd - payload < 24) return false;
+                  sawHandler = true;
+                  return view.getUint32(payload + 8) == soun;
+                }) &&
+                sawHandler;
+          }) &&
+          sawMedia;
+    }
+
+    var sawFileType = false, sawMovie = false, sawData = false;
+    return walk(0, bytes.length, (type, payload, boxEnd) {
+          if (!sawFileType) {
+            if (type != ftyp ||
+                boxEnd - payload < 8 ||
+                (boxEnd - payload) % 4 != 0) {
+              return false;
+            }
+            sawFileType = true;
+          } else if (type == moov) {
+            if (sawMovie) return false;
+            sawMovie = true;
+            var sawTrack = false;
+            return walk(payload, boxEnd, (type, payload, boxEnd) {
+                  if (type == mvex) return false;
+                  if (type != trak) return true;
+                  if (sawTrack) return false;
+                  sawTrack = true;
+                  return soundTrack(payload, boxEnd);
+                }) &&
+                sawTrack;
+          } else if (type == mdat && boxEnd > payload) {
+            sawData = true;
+          } else if (type == ftyp || type == moof) {
+            return false;
+          }
+          return true;
+        }) &&
+        sawFileType &&
+        sawMovie &&
+        sawData;
   }
 
   /// 删除附件（仅 owner）：删行并尽力删除 blob 文件。
@@ -475,7 +866,34 @@ class AttachmentService {
     } on FormatException {
       return err(FailureCode.invalidArgument, 'invalid id');
     }
-    final rows = await _database.query(
+    return _assertSendable(
+      (sql, args) => _database.query(sql, args),
+      ownerAccountId: ownerAccountId,
+      attachmentId: attachmentId,
+      conversationId: conversationId,
+    );
+  }
+
+  /// Same sendability rule for an already-owned transaction.
+  Future<Result<void>> assertSendableInTransaction(
+    Tx tx, {
+    required String ownerAccountId,
+    required String attachmentId,
+    required String conversationId,
+  }) => _assertSendable(
+    tx.query,
+    ownerAccountId: ownerAccountId,
+    attachmentId: attachmentId,
+    conversationId: conversationId,
+  );
+
+  Future<Result<void>> _assertSendable(
+    Future<List<Map<String, Object?>>> Function(String, List<Object?>) query, {
+    required String ownerAccountId,
+    required String attachmentId,
+    required String conversationId,
+  }) async {
+    final rows = await query(
       'SELECT owner_account_id, conversation_id FROM attachments WHERE id = ?',
       [attachmentId],
     );

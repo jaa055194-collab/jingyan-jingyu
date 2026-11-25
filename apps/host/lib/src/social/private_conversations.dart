@@ -190,9 +190,18 @@ AND (account_low=? OR account_high=?)''',
   Future<int?> firstVisibleSeq(String accountId, String conversationId) async {
     if (!_valid(accountId) || !_valid(conversationId)) return null;
     return _db.transaction(
-      (tx) async =>
-          (await _member(tx, accountId, conversationId)).isEmpty ? null : 1,
+      (tx) => firstVisibleSeqInTransaction(tx, accountId, conversationId),
     );
+  }
+
+  /// Reads the same authorization bound inside a caller-owned transaction.
+  Future<int?> firstVisibleSeqInTransaction(
+    Tx tx,
+    String accountId,
+    String conversationId,
+  ) async {
+    if (!_valid(accountId) || !_valid(conversationId)) return null;
+    return (await _member(tx, accountId, conversationId)).isEmpty ? null : 1;
   }
 
   @override
@@ -202,24 +211,34 @@ AND (account_low=? OR account_high=?)''',
   @override
   Future<bool> canPost(String accountId, String conversationId) async {
     if (!_valid(accountId) || !_valid(conversationId)) return false;
-    return _db.transaction((tx) async {
-      final rows = await _member(tx, accountId, conversationId);
-      if (rows.isEmpty) return false;
-      final tag = await OwnerAiDirectConsent.tagInTx(tx, conversationId);
-      if (tag != null) {
-        return await OwnerAiDirectConsent.resolveInTx(
-              tx,
-              ownerAccountId: tag['owner_account_id'] as String,
-              conversationId: conversationId,
-            ) !=
-            null;
-      }
-      final a = rows.single['account_low'] as String;
-      final b = rows.single['account_high'] as String;
-      return await FriendshipService.activeKindInTx(tx, a) != null &&
-          await FriendshipService.activeKindInTx(tx, b) != null &&
-          await FriendshipService.friendsInTx(tx, a, b) &&
-          !await FriendshipService.isBlockedInTransaction(tx, a, b);
-    });
+    return _db.transaction(
+      (tx) => canPostInTransaction(tx, accountId, conversationId),
+    );
+  }
+
+  /// Applies the existing posting policy in a caller-owned transaction.
+  Future<bool> canPostInTransaction(
+    Tx tx,
+    String accountId,
+    String conversationId,
+  ) async {
+    if (!_valid(accountId) || !_valid(conversationId)) return false;
+    final rows = await _member(tx, accountId, conversationId);
+    if (rows.isEmpty) return false;
+    final tag = await OwnerAiDirectConsent.tagInTx(tx, conversationId);
+    if (tag != null) {
+      return await OwnerAiDirectConsent.resolveInTx(
+            tx,
+            ownerAccountId: tag['owner_account_id'] as String,
+            conversationId: conversationId,
+          ) !=
+          null;
+    }
+    final a = rows.single['account_low'] as String;
+    final b = rows.single['account_high'] as String;
+    return await FriendshipService.activeKindInTx(tx, a) != null &&
+        await FriendshipService.activeKindInTx(tx, b) != null &&
+        await FriendshipService.friendsInTx(tx, a, b) &&
+        !await FriendshipService.isBlockedInTransaction(tx, a, b);
   }
 }

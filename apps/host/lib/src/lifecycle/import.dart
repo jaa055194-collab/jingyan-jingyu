@@ -1,6 +1,8 @@
 /// M12 用户导入（口径 A-12 / AC-29 / NFR-11）。
 ///
 /// * 导入前用 `SHA256SUMS` 校验完整性，任何篡改/缺失即拒绝；
+/// * 校验和通过不代表结构可导入：先完整解析本模式要消费的数据，
+///   损坏的包在任何落点写入之前被整体拒绝（FR-65 / AC-29，无部分写入）；
 /// * 支持"仅人格"与"人格 + 聊天记录"两种模式；
 /// * 与既有数据冲突时不覆盖：生成新 id 并在报告中列出；
 /// * 记忆里若混入 T2 也再次剔除（纵深防御）。
@@ -119,7 +121,8 @@ class InMemoryImportSink implements ImportSink {
   Future<bool> hasConversation(
     String ownerAccountId,
     String conversationId,
-  ) async => _conversations[ownerAccountId]?.containsKey(conversationId) ?? false;
+  ) async =>
+      _conversations[ownerAccountId]?.containsKey(conversationId) ?? false;
 
   @override
   Future<void> putConversation(
@@ -130,7 +133,9 @@ class InMemoryImportSink implements ImportSink {
     (_conversations.putIfAbsent(
       ownerAccountId,
       () => <String, List<ExportMessage>>{},
-    ))[conversationId] = List<ExportMessage>.of(messages);
+    ))[conversationId] = List<ExportMessage>.of(
+      messages,
+    );
   }
 
   @override
@@ -159,12 +164,18 @@ class InMemoryImportSink implements ImportSink {
   int conversationCount(String ownerAccountId) =>
       _conversations[ownerAccountId]?.length ?? 0;
 
-  List<ExportMessage> messagesFor(String ownerAccountId, String conversationId) =>
-      _conversations[ownerAccountId]?[conversationId] ?? const <ExportMessage>[];
+  List<ExportMessage> messagesFor(
+    String ownerAccountId,
+    String conversationId,
+  ) =>
+      _conversations[ownerAccountId]?[conversationId] ??
+      const <ExportMessage>[];
 
-  int messageCount(String ownerAccountId) => _conversations[ownerAccountId]
-          ?.values
-          .fold<int>(0, (sum, list) => sum + list.length) ??
+  int messageCount(String ownerAccountId) =>
+      _conversations[ownerAccountId]?.values.fold<int>(
+        0,
+        (sum, list) => sum + list.length,
+      ) ??
       0;
 
   List<Map<String, Object?>> memoriesFor(String ownerAccountId) =>
@@ -172,6 +183,14 @@ class InMemoryImportSink implements ImportSink {
 
   List<Map<String, Object?>> attachmentsFor(String ownerAccountId) =>
       _attachments[ownerAccountId] ?? const <Map<String, Object?>>[];
+}
+
+/// 解析后的会话：由 JSONL 路径推导出的原会话 id 与消息列表。
+class _ParsedConversation {
+  const _ParsedConversation({required this.oldId, required this.messages});
+
+  final String oldId;
+  final List<ExportMessage> messages;
 }
 
 /// 导入服务。
@@ -203,8 +222,64 @@ class ImportService {
     if (personaText == null || memoriesText == null) {
       return err(FailureCode.invalidArgument, '导出包缺少必要文件');
     }
-    final persona = (jsonDecode(personaText) as Map).cast<String, Object?>();
 
+    // SHA256SUMS 只证明包未被篡改，不证明结构可导入。在任何落点写入
+    // 之前，先完整解析本模式要消费的数据；损坏的包在此整体拒绝，
+    // 不产生部分写入（FR-65 / AC-29）。
+    final personaParsed = _parseJsonMap(ExportService.personaFile, personaText);
+    if (personaParsed.isErr) return Err(personaParsed.failureOrNull!);
+    final persona = personaParsed.value;
+
+    final conversations = <_ParsedConversation>[];
+    final memories = <Map<String, Object?>>[];
+    List<Map<String, Object?>>? attachments;
+    if (mode != ImportMode.personaOnly) {
+      final conversationPaths =
+          bundle.files.keys
+              .where(
+                (path) =>
+                    path.startsWith(ExportService.conversationsPrefix) &&
+                    path.endsWith('.jsonl'),
+              )
+              .toList()
+            ..sort();
+      for (final path in conversationPaths) {
+        final parsed = _parseConversation(path, bundle.file(path)!);
+        if (parsed.isErr) return Err(parsed.failureOrNull!);
+        conversations.add(
+          _ParsedConversation(
+            oldId: path.substring(
+              ExportService.conversationsPrefix.length,
+              path.length - '.jsonl'.length,
+            ),
+            messages: parsed.value,
+          ),
+        );
+      }
+
+      final memoriesParsed = _parseMemories(
+        ExportService.memoriesFile,
+        memoriesText,
+      );
+      if (memoriesParsed.isErr) return Err(memoriesParsed.failureOrNull!);
+      memories.addAll(
+        memoriesParsed.value.where((memory) => memory['tier'] != 'T2').toList(),
+      );
+
+      final attachmentsText = bundle.file(ExportService.attachmentsFile);
+      if (attachmentsText != null) {
+        final attachmentsParsed = _parseAttachments(
+          ExportService.attachmentsFile,
+          attachmentsText,
+        );
+        if (attachmentsParsed.isErr) {
+          return Err(attachmentsParsed.failureOrNull!);
+        }
+        attachments = attachmentsParsed.value;
+      }
+    }
+
+    // 解析全部通过，开始写入；写入顺序与冲突语义保持不变。
     final conflicts = <ImportConflict>[];
     var importedPersona = 0;
     var importedConversations = 0;
@@ -240,46 +315,24 @@ class ImportService {
       );
     }
 
-    final conversationPaths =
-        bundle.files.keys
-            .where(
-              (path) =>
-                  path.startsWith(ExportService.conversationsPrefix) &&
-                  path.endsWith('.jsonl'),
-            )
-            .toList()
-          ..sort();
-
-    for (final path in conversationPaths) {
-      final lines = bundle
-          .file(path)!
-          .split('\n')
-          .where((line) => line.trim().isNotEmpty);
-      final messages = [
-        for (final line in lines)
-          ExportMessage.fromJson((jsonDecode(line) as Map).cast<String, Object?>()),
-      ];
-      final oldConversationId = path.substring(
-        ExportService.conversationsPrefix.length,
-        path.length - '.jsonl'.length,
-      );
+    for (final conversation in conversations) {
       final conflicting = await sink.hasConversation(
         ownerAccountId,
-        oldConversationId,
+        conversation.oldId,
       );
-      var targetConversationId = oldConversationId;
+      var targetConversationId = conversation.oldId;
       if (conflicting) {
         targetConversationId = _newId('conversation');
         conflicts.add(
           ImportConflict(
             kind: 'conversation',
-            oldId: oldConversationId,
+            oldId: conversation.oldId,
             newId: targetConversationId,
           ),
         );
       }
       final stored = <ExportMessage>[];
-      for (final message in messages) {
+      for (final message in conversation.messages) {
         if (conflicting) {
           final newMessageId = _newId('message');
           conflicts.add(
@@ -303,31 +356,15 @@ class ImportService {
           );
         }
       }
-      await sink.putConversation(
-        ownerAccountId,
-        targetConversationId,
-        stored,
-      );
+      await sink.putConversation(ownerAccountId, targetConversationId, stored);
       importedConversations++;
       importedMessages += stored.length;
     }
 
-    final memoriesJson = jsonDecode(memoriesText) as Map;
-    final rawMemories = (memoriesJson['memories'] as List? ?? const [])
-        .map((item) => (item as Map).cast<String, Object?>())
-        .toList();
-    final memories = rawMemories
-        .where((memory) => (memory['tier'] as String?) != 'T2')
-        .toList();
     await sink.putMemories(ownerAccountId, memories);
     importedMemories = memories.length;
 
-    final attachmentsText = bundle.file(ExportService.attachmentsFile);
-    if (attachmentsText != null) {
-      final attachmentsJson = jsonDecode(attachmentsText) as Map;
-      final attachments = (attachmentsJson['attachments'] as List? ?? const [])
-          .map((item) => (item as Map).cast<String, Object?>())
-          .toList();
+    if (attachments != null) {
       await sink.putAttachments(ownerAccountId, attachments);
       importedAttachments = attachments.length;
     }
@@ -351,6 +388,7 @@ class ImportService {
     if (sumsText == null || sumsText.trim().isEmpty) {
       return err(FailureCode.invalidArgument, '缺少 SHA256SUMS');
     }
+    final verified = <String>{};
     for (final line in sumsText.split('\n')) {
       if (line.trim().isEmpty) continue;
       final separator = line.indexOf('  ');
@@ -368,7 +406,92 @@ class ImportService {
       if (actual != expected) {
         return err(FailureCode.invalidArgument, 'SHA256 校验失败：$path');
       }
+      verified.add(path);
+    }
+    if (bundle.files.keys.any(
+      (path) => path != ExportService.checksumsFile && !verified.contains(path),
+    )) {
+      return err(FailureCode.invalidArgument, 'SHA256SUMS 未覆盖全部导出文件');
     }
     return const Ok<void>(null);
+  }
+
+  /// 解析一个 JSON 对象文件。语法或顶层结构损坏映射为安全 invalidArgument；
+  /// 失败信息只含文件路径，不回显数据内容（NFR-06）。
+  Result<Map<String, Object?>> _parseJsonMap(String path, String text) {
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map) {
+        return Ok(decoded.cast<String, Object?>());
+      }
+    } on FormatException {
+      return err(FailureCode.invalidArgument, '导出包 JSON 损坏：$path');
+    }
+    return err(FailureCode.invalidArgument, '导出包数据结构损坏：$path');
+  }
+
+  /// 逐行解析会话 JSONL。损坏行（语法、顶层结构、字段类型）映射为安全
+  /// invalidArgument，不在失败信息中回显行内容。
+  Result<List<ExportMessage>> _parseConversation(String path, String text) {
+    final messages = <ExportMessage>[];
+    for (final line in text.split('\n')) {
+      if (line.trim().isEmpty) continue;
+      try {
+        final decoded = jsonDecode(line);
+        if (decoded is! Map) {
+          return err(FailureCode.invalidArgument, '导出包会话行结构损坏：$path');
+        }
+        messages.add(ExportMessage.fromJson(decoded.cast<String, Object?>()));
+      } on FormatException {
+        return err(FailureCode.invalidArgument, '导出包会话行损坏：$path');
+      } on TypeError {
+        return err(FailureCode.invalidArgument, '导出包会话字段类型损坏：$path');
+      }
+    }
+    return Ok(messages);
+  }
+
+  /// 解析 memories.json。列表/条目/字段类型损坏映射为安全 invalidArgument。
+  Result<List<Map<String, Object?>>> _parseMemories(String path, String text) {
+    final root = _parseJsonMap(path, text);
+    if (root.isErr) return Err(root.failureOrNull!);
+    final rawList = root.value['memories'];
+    if (rawList != null && rawList is! List) {
+      return err(FailureCode.invalidArgument, '导出包记忆列表结构损坏：$path');
+    }
+    final memories = <Map<String, Object?>>[];
+    for (final item in (rawList as List? ?? const [])) {
+      if (item is! Map) {
+        return err(FailureCode.invalidArgument, '导出包记忆条目结构损坏：$path');
+      }
+      final memory = item.cast<String, Object?>();
+      final tier = memory['tier'];
+      if (tier != null && tier is! String) {
+        return err(FailureCode.invalidArgument, '导出包记忆字段类型损坏：$path');
+      }
+      memories.add(memory);
+    }
+    return Ok(memories);
+  }
+
+  /// 解析 attachments.json（可选文件）。列表/条目损坏映射为安全 invalidArgument。
+  Result<List<Map<String, Object?>>> _parseAttachments(
+    String path,
+    String text,
+  ) {
+    final root = _parseJsonMap(path, text);
+    if (root.isErr) return Err(root.failureOrNull!);
+    final rawList = root.value['attachments'];
+    if (rawList != null && rawList is! List) {
+      return err(FailureCode.invalidArgument, '导出包附件列表结构损坏：$path');
+    }
+    final attachments = <Map<String, Object?>>[];
+    for (final item in (rawList as List? ?? const [])) {
+      if (item is! Map) {
+        return err(FailureCode.invalidArgument, '导出包附件条目结构损坏：$path');
+      }
+      attachments.add(item.cast<String, Object?>());
+    }
+    return Ok(attachments);
   }
 }

@@ -1,6 +1,8 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/lifecycle_api.dart';
+import 'backup_file_preview_panel.dart';
+import 'backup_files.dart';
 
 /// Read-only quota/disk + lifecycle view with EXPLICIT export/import actions.
 ///
@@ -18,6 +20,9 @@ class BackupQuotaScreen extends StatefulWidget {
     this.loadQuota,
     this.loadSurvey,
     this.api,
+    this.backupFiles,
+    this.filePreview,
+    this.canWritePlaintext = true,
   });
 
   final Future<LifecycleQuotaStatus> Function()? loadQuota;
@@ -27,6 +32,18 @@ class BackupQuotaScreen extends StatefulWidget {
   /// Settings entry passes only the read loaders; without this the write actions
   /// are honestly disabled rather than invented.
   final LifecycleApi? api;
+
+  /// Optional platform file destination. Save stays unavailable unless injected.
+  final BackupFileStore? backupFiles;
+
+  /// Local preview is separate from the host-exported bundle used by import.
+  final BackupFilePreviewAccess? filePreview;
+
+  /// Whether the surrounding session is currently unlocked and still bound to
+  /// the account whose bundle is in memory. A pushed route survives a lock, so
+  /// this is re-evaluated by the caller on every build; when false, no local
+  /// plaintext write or host write is offered.
+  final bool canWritePlaintext;
 
   @override
   State<BackupQuotaScreen> createState() => _BackupQuotaScreenState();
@@ -51,6 +68,17 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
     super.initState();
     _load();
     _loadCleanupPreview();
+  }
+
+  @override
+  void didUpdateWidget(BackupQuotaScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A lock/account change must not leave the previous account's exported
+    // bundle in memory or writable from this already-pushed route.
+    if (!widget.canWritePlaintext && _exported != null) {
+      _exported = null;
+      _actionNotice = '账号已锁定或变化，已清除内存中的导出内容。';
+    }
   }
 
   /// Read-only cleanup preview. Never executes anything; the host has no
@@ -142,13 +170,47 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
       if (!mounted) return;
       setState(() {
         _exported = bundle;
+        final coverage = bundle.manifest['coverage'];
+        final chatOnly =
+            coverage is Map &&
+            coverage['scope'] == 'chatHistory' &&
+            coverage['completeAccountExport'] == false;
         _actionNotice =
             '已导出到内存：文件 ${bundle.fileCount} 个，计数 ${bundle.counts}，'
-            '校验和${bundle.hasChecksums ? '存在' : '缺失'}。仅显示摘要，不显示文件内容或密钥。';
+            '校验和${bundle.hasChecksums ? '存在' : '缺失'}。仅显示摘要，不显示文件内容或密钥。'
+            '${chatOnly ? '\n当前仅导出有权读取的聊天记录；不包含人格、记忆和附件内容，不是完整账号备份。' : ''}';
       });
     } catch (_) {
       if (mounted) {
         setState(() => _actionNotice = '导出失败或结果未确认；不会自动重试。');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _saveToFile() async {
+    final store = widget.backupFiles;
+    final bundle = _exported;
+    if (store == null || bundle == null || _busy || !widget.canWritePlaintext) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _actionNotice = null;
+    });
+    try {
+      final saved = await store.save(bundle);
+      if (!mounted) return;
+      setState(() {
+        _actionNotice = saved == null
+            ? '已取消保存。'
+            : '已保存导出文件：${saved.name}（${_bytes(saved.bytes)}）。'
+                  '文件含聊天明文，不受应用锁保护，请妥善保管。';
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _actionNotice = '导出文件保存失败或结果未确认；不会自动重试。');
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -171,7 +233,10 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('导入会写入当前账号数据；与现有数据冲突时生成新 id、不覆盖。请选择范围并确认。'),
+                  const Text(
+                    '导入会写入当前账号数据；与现有数据冲突时生成新 id、不覆盖。'
+                    '当前宿主导入仍为内存参考实现，重启后不会保留。请选择范围并确认。',
+                  ),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
@@ -229,7 +294,8 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
             '人格 ${report.importedPersona}，会话 ${report.importedConversations}，'
             '消息 ${report.importedMessages}，记忆 ${report.importedMemories}，'
             '附件 ${report.importedAttachments}，冲突 ${report.conflicts.length}，'
-            '校验和${report.checksumVerified ? '通过' : '未通过'}。';
+            '校验和${report.checksumVerified ? '通过' : '未通过'}。'
+            '当前宿主导入仍为内存参考实现，重启后不会保留。';
       });
     } catch (_) {
       if (mounted) {
@@ -335,12 +401,31 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
             children: [
               FilledButton(
                 key: const Key('export-lifecycle'),
-                onPressed: actionsAvailable && !_busy ? _export : null,
+                onPressed:
+                    actionsAvailable && widget.canWritePlaintext && !_busy
+                    ? _export
+                    : null,
                 child: const Text('导出'),
               ),
               FilledButton(
+                key: const Key('save-lifecycle'),
+                onPressed:
+                    actionsAvailable &&
+                        widget.canWritePlaintext &&
+                        widget.backupFiles != null &&
+                        !_busy &&
+                        _exported != null
+                    ? _saveToFile
+                    : null,
+                child: const Text('保存到文件'),
+              ),
+              FilledButton(
                 key: const Key('import-lifecycle'),
-                onPressed: actionsAvailable && !_busy && _exported != null
+                onPressed:
+                    actionsAvailable &&
+                        widget.canWritePlaintext &&
+                        !_busy &&
+                        _exported != null
                     ? _import
                     : null,
                 child: const Text('导入'),
@@ -351,6 +436,20 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
           if (!actionsAvailable)
             const Text('当前入口未接线宿主连接：导出/导入不可用（需装配 LifecycleApi）。'),
           if (actionsAvailable && _exported == null) const Text('导入需先成功导出到内存。'),
+          if (actionsAvailable && widget.backupFiles == null)
+            const Text('未接线本机文件保存：导出仍可查看，保存到文件不可用。'),
+          if (actionsAvailable)
+            const Text('保存的文件为聊天明文，不受应用锁保护；宿主导入当前仍为内存参考实现，重启后不会保留。'),
+          if (actionsAvailable && !widget.canWritePlaintext)
+            const Text(
+              key: Key('lifecycle-write-locked'),
+              '当前已锁定或账号状态已变化：保存和导入已停用。',
+            ),
+          if (widget.filePreview case final access?)
+            BackupFilePreviewPanel(
+              access: access,
+              enabled: !_busy && widget.canWritePlaintext,
+            ),
           if (actionsAvailable) ...[
             Text(
               '清理预览（只读，不执行）',

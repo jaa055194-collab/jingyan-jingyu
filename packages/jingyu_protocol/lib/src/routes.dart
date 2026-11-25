@@ -34,6 +34,13 @@ abstract final class Routes {
   /// Current human operator's AI accounts; no implicit friendship or profile.
   static const String ownAiAccounts = '$prefix/accounts/me/ai';
 
+  /// A single current human operator's own AI account; logical removal only.
+  static const String ownAiAccount = '$prefix/accounts/me/ai/{accountId}';
+
+  /// Account-wide stop for local owner rule greetings, not a dispatch route.
+  static const String ownerRuleGreetingStop =
+      '$prefix/accounts/me/owner-rule-greetings';
+
   /// 管理员账号元数据与账号创建。
   static const String adminAccounts = '$prefix/admin/accounts';
   static const String adminUsage = '$prefix/admin/usage';
@@ -65,6 +72,16 @@ abstract final class Routes {
   /// Current human's explicit ownerTextOnly consent (GET/POST/DELETE), no dispatch.
   static const String ownerAiDirectConsent =
       '$prefix/ai-profiles/{aiId}/direct-conversation';
+
+  /// Owner-private Android transcript exchanges for the current human's own AI:
+  /// GET a bounded cursor page, POST one already-produced exchange pair. This
+  /// is not ordinary chat, consent, model dispatch or any other AI setting.
+  static const String androidPrivateChat =
+      '$prefix/ai-profiles/{aiId}/android-private-chat';
+
+  /// Separate, default-off settings for a local rule greeting to the owner.
+  static const String aiOwnerRuleGreeting =
+      '$prefix/ai-profiles/{aiId}/owner-rule-greeting';
 
   /// Current human's owner-scoped contacts list (friends/pending/blocked).
   /// Read-only; never accepts an owner or actor from the request.
@@ -151,6 +168,14 @@ abstract final class Routes {
   static const String messageRecall =
       '$prefix/conversations/{conversationId}/messages/{messageId}/recall';
 
+  /// Bounded image bytes for one visible message's own attachment (GET).
+  static const String messageAttachment =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/attachment';
+
+  /// Bounded M4A bytes for one visible audio message's own attachment (GET).
+  static const String messageVoiceAttachment =
+      '$prefix/conversations/{conversationId}/messages/{messageId}/voice-attachment';
+
   /// 单会话差集同步：`/conversations/{conversationId}/sync`。
   static const String sync = '$prefix/conversations/{conversationId}/sync';
 
@@ -159,6 +184,10 @@ abstract final class Routes {
 
   /// 分片上传：初始化一次上传会话。
   static const String attachmentUploads = '$prefix/attachments/uploads';
+
+  /// Abort one pending upload owned by the caller.
+  static const String attachmentUpload =
+      '$prefix/attachments/uploads/{uploadId}';
 
   /// 上传一个分片；[index] 从 0 起按序递增，支持断点续传。
   static const String attachmentUploadChunk =
@@ -173,6 +202,37 @@ abstract final class Routes {
 
   /// 记忆管理。
   static const String memories = '$prefix/memories';
+
+  /// Separate, default-off consent to use fixed owner-only reply preferences.
+  static const String aiOwnerReplyPreferences =
+      '$prefix/ai-profiles/{aiId}/owner-reply-preferences';
+
+  /// Owner's manually confirmed encrypted memory notes and separate use grant.
+  static const String aiOwnerMemoryNotes =
+      '$prefix/ai-profiles/{aiId}/owner-memory-notes';
+  static const String aiOwnerMemoryNote =
+      '$prefix/ai-profiles/{aiId}/owner-memory-notes/{noteId}';
+  static const String aiOwnerMemoryNoteSettings =
+      '$prefix/ai-profiles/{aiId}/owner-memory-notes/settings';
+
+  /// Owner's default-off, per-AI opt-in auto chat-history memory: it captures
+  /// only the owner's own authorized private chat and offers a bounded manager
+  /// to view, confirm/revoke and clear captured entries. No group or third
+  /// party content is ever collected.
+  static const String aiOwnerAutoMemory =
+      '$prefix/ai-profiles/{aiId}/owner-auto-memory';
+  static const String aiOwnerAutoMemorySettings =
+      '$prefix/ai-profiles/{aiId}/owner-auto-memory/settings';
+  static const String aiOwnerAutoMemoryEntry =
+      '$prefix/ai-profiles/{aiId}/owner-auto-memory/{memoryId}';
+
+  /// Separate, default-off settings for a model-driven proactive message to the
+  /// owner's own private chat; unlike the fixed rule greeting this invokes the
+  /// model under the B3 budget and sends a generated short message.
+  static const String aiOwnerModelProactive =
+      '$prefix/ai-profiles/{aiId}/owner-model-proactive';
+  static const String ownerModelProactiveStop =
+      '$prefix/accounts/me/owner-model-proactive';
 
   /// 模型接入配置。
   static const String modelProviders = '$prefix/model-providers';

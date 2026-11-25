@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../storage/database.dart';
+import '../storage/sqlite_audit_log.dart';
 import 'accounts_migrations.dart';
 import 'accounts_store.dart';
 
@@ -41,9 +42,19 @@ class SqlAccountsStore implements AccountsStore {
       });
 
   @override
-  Future<T> transaction<T>(
-    FutureOr<T> Function(AccountsState state) action,
-  ) async {
+  Future<T> transaction<T>(FutureOr<T> Function(AccountsState state) action) =>
+      _transaction(action);
+
+  @override
+  Future<T> transactionWithAudit<T>(
+    FutureOr<T> Function(AccountsState state) action, {
+    required AccountsStateAudit audit,
+  }) => _transaction(action, audit: audit);
+
+  Future<T> _transaction<T>(
+    FutureOr<T> Function(AccountsState state) action, {
+    AccountsStateAudit? audit,
+  }) async {
     await _ensureStarted();
     return database.transaction((tx) async {
       final before = await _load(tx);
@@ -52,6 +63,11 @@ class SqlAccountsStore implements AccountsStore {
       // Detach callback-retained references before yielding to asynchronous SQL.
       final after = working.copy();
       _validate(after);
+      if (audit != null) {
+        for (final entry in audit(before, after)) {
+          await SqliteAuditLog.recordInTransaction(tx, entry);
+        }
+      }
       await _persist(tx, before, after);
       return result;
     });
@@ -68,12 +84,15 @@ class SqlAccountsStore implements AccountsStore {
     for (final row in await tx.query('''
 SELECT a.id, a.display_name AS displayName, a.kind,
        o.operator_id AS operator, a.is_admin AS isAdmin, a.disabled,
+       r.account_id IS NOT NULL AS removed, r.removed_at AS removedAt,
        a.password_hash AS passwordHash, a.failed_passwords AS failedPasswords,
        a.locked_until AS lockedUntil
 FROM account a LEFT JOIN ai_operator o ON o.ai_id = a.id
+LEFT JOIN removed_ai_accounts r ON r.account_id = a.id
 ''')) {
       row['isAdmin'] = row['isAdmin'] == 1;
       row['disabled'] = row['disabled'] == 1;
+      row['removed'] = row['removed'] == 1;
       state.accounts[row['id'] as String] = row;
     }
     for (final row in await tx.query('''
@@ -119,6 +138,9 @@ FROM invite
         }
       } else if (operator != null) {
         throw ArgumentError('Human accounts cannot have an operator');
+      }
+      if (account['removed'] == true && account['removedAt'] is! int) {
+        throw ArgumentError('Removed accounts require a removal timestamp');
       }
     }
     for (final device in state.devices.values) {
@@ -188,6 +210,15 @@ locked_until=excluded.locked_until
           r['lockedUntil'],
         ],
       );
+      // Write the marker only on the first removal. Ordinary account upserts
+      // must not recreate or change an existing removal timestamp.
+      if (r['removed'] == true &&
+          before.accounts[entry.key]?['removed'] != true) {
+        await tx.execute(
+          'INSERT INTO removed_ai_accounts (account_id, removed_at) VALUES (?, ?)',
+          [entry.key, r['removedAt']],
+        );
+      }
     }
     for (final entry in after.accounts.entries) {
       final r = entry.value;

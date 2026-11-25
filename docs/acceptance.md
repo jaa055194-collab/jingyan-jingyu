@@ -4,7 +4,7 @@
 > PR#58/67 客户端外壳；更早的 PR#60 后端模块切片）；本票分支
 > `agent/acceptance-matrix/takeover-pr-rebase-status-aab5824adc83`。环境：Windows x64，
 > Dart SDK 3.14.0（`dart pub get --offline`），`apps/host` 默认宿主装配，临时数据目录。
-> 记录日期：2026-11-17。
+> 初始记录日期：2026-11-17。第一期候选的范围、复核命令与边界见[第一期证据索引](phase-one/README.md)及[需求追踪](requirements-traceability.md#第一期候选本人-ai-私聊人格导入和聊天内消息操作)。本表旧基线不自动晋升为第一期或正式版验收。
 
 ## 阅读须知（状态口径）
 

@@ -112,6 +112,12 @@ abstract class MessageStore {
   /// 会话当前最大 seq。
   Future<int> headSeq(String conversationId);
 
+  /// 读取单条消息；不存在或跨会话一律 notFound。授权由调用方判定。
+  Future<Result<StoredMessage>> read({
+    required String conversationId,
+    required String messageId,
+  });
+
   /// 撤回自己的消息：仅发送者、24 小时内、未撤回时成功。
   /// 成功后正文替换为 `{"recalled": true}` 占位，seq 保持不变（留痕与分页稳定）。
   Future<Result<void>> recall({
@@ -222,6 +228,19 @@ class InMemoryMessageStore implements MessageStore {
   @override
   Future<int> headSeq(String conversationId) async =>
       _byConversation[conversationId]?.length ?? 0;
+
+  @override
+  Future<Result<StoredMessage>> read({
+    required String conversationId,
+    required String messageId,
+  }) async {
+    final list = _byConversation[conversationId];
+    final message = list
+        ?.where((candidate) => candidate.messageId == messageId)
+        .firstOrNull;
+    if (message == null) return err(FailureCode.notFound, 'message not found');
+    return Ok(message);
+  }
 
   @override
   Future<Result<void>> recall({

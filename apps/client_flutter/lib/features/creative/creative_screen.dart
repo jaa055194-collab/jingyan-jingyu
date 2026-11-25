@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/creative_api.dart';
+import 'creative_report_detail.dart';
 
 /// Read-only creative surface for the merged host creative endpoints:
 /// relationship weekly/annual reports (CR-03) and late-night radio (CR-07).
@@ -11,12 +12,24 @@ import '../../net/creative_api.dart';
 /// content. Empty host lists are reported as honest empty states, distinct from
 /// an unbound or failed load.
 class CreativeScreen extends StatefulWidget {
-  const CreativeScreen({super.key, this.loadReports, this.loadRadio});
+  const CreativeScreen({
+    super.key,
+    this.loadReports,
+    this.loadRadio,
+    this.sessionContext,
+    this.sessionChanges,
+  });
 
   /// Host-backed readers. [CreativeApi.listReports] / [CreativeApi.listRadio]
   /// satisfy these once a connection is available; tests inject them directly.
   final Future<List<CreativeReportSummary>> Function()? loadReports;
   final Future<List<CreativeRadioEpisode>> Function()? loadRadio;
+
+  /// A non-null runtime identity for this authenticated, unlocked session.
+  /// The shell notifies on changes so even transient interruptions invalidate
+  /// the previously loaded data.
+  final Object? Function()? sessionContext;
+  final Listenable? sessionChanges;
 
   @override
   State<CreativeScreen> createState() => _CreativeScreenState();
@@ -25,42 +38,79 @@ class CreativeScreen extends StatefulWidget {
 class _CreativeScreenState extends State<CreativeScreen> {
   List<CreativeReportSummary>? _reports;
   List<CreativeRadioEpisode>? _radio;
-  bool _loading = true;
-  bool _unbound = false;
+  bool _loading = false;
   bool _failed = false;
+
+  // Like device sessions, this view stays invalidated after leaving the
+  // opening session. Reopening the tab must be an explicit user action.
+  late final Object? _openingContext;
+  late final Listenable? _sessionChanges;
+  bool _sessionInvalid = false;
 
   @override
   void initState() {
     super.initState();
+    _openingContext = widget.sessionContext?.call();
+    _sessionChanges = widget.sessionChanges;
+    _sessionChanges?.addListener(_onSessionChanged);
     _load();
   }
 
+  @override
+  void didUpdateWidget(CreativeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(_sessionChanges, widget.sessionChanges) ||
+        !_sessionMatches) {
+      _invalidateSession();
+    }
+  }
+
+  @override
+  void dispose() {
+    _sessionChanges?.removeListener(_onSessionChanged);
+    super.dispose();
+  }
+
+  bool get _sessionMatches =>
+      !_sessionInvalid &&
+      (widget.sessionContext == null
+          ? _sessionChanges == null
+          : _openingContext != null &&
+                widget.sessionContext!() == _openingContext);
+
+  void _invalidateSession() {
+    if (_sessionInvalid) return;
+    setState(() {
+      _sessionInvalid = true;
+      _reports = null;
+      _radio = null;
+      _loading = false;
+      _failed = false;
+    });
+  }
+
+  void _onSessionChanged() {
+    // Even if the session changes back before the next frame, discard the old
+    // list and expanded subtree now instead of letting it become visible again.
+    if (mounted && !_sessionMatches) _invalidateSession();
+  }
+
   Future<void> _load() async {
+    if (!mounted || !_sessionMatches || _loading) return;
     final reports = widget.loadReports;
     final radio = widget.loadRadio;
-    if (reports == null || radio == null) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _unbound = true;
-          _reports = null;
-          _radio = null;
-          _failed = false;
-        });
-      }
-      return;
-    }
-    if (mounted) {
-      setState(() {
-        _loading = true;
-        _unbound = false;
-        _failed = false;
-      });
-    }
+    if (reports == null || radio == null) return;
+    setState(() {
+      _loading = true;
+      _failed = false;
+      _reports = null;
+      _radio = null;
+    });
     try {
       final loadedReports = await reports();
+      if (!mounted || !_sessionMatches) return;
       final loadedRadio = await radio();
-      if (!mounted) return;
+      if (!mounted || !_sessionMatches) return;
       setState(() {
         _reports = List.unmodifiable(loadedReports);
         _radio = List.unmodifiable(loadedRadio);
@@ -68,10 +118,8 @@ class _CreativeScreenState extends State<CreativeScreen> {
       });
     } catch (_) {
       // Never surface upstream response bodies, ids or provider prose.
-      if (!mounted) return;
+      if (!mounted || !_sessionMatches) return;
       setState(() {
-        _reports = null;
-        _radio = null;
         _loading = false;
         _failed = true;
       });
@@ -106,6 +154,17 @@ class _CreativeScreenState extends State<CreativeScreen> {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final bound = widget.loadReports != null && widget.loadRadio != null;
+    if (!_sessionMatches) {
+      return Scaffold(
+        body: _message(
+          key: const Key('creative-session-invalid'),
+          icon: Icons.lock_outline,
+          title: '动态',
+          detail: '登录、锁定或账号已变化；报告信息已清除，请重新打开动态。',
+          text: text,
+        ),
+      );
+    }
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -132,7 +191,7 @@ class _CreativeScreenState extends State<CreativeScreen> {
             Expanded(
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
-                  : _unbound
+                  : !bound
                   ? _message(
                       key: const Key('creative-unbound'),
                       icon: Icons.photo_library_outlined,
@@ -189,19 +248,7 @@ class _CreativeScreenState extends State<CreativeScreen> {
           if (reports.isEmpty)
             _emptyRow('暂无周报或年报。', const Key('creative-empty-reports'))
           else
-            for (final summary in reports)
-              ListTile(
-                key: ValueKey('report-${summary.kind}-${summary.periodKey}'),
-                leading: Icon(
-                  summary.kind == 'annual'
-                      ? Icons.auto_awesome_outlined
-                      : Icons.article_outlined,
-                ),
-                title: Text(
-                  '${_kindLabel(summary.kind)} · ${summary.periodKey}',
-                ),
-                subtitle: Text(_reportSubtitle(summary)),
-              ),
+            for (final summary in reports) _reportRow(summary),
           const Divider(),
           _sectionTitle('深夜电台', text),
           if (radio.isEmpty)
@@ -227,12 +274,48 @@ class _CreativeScreenState extends State<CreativeScreen> {
     );
   }
 
-  String _reportSubtitle(CreativeReportSummary summary) {
-    final status = _statusLabel(summary.status);
+  Widget _reportRow(CreativeReportSummary summary) {
+    final key = ValueKey((summary.aiId, summary.kind, summary.periodKey));
+    final icon = Icon(
+      summary.kind == 'annual'
+          ? Icons.auto_awesome_outlined
+          : Icons.article_outlined,
+    );
+    final title = Text('${_kindLabel(summary.kind)} · ${summary.periodKey}');
     final report = summary.report;
-    if (report == null) return status;
-    final topics = _topics(report);
-    return topics.isEmpty ? status : '$status · $topics';
+    final usable =
+        summary.status == 'generated' &&
+        report != null &&
+        report.kind == summary.kind &&
+        report.periodKey == summary.periodKey;
+    final status = _statusLabel(summary.status);
+    final topics = usable ? _topics(report) : '';
+    final subtitle = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('AI：${summary.aiId}'),
+        Text(switch ((summary.status, usable, topics.isEmpty)) {
+          ('generated', false, _) => '$status · 缺少报告内容',
+          ('generated', true, false) => '$status · $topics',
+          _ => status,
+        }),
+      ],
+    );
+    if (!usable) {
+      return ListTile(
+        key: key,
+        leading: icon,
+        title: title,
+        subtitle: subtitle,
+      );
+    }
+    return ExpansionTile(
+      key: key,
+      leading: icon,
+      title: title,
+      subtitle: subtitle,
+      children: [CreativeReportDetail(report: report)],
+    );
   }
 
   Widget _sectionTitle(String title, TextTheme text) => Padding(

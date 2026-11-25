@@ -134,9 +134,21 @@ abstract interface class AiConfigWriter {
 
 /// Bound (authenticated) implementation over [HostConnection].
 class AiConfigWriteApi implements AiConfigWriter {
-  AiConfigWriteApi(this.connection);
+  AiConfigWriteApi(
+    this.connection, {
+    this.retryAuthentication = true,
+    this.allowMultilinePersona = false,
+  });
 
   final HostConnection connection;
+
+  /// A session-pinned editor opts out so a 401 cannot replay a write after
+  /// the interaction that authorized it has been invalidated.
+  final bool retryAuthentication;
+
+  /// The Android editor uses keyed multiline fields. Match the host persona
+  /// text contract there; leave the legacy line-based form's writer unchanged.
+  final bool allowMultilinePersona;
 
   static const Set<String> _layers = {
     'b0Life',
@@ -174,11 +186,34 @@ class AiConfigWriteApi implements AiConfigWriter {
     return raw;
   }
 
+  static final _personaKeyControl = RegExp(r'[\x00-\x1f\x7f-\x9f]');
+  static final _personaValueControl = RegExp(
+    r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]',
+  );
+
+  String _personaKey(String value) {
+    if (!allowMultilinePersona) return _label(value, '人格键');
+    if (value.trim().isEmpty ||
+        value.trim() != value ||
+        _personaKeyControl.hasMatch(value)) {
+      throw const FormatException('人格键无效');
+    }
+    return value;
+  }
+
+  String _personaValue(String value) {
+    if (!allowMultilinePersona) return _label(value, '人格值');
+    if (value.trim().isEmpty || _personaValueControl.hasMatch(value)) {
+      throw const FormatException('人格值无效');
+    }
+    return value;
+  }
+
   Map<String, Object?> _personaLayer(Map<String, String> layer) {
     if (layer.isEmpty) throw const FormatException('人格层不能为空');
     return {
       for (final entry in layer.entries)
-        _label(entry.key, '人格键'): _label(entry.value, '人格值'),
+        _personaKey(entry.key): _personaValue(entry.value),
     };
   }
 
@@ -226,6 +261,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         'capabilities': caps.toList(),
         'enabled': enabled,
       },
+      retryAuthentication: retryAuthentication,
     );
     return ProviderConfigView.fromJson(json);
   });
@@ -262,6 +298,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         Uri.encodeComponent(providerId),
       ),
       body: body,
+      retryAuthentication: retryAuthentication,
     );
     return ProviderConfigView.fromJson(json);
   });
@@ -285,6 +322,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         'p1': _personaLayer(p1),
         'p2': _personaLayer(p2),
       },
+      retryAuthentication: retryAuthentication,
     );
     _validateCard(json, aiProfileId);
   });
@@ -306,9 +344,9 @@ class AiConfigWriteApi implements AiConfigWriter {
     }
     Map<String, Object?> diff(Map<String, String?> layer) => {
       for (final entry in layer.entries)
-        _label(entry.key, '人格键'): entry.value == null
+        _personaKey(entry.key): entry.value == null
             ? null
-            : _label(entry.value!, '人格值'),
+            : _personaValue(entry.value!),
     };
     final json = await connection.request(
       'PATCH',
@@ -318,6 +356,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         'reason': reason,
         'diff': {'p0': diff(p0), 'p1': diff(p1), 'p2': diff(p2)},
       },
+      retryAuthentication: retryAuthentication,
     );
     _validateCard(json, aiProfileId);
   });
@@ -350,6 +389,7 @@ class AiConfigWriteApi implements AiConfigWriter {
           .replaceFirst('{aiId}', Uri.encodeComponent(aiProfileId))
           .replaceFirst('{capability}', 'chat'),
       body: {'providerId': providerId, 'model': model},
+      retryAuthentication: retryAuthentication,
     );
     const fields = {
       'owner_id',
@@ -396,6 +436,7 @@ class AiConfigWriteApi implements AiConfigWriter {
         'capabilityLimits': capabilityLimits,
         'offsetMinutes': offsetMinutes,
       },
+      retryAuthentication: retryAuthentication,
     );
     const fields = {
       'dailyTokens',

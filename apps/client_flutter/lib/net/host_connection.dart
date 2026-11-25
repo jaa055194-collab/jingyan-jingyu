@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
@@ -59,6 +61,103 @@ class HostConnection {
     return List<Object?>.unmodifiable(decoded);
   }
 
+  /// One explicit request with a response byte limit and exact HTTP success
+  /// status. No redirect, auth renewal or retry; a write may already be applied
+  /// when its response fails validation or times out.
+  Future<Map<String, Object?>> requestBoundedObject(
+    String method,
+    String path, {
+    Map<String, Object?>? body,
+    Map<String, String>? query,
+    required int maxResponseBytes,
+    required int expectedStatus,
+    HostReadCancellation? cancellation,
+  }) => _getBoundedJson(
+    path,
+    method: method,
+    body: body,
+    query: query,
+    maxResponseBytes: maxResponseBytes,
+    expectedStatus: expectedStatus,
+    cancellation: cancellation,
+  );
+
+  /// A one-shot GET with a wire-body limit, before UTF-8 or JSON decoding.
+  /// Explicit media reads never renew/replay authentication or follow redirects.
+  Future<Map<String, Object?>> getBoundedJson(
+    String path, {
+    required int maxResponseBytes,
+    HostReadCancellation? cancellation,
+  }) => _getBoundedJson(
+    path,
+    maxResponseBytes: maxResponseBytes,
+    cancellation: cancellation,
+  );
+
+  /// The same one-shot bounded read with separately encoded query parameters.
+  Future<Map<String, Object?>> getBoundedJsonWithQuery(
+    String path, {
+    required Map<String, String> query,
+    required int maxResponseBytes,
+    HostReadCancellation? cancellation,
+  }) => _getBoundedJson(
+    path,
+    query: query,
+    maxResponseBytes: maxResponseBytes,
+    cancellation: cancellation,
+  );
+
+  Future<Map<String, Object?>> _getBoundedJson(
+    String path, {
+    String method = 'GET',
+    Map<String, Object?>? body,
+    Map<String, String>? query,
+    required int maxResponseBytes,
+    int? expectedStatus,
+    HostReadCancellation? cancellation,
+  }) async {
+    if (maxResponseBytes < 1) {
+      throw ArgumentError.value(maxResponseBytes, 'maxResponseBytes');
+    }
+    final stop = cancellation ?? HostReadCancellation();
+    stop._check();
+    if (stop._signal != null) throw StateError('Read already started');
+    final signal = Completer<void>();
+    stop._signal = signal;
+    try {
+      final decoded =
+          await Future.any<Object?>([
+            _requestJson(
+              method,
+              path,
+              body: body,
+              query: query,
+              retryAuthentication: false,
+              maxResponseBytes: maxResponseBytes,
+              expectedStatus: expectedStatus,
+              cancellation: stop,
+            ),
+            signal.future.then<Object?>(
+              (_) => throw HostReadCancellation._error,
+            ),
+          ]).timeout(
+            const Duration(seconds: 15),
+            onTimeout: () {
+              stop.cancel();
+              throw TimeoutException('宿主响应超时');
+            },
+          );
+      stop._check();
+      if (decoded is! Map<String, Object?>) {
+        throw const FormatException('宿主响应无效');
+      }
+      return decoded;
+    } finally {
+      stop._abort = null;
+      if (!signal.isCompleted) signal.complete();
+    }
+  }
+
   Future<Object?> _requestJson(
     String method,
     String path, {
@@ -66,20 +165,40 @@ class HostConnection {
     Map<String, String>? query,
     bool retryAuthentication = true,
     bool allowEmptySuccess = false,
+    int? maxResponseBytes,
+    int? expectedStatus,
+    HostReadCancellation? cancellation,
   }) async {
     final attemptedToken = _token;
-    final req = await client
-        .openUrl(method, route(path, query))
-        .timeout(const Duration(seconds: 15));
+    final opening = client.openUrl(method, route(path, query));
+    final req = cancellation == null
+        ? await opening.timeout(const Duration(seconds: 15))
+        : await opening;
+    if (cancellation?._cancelled == true) {
+      // A cancelled caller may have been waiting for a socket. Abort it
+      // without sending the request as soon as Dart hands it to us.
+      req.done.ignore();
+      req.abort(HostReadCancellation._error);
+      throw HostReadCancellation._error;
+    }
     req.followRedirects = false;
     req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $attemptedToken');
     req.headers.contentType = ContentType.json;
+    if (cancellation != null) {
+      req.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+      cancellation._abort = () => req.abort(HostReadCancellation._error);
+    }
     if (body != null) req.write(jsonEncode(body));
-    final response = await req.close().timeout(const Duration(seconds: 15));
-    final text = await response
-        .transform(utf8.decoder)
-        .join()
-        .timeout(const Duration(seconds: 15));
+    final closing = req.close();
+    final response = cancellation == null
+        ? await closing.timeout(const Duration(seconds: 15))
+        : await closing;
+    final text = maxResponseBytes == null
+        ? await response
+              .transform(utf8.decoder)
+              .join()
+              .timeout(const Duration(seconds: 15))
+        : await _boundedText(response, maxResponseBytes, cancellation!);
     var renewalFailed = false;
     if (response.statusCode == 401 &&
         retryAuthentication &&
@@ -129,8 +248,45 @@ class HostConnection {
         ),
       );
     }
+    if (expectedStatus != null && response.statusCode != expectedStatus) {
+      throw const FormatException('宿主响应状态未知');
+    }
     if (allowEmptySuccess && text.isEmpty) return <String, Object?>{};
     return jsonDecode(text);
+  }
+
+  static Future<String> _boundedText(
+    HttpClientResponse response,
+    int limit,
+    HostReadCancellation stop,
+  ) async {
+    // Do not accept compressed bodies: checking Content-Length alone would
+    // not bound the bytes the decoder actually receives.
+    final encoding = response.headers.value(HttpHeaders.contentEncodingHeader);
+    if (stop._cancelled ||
+        response.contentLength > limit ||
+        (encoding != null && encoding.toLowerCase() != 'identity')) {
+      await response.listen(null).cancel();
+      stop._check();
+      throw const FormatException('宿主响应过大或编码不受支持');
+    }
+    final chunks = StreamIterator<List<int>>(response);
+    stop._abort = () => chunks.cancel().ignore();
+    final body = BytesBuilder(copy: false);
+    try {
+      while (await chunks.moveNext()) {
+        stop._check();
+        final chunk = chunks.current;
+        if (chunk.length > limit - body.length) {
+          throw const FormatException('宿主响应过大');
+        }
+        body.add(chunk);
+      }
+      stop._check();
+      return utf8.decode(body.takeBytes());
+    } finally {
+      await chunks.cancel();
+    }
   }
 
   Future<Result<void>> submit(OutboxSubmission item) async {
@@ -172,12 +328,17 @@ class HostConnection {
     return decoded.value as MessageEventFrame;
   }
 
+  /// Validate each page before applying its authorized floor or any rows.
+  /// Legacy hosts can omit the floor; they still have to send contiguous rows.
   Future<void> sync(
     SyncRequestFrame frame,
-    Future<void> Function(MessageEventFrame) accept,
-  ) async {
+    Future<void> Function(MessageEventFrame) accept, {
+    Future<void> Function(int firstVisibleSeq)? applyHistoryFloor,
+    void Function()? checkActive,
+  }) async {
     var after = frame.afterSeq;
     while (true) {
+      checkActive?.call();
       final page = await request(
         'GET',
         Routes.sync.replaceAll(
@@ -186,16 +347,51 @@ class HostConnection {
         ),
         query: {'afterSeq': '$after'},
       );
-      final messages = (page['messages'] as List)
-          .map((e) => decodeMessage((e as Map).cast<String, Object?>()))
-          .toList();
-      for (final message in messages) {
-        if (message.seq != after + 1) throw const FormatException('差集仍存在缺口');
-        await accept(message);
-        after = message.seq;
+      checkActive?.call();
+      final floor = page['firstVisibleSeq'];
+      final rows = page['messages'];
+      final hasMore = page['hasMore'];
+      if ((page.containsKey('firstVisibleSeq') &&
+              (floor is! int || floor < 1)) ||
+          rows is! List ||
+          hasMore is! bool ||
+          (hasMore && rows.isEmpty)) {
+        throw const FormatException('差集响应无效');
       }
-      if (page['hasMore'] != true) break;
-      if (messages.isEmpty) throw const FormatException('空差集分页');
+
+      var next = after;
+      if (floor is int && applyHistoryFloor != null && floor - 1 > next) {
+        next = floor - 1;
+      }
+      final messages = <MessageEventFrame>[];
+      for (final row in rows) {
+        if (row is! Map<String, Object?>) {
+          throw const FormatException('消息响应无效');
+        }
+        final message = decodeMessage(row);
+        if (message.conversationId != frame.conversationId ||
+            message.seq <= next ||
+            message.seq != next + 1) {
+          throw const FormatException('差集会话或序号不匹配');
+        }
+        // Parsed numeric overflow can be non-finite; the snapshot cannot
+        // encode it. Reject the entire page before applying its floor or rows.
+        try {
+          jsonEncode(message.body);
+        } on JsonUnsupportedObjectError {
+          throw const FormatException('消息正文无效');
+        }
+        messages.add(message);
+        next = message.seq;
+      }
+      if (floor is int && applyHistoryFloor != null) {
+        await applyHistoryFloor(floor);
+      }
+      for (final message in messages) {
+        await accept(message);
+      }
+      if (!hasMore) return;
+      after = next;
     }
   }
 
@@ -225,6 +421,26 @@ class HostConnection {
   Future<void> close() async {
     await socket?.close();
     client.close(force: true);
+  }
+}
+
+/// Cancels one bounded read without closing the rest of the host session.
+class HostReadCancellation {
+  static const _error = HttpException('读取已取消');
+  Completer<void>? _signal;
+  void Function()? _abort;
+  bool _cancelled = false;
+
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    _abort?.call();
+    final signal = _signal;
+    if (signal != null && !signal.isCompleted) signal.complete();
+  }
+
+  void _check() {
+    if (_cancelled) throw _error;
   }
 }
 

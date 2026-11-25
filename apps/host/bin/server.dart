@@ -7,15 +7,30 @@ library;
 import 'dart:io';
 
 import 'package:jingyu_host/jingyu_host.dart';
+import 'package:jingyu_host/src/models/model_runtime.dart';
 
 Future<void> main() async {
-  final config = HostConfig.fromEnvironment(Platform.environment);
+  final config = HostConfig.forServer(
+    Platform.environment,
+    script: Platform.script,
+    resolvedExecutable: Platform.resolvedExecutable,
+    onWorkerUnavailable: (reason) =>
+        stderr.writeln('Model runtime disabled: $reason'),
+  );
   final host = await buildHost(
     config: config,
-    onError: (error, stack) => stderr.writeln('unhandled: ${error.runtimeType}'),
+    onError: (error, stack) =>
+        stderr.writeln('unhandled: ${error.runtimeType}'),
   );
   final server = await HttpServer.bind(config.bindAddress, config.port);
-  stdout.writeln('jingyu host ${config.hostVersion} listening on ${config.bindAddress}:${config.port}');
+  if (host.registry.services.maybeGet<ModelRuntime>() != null) {
+    stdout.writeln(
+      'Model runtime registered (worker: ${config.modelWorkerPath})',
+    );
+  }
+  stdout.writeln(
+    'jingyu host ${config.hostVersion} listening on ${config.bindAddress}:${config.port}',
+  );
 
   ProcessSignal.sigint.watch().listen((_) async {
     await server.close();

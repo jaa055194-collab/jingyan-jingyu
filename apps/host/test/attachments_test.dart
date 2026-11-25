@@ -260,6 +260,7 @@ void main() {
       final got = await service.getAttachment(
         accountId: owner,
         attachmentId: attachmentId,
+        includeExtractedText: true,
       );
       expect(got.isOk, isTrue);
       expect(got.value['extractedText'], utf8.decode(bytes));
@@ -328,6 +329,449 @@ void main() {
       expect(done.value['sha256'], sha256.convert(bytes).toString());
     });
 
+    group('chunk recovery', () {
+      Future<String> startUpload(int size) async {
+        final init = await service.initiateUpload(
+          ownerAccountId: owner,
+          mime: 'application/octet-stream',
+          size: size,
+          kind: 'file',
+        );
+        return init.value['uploadId'] as String;
+      }
+
+      Future<Result<Map<String, Object?>>> sendChunk(
+        String uploadId,
+        int index,
+        String text,
+      ) => service.uploadChunk(
+        ownerAccountId: owner,
+        uploadId: uploadId,
+        index: index,
+        bytes: utf8.encode(text),
+      );
+
+      File partFor(String uploadId) => File('$mediaDir/$owner/$uploadId.part');
+
+      test(
+        'reopens a committed prefix and replaces only the stray suffix',
+        () async {
+          final uploadId = await startUpload(6);
+          expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+          final part = partFor(uploadId);
+          await part.writeAsString('X', mode: FileMode.append, flush: true);
+          await db.close();
+          db = await SqliteDatabase.open(
+            '${directory.path}/host.sqlite',
+            migrations: [...allMigrations, ...messagesMigrations],
+          );
+          service = AttachmentService(
+            database: db,
+            cipher: cipher,
+            mediaDir: mediaDir,
+            clock: clock,
+            diskSpace: ampleDisk,
+          );
+
+          final duplicate = await sendChunk(uploadId, 0, 'ABC');
+          expect(duplicate.value, {'received': 3, 'nextChunk': 1});
+          expect(
+            await part.readAsString(),
+            'abcX',
+          ); // A duplicate does not write.
+          final next = await sendChunk(uploadId, 1, 'def');
+          expect(next.value, {'received': 6, 'nextChunk': 2});
+          expect(await part.readAsString(), 'abcdef');
+
+          final digest = sha256.convert(utf8.encode('abcdef')).toString();
+          final done = await service.completeUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+            expectedSha256: digest,
+          );
+          expect(done.value['sha256'], digest);
+          final attachmentId = done.value['id'];
+          expect(
+            await File('$mediaDir/$owner/$attachmentId').readAsString(),
+            'abcdef',
+          );
+        },
+      );
+
+      test(
+        'completion hashes a fully committed prefix without a stray suffix',
+        () async {
+          final uploadId = await startUpload(3);
+          expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+          final part = partFor(uploadId);
+          await part.writeAsString('X', mode: FileMode.append, flush: true);
+
+          final digest = sha256.convert(utf8.encode('abc')).toString();
+          final done = await service.completeUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+            expectedSha256: digest,
+          );
+          expect(done.isOk, isTrue, reason: '${done.failureOrNull}');
+          expect(done.value['sha256'], digest);
+          final attachmentId = done.value['id'];
+          expect(
+            await File('$mediaDir/$owner/$attachmentId').readAsString(),
+            'abc',
+          );
+        },
+      );
+
+      test('completion can publish an empty file without a part', () async {
+        final uploadId = await startUpload(0);
+        final done = await service.completeUpload(
+          ownerAccountId: owner,
+          uploadId: uploadId,
+        );
+        expect(done.value['size'], 0);
+        final attachmentId = done.value['id'];
+        expect(await File('$mediaDir/$owner/$attachmentId').length(), 0);
+      });
+
+      for (final missing in [false, true]) {
+        test(
+          'refuses retries with a ${missing ? 'missing' : 'short'} committed prefix',
+          () async {
+            final uploadId = await startUpload(3);
+            expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+            final part = partFor(uploadId);
+            if (missing) {
+              await part.delete();
+            } else {
+              await part.writeAsString('ab', flush: true);
+            }
+
+            final duplicate = await sendChunk(uploadId, 0, 'abc');
+            final next = await sendChunk(uploadId, 1, '');
+            final done = await service.completeUpload(
+              ownerAccountId: owner,
+              uploadId: uploadId,
+            );
+            expect(
+              duplicate.isErr,
+              isTrue,
+              reason: 'duplicate must not acknowledge lost bytes',
+            );
+            expect(
+              next.isErr,
+              isTrue,
+              reason: 'new chunk must not advance the ledger',
+            );
+            expect(done.isErr, isTrue);
+            expect(await part.exists(), !missing);
+            if (!missing) expect(await part.readAsString(), 'ab');
+            final ledger = await db.query(
+              'SELECT received_bytes, next_chunk, status FROM attachment_uploads WHERE id = ?',
+              [uploadId],
+            );
+            expect(ledger.single, {
+              'received_bytes': 3,
+              'next_chunk': 1,
+              'status': 'pending',
+            });
+            expect(await db.query('SELECT id FROM attachments'), isEmpty);
+          },
+        );
+      }
+
+      test('foreign owner cannot mutate or complete a pending part', () async {
+        final uploadId = await startUpload(3);
+        expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+        final part = partFor(uploadId);
+        await part.writeAsString('X', mode: FileMode.append, flush: true);
+
+        final chunk = await service.uploadChunk(
+          ownerAccountId: 'acct-other',
+          uploadId: uploadId,
+          index: 1,
+          bytes: [],
+        );
+        final done = await service.completeUpload(
+          ownerAccountId: 'acct-other',
+          uploadId: uploadId,
+        );
+        expect(chunk.failureOrNull?.code, FailureCode.notFound);
+        expect(done.failureOrNull?.code, FailureCode.notFound);
+        expect(await part.readAsString(), 'abcX');
+        expect(await db.query('SELECT id FROM attachments'), isEmpty);
+      });
+
+      test('overlapping retries check the committed chunk size', () async {
+        final uploadId = await startUpload(3);
+        final results = await Future.wait([
+          sendChunk(uploadId, 0, 'abc'),
+          sendChunk(uploadId, 0, 'a'),
+        ]);
+        expect(results[0].value, {'received': 3, 'nextChunk': 1});
+        expect(results[1].failureOrNull?.code, FailureCode.invalidArgument);
+        expect(await partFor(uploadId).readAsString(), 'abc');
+      });
+
+      test('overlapping retries and completion publish one copy', () async {
+        final uploadId = await startUpload(3);
+        // Start all operations before yielding: without a per-upload guard
+        // each SQLite SELECT is queued before the first write can commit.
+        final results = await Future.wait([
+          sendChunk(uploadId, 0, 'abc'),
+          sendChunk(uploadId, 0, 'ABC'),
+          service.completeUpload(ownerAccountId: owner, uploadId: uploadId),
+          service.completeUpload(ownerAccountId: owner, uploadId: uploadId),
+        ]);
+        expect(results[0].value, {'received': 3, 'nextChunk': 1});
+        expect(results[1].value, {'received': 3, 'nextChunk': 1});
+        expect(results[2].isOk, isTrue, reason: '${results[2].failureOrNull}');
+        final attachmentId = results[2].value['id'];
+        expect(results[3].failureOrNull?.code, FailureCode.conflict);
+        expect(
+          await File('$mediaDir/$owner/$attachmentId').readAsString(),
+          'abc',
+        );
+        expect(await db.query('SELECT id FROM attachments'), [
+          {'id': attachmentId},
+        ]);
+        expect(await partFor(uploadId).exists(), isFalse);
+      });
+    });
+
+    group('abort upload', () {
+      Future<String> startUpload({int size = 6}) async {
+        final init = await service.initiateUpload(
+          ownerAccountId: owner,
+          mime: 'application/octet-stream',
+          size: size,
+          kind: 'file',
+        );
+        expect(init.isOk, isTrue, reason: '${init.failureOrNull}');
+        return init.value['uploadId'] as String;
+      }
+
+      File partFor(String uploadId) => File('$mediaDir/$owner/$uploadId.part');
+
+      Future<Result<Map<String, Object?>>> sendChunk(
+        String uploadId,
+        int index,
+        String text,
+      ) => service.uploadChunk(
+        ownerAccountId: owner,
+        uploadId: uploadId,
+        index: index,
+        bytes: utf8.encode(text),
+      );
+
+      test(
+        'owner abort after partial chunks frees the slot and blocks the upload',
+        () async {
+          final uploadIds = <String>[];
+          for (var i = 0; i < 3; i++) {
+            uploadIds.add(await startUpload());
+          }
+          final uploadId = uploadIds.first;
+          expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+          expect(await partFor(uploadId).exists(), isTrue);
+
+          final aborted = await service.abortUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+          );
+          expect(aborted.isOk, isTrue, reason: '${aborted.failureOrNull}');
+
+          final row = (await db.query(
+            'SELECT status FROM attachment_uploads WHERE id = ?',
+            [uploadId],
+          )).single;
+          expect(row['status'], 'aborted');
+          expect(
+            await db.query(
+              'SELECT chunk_index FROM attachment_upload_chunks '
+              'WHERE upload_id = ?',
+              [uploadId],
+            ),
+            isEmpty,
+          );
+          expect(await partFor(uploadId).exists(), isFalse);
+
+          final chunkAfter = await sendChunk(uploadId, 1, 'def');
+          final completeAfter = await service.completeUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+          );
+          expect(chunkAfter.failureOrNull?.code, FailureCode.conflict);
+          expect(completeAfter.failureOrNull?.code, FailureCode.conflict);
+          expect(await db.query('SELECT id FROM attachments'), isEmpty);
+
+          final replacement = await service.initiateUpload(
+            ownerAccountId: owner,
+            mime: 'application/octet-stream',
+            size: 6,
+            kind: 'file',
+          );
+          expect(
+            replacement.isOk,
+            isTrue,
+            reason: '${replacement.failureOrNull}',
+          );
+          final fullAgain = await service.initiateUpload(
+            ownerAccountId: owner,
+            mime: 'application/octet-stream',
+            size: 6,
+            kind: 'file',
+          );
+          expect(fullAgain.failureOrNull?.code, FailureCode.rateLimited);
+        },
+      );
+
+      test(
+        'foreign abort is not found and leaves the pending upload intact',
+        () async {
+          final uploadId = await startUpload();
+          expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+          final part = partFor(uploadId);
+
+          final foreign = await service.abortUpload(
+            ownerAccountId: 'acct-other',
+            uploadId: uploadId,
+          );
+          expect(foreign.failureOrNull?.code, FailureCode.notFound);
+          final row = (await db.query(
+            'SELECT status FROM attachment_uploads WHERE id = ?',
+            [uploadId],
+          )).single;
+          expect(row['status'], 'pending');
+          expect(
+            await db.query(
+              'SELECT chunk_index FROM attachment_upload_chunks '
+              'WHERE upload_id = ?',
+              [uploadId],
+            ),
+            hasLength(1),
+          );
+          expect(await part.readAsString(), 'abc');
+
+          final next = await sendChunk(uploadId, 1, 'def');
+          expect(next.isOk, isTrue, reason: '${next.failureOrNull}');
+          final done = await service.completeUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+          );
+          expect(done.isOk, isTrue, reason: '${done.failureOrNull}');
+        },
+      );
+
+      test(
+        'missing abort is not found and an aborted abort is idempotent',
+        () async {
+          final missing = await service.abortUpload(
+            ownerAccountId: owner,
+            uploadId: 'missing-upload',
+          );
+          expect(missing.failureOrNull?.code, FailureCode.notFound);
+
+          final uploadId = await startUpload();
+          final first = await service.abortUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+          );
+          final second = await service.abortUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+          );
+          expect(first.isOk, isTrue);
+          expect(second.isOk, isTrue);
+          final row = (await db.query(
+            'SELECT status FROM attachment_uploads WHERE id = ?',
+            [uploadId],
+          )).single;
+          expect(row['status'], 'aborted');
+        },
+      );
+
+      test(
+        'aborting a completed upload conflicts and keeps the attachment',
+        () async {
+          final uploadId = await startUpload(size: 3);
+          expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+          final done = await service.completeUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+          );
+          expect(done.isOk, isTrue, reason: '${done.failureOrNull}');
+          final attachmentId = done.value['id'] as String;
+
+          final aborted = await service.abortUpload(
+            ownerAccountId: owner,
+            uploadId: uploadId,
+          );
+          expect(aborted.failureOrNull?.code, FailureCode.conflict);
+          expect(
+            await db.query(
+              'SELECT status FROM attachment_uploads WHERE id = ?',
+              [uploadId],
+            ),
+            [
+              {'status': 'completed'},
+            ],
+          );
+          expect(await File('$mediaDir/$owner/$attachmentId').exists(), isTrue);
+        },
+      );
+
+      test('abort and chunk are serialized through the per-upload queue',
+          () async {
+        final uploadId = await startUpload();
+        final chunkFuture = sendChunk(uploadId, 0, 'abc');
+        final abortFuture = service.abortUpload(
+          ownerAccountId: owner,
+          uploadId: uploadId,
+        );
+        final chunkResult = await chunkFuture;
+        final abortResult = await abortFuture;
+        expect(chunkResult.isOk, isTrue, reason: '${chunkResult.failureOrNull}');
+        expect(abortResult.isOk, isTrue, reason: '${abortResult.failureOrNull}');
+        expect(await partFor(uploadId).exists(), isFalse);
+        final row = (await db.query(
+          'SELECT status FROM attachment_uploads WHERE id = ?',
+          [uploadId],
+        )).single;
+        expect(row['status'], 'aborted');
+
+        final abortFirstId = await startUpload();
+        final abortFirst = service.abortUpload(
+          ownerAccountId: owner,
+          uploadId: abortFirstId,
+        );
+        final chunkAfter = sendChunk(abortFirstId, 0, 'abc');
+        final abortFirstResult = await abortFirst;
+        final chunkAfterResult = await chunkAfter;
+        expect(abortFirstResult.isOk, isTrue);
+        expect(chunkAfterResult.failureOrNull?.code, FailureCode.conflict);
+        expect(await partFor(abortFirstId).exists(), isFalse);
+      });
+
+      test('abort wins over a concurrent complete without publishing', () async {
+        final uploadId = await startUpload(size: 3);
+        expect((await sendChunk(uploadId, 0, 'abc')).isOk, isTrue);
+        final abortFuture = service.abortUpload(
+          ownerAccountId: owner,
+          uploadId: uploadId,
+        );
+        final completeFuture = service.completeUpload(
+          ownerAccountId: owner,
+          uploadId: uploadId,
+        );
+        final abortResult = await abortFuture;
+        final completeResult = await completeFuture;
+        expect(abortResult.isOk, isTrue);
+        expect(completeResult.failureOrNull?.code, FailureCode.conflict);
+        expect(await db.query('SELECT id FROM attachments'), isEmpty);
+        expect(await partFor(uploadId).exists(), isFalse);
+      });
+    });
+
     test('declared-size and sha256 mismatches are rejected without inserting',
         () async {
       final bytes = utf8.encode('abcdef');
@@ -388,6 +832,7 @@ void main() {
       final ownerView = await service.getAttachment(
         accountId: owner,
         attachmentId: attachmentId,
+        includeExtractedText: true,
       );
       expect(ownerView.value['extractedText'], 'secret note');
 
@@ -396,9 +841,11 @@ void main() {
         attachmentId: attachmentId,
         canReadConversation: (account, conversation) async =>
             account == 'acct-member' && conversation == 'conv-1',
+        includeExtractedText: true,
       );
       expect(memberView.isOk, isTrue);
-      expect(memberView.value['extractedText'], 'secret note');
+      expect(memberView.value.containsKey('extractedText'), isFalse);
+      expect(memberView.value['mime'], 'text/plain');
 
       final stranger = await service.getAttachment(
         accountId: 'acct-stranger',
@@ -818,7 +1265,10 @@ void main() {
         ),
       );
       expect(memberGet.status, 200);
-      expect((memberGet.json! as Map)['extractedText'], 'http text');
+      final memberJson = memberGet.json! as Map;
+      expect(memberJson.containsKey('extractedText'), isFalse);
+      expect(memberJson['mime'], 'text/plain');
+      expect(memberGet.encodeBody(), isNot(contains('http text')));
 
       final strangerGet = await pipeline.handle(
         HostRequest(
@@ -856,6 +1306,146 @@ void main() {
         ),
       );
       expect(gone.status, 404);
+    });
+
+    String uploadPath(String uploadId) =>
+        Routes.attachmentUpload.replaceFirst('{uploadId}', uploadId);
+
+    test('DELETE abort is owner-scoped and idempotent', () async {
+      final pipeline = await buildPipeline();
+
+      final anonymous = await pipeline.handle(
+        HostRequest(method: 'DELETE', path: uploadPath('missing-upload')),
+      );
+      expect(anonymous.status, 401);
+
+      final init = await pipeline.handle(
+        HostRequest(
+          method: 'POST',
+          path: Routes.attachmentUploads,
+          headers: {'test-account': owner},
+          body: {
+            'mime': 'application/octet-stream',
+            'size': 6,
+            'kind': 'file',
+          },
+        ),
+      );
+      expect(init.status, 200);
+      final uploadId = (init.json! as Map)['uploadId'] as String;
+
+      final chunk = await pipeline.handle(
+        HostRequest(
+          method: 'PUT',
+          path: chunkPath(uploadId, 0),
+          headers: {'test-account': owner},
+          body: {'dataBase64': base64Encode(utf8.encode('abc'))},
+        ),
+      );
+      expect(chunk.status, 200);
+
+      final foreign = await pipeline.handle(
+        HostRequest(
+          method: 'DELETE',
+          path: uploadPath(uploadId),
+          headers: {'test-account': 'acct-other'},
+        ),
+      );
+      expect(foreign.status, 404);
+      expect(
+        (await db.query(
+          'SELECT status FROM attachment_uploads WHERE id = ?',
+          [uploadId],
+        )).single['status'],
+        'pending',
+      );
+
+      final ownerAbort = await pipeline.handle(
+        HostRequest(
+          method: 'DELETE',
+          path: uploadPath(uploadId),
+          headers: {'test-account': owner},
+        ),
+      );
+      expect(ownerAbort.status, 200);
+      expect(ownerAbort.json, {'aborted': true});
+
+      final again = await pipeline.handle(
+        HostRequest(
+          method: 'DELETE',
+          path: uploadPath(uploadId),
+          headers: {'test-account': owner},
+        ),
+      );
+      expect(again.status, 200);
+      expect(again.json, {'aborted': true});
+
+      final chunkAfter = await pipeline.handle(
+        HostRequest(
+          method: 'PUT',
+          path: chunkPath(uploadId, 1),
+          headers: {'test-account': owner},
+          body: {'dataBase64': base64Encode(utf8.encode('def'))},
+        ),
+      );
+      expect(chunkAfter.status, 409);
+
+      final completeAfter = await pipeline.handle(
+        HostRequest(
+          method: 'POST',
+          path: completePath(uploadId),
+          headers: {'test-account': owner},
+          body: {},
+        ),
+      );
+      expect(completeAfter.status, 409);
+    });
+
+    test('DELETE abort distinguishes missing from completed uploads', () async {
+      final pipeline = await buildPipeline();
+      final missing = await pipeline.handle(
+        HostRequest(
+          method: 'DELETE',
+          path: uploadPath('missing-upload'),
+          headers: {'test-account': owner},
+        ),
+      );
+      expect(missing.status, 404);
+
+      final init = await service.initiateUpload(
+        ownerAccountId: owner,
+        mime: 'application/octet-stream',
+        size: 3,
+        kind: 'file',
+      );
+      final uploadId = init.value['uploadId'] as String;
+      await service.uploadChunk(
+        ownerAccountId: owner,
+        uploadId: uploadId,
+        index: 0,
+        bytes: utf8.encode('abc'),
+      );
+      final done = await service.completeUpload(
+        ownerAccountId: owner,
+        uploadId: uploadId,
+      );
+      expect(done.isOk, isTrue);
+      final attachmentId = done.value['id'] as String;
+
+      final conflict = await pipeline.handle(
+        HostRequest(
+          method: 'DELETE',
+          path: uploadPath(uploadId),
+          headers: {'test-account': owner},
+        ),
+      );
+      expect(conflict.status, 409);
+      expect(
+        await db.query('SELECT id FROM attachments WHERE id = ?', [
+          attachmentId,
+        ]),
+        hasLength(1),
+      );
     });
 
     test('rejects malformed / traversal ids', () async {

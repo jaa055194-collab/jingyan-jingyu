@@ -4,6 +4,9 @@ import 'package:crypto/crypto.dart';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:jingyu_protocol/jingyu_protocol.dart';
 
+import '../ai/memory/owner_auto_memory.dart';
+import '../ai/memory/owner_memory_notes.dart';
+import '../ai/memory/owner_reply_preferences.dart';
 import '../messages/accepted_message_observer.dart';
 import '../messages/message_store.dart';
 import '../messages/sqlite_message_store.dart';
@@ -29,6 +32,9 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
     required this.admitS1,
     required this.resolveBinding,
     this.chat,
+    this.preferences,
+    this.memoryNotes,
+    this.autoMemory,
     this.attempts = const OwnerReplyAttempts(),
   });
 
@@ -41,6 +47,16 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
   final Future<Result<ResolvedBinding>> Function(OwnerAiDirectGrant grant)
   resolveBinding;
   final StatelessOwnerChat? chat;
+
+  /// Optional independent grant. Null keeps the ordinary reply path unchanged.
+  final OwnerReplyPreferences? preferences;
+
+  /// Optional independently authorized, explicitly saved notes.
+  final OwnerMemoryNotes? memoryNotes;
+
+  /// Optional independently authorized auto chat-history memory. Default off and
+  /// owner-private only; null keeps the ordinary reply path unchanged.
+  final OwnerAutoMemory? autoMemory;
   final OwnerReplyAttempts attempts;
   static const _rules = RulesS1Responder();
 
@@ -74,6 +90,9 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
       if (source == null) return;
       final (grant, text, simple) = source;
       ResolvedBinding? binding;
+      OwnerReplyPreferenceUse? preferenceUse;
+      OwnerMemoryNoteUse? memoryUse;
+      OwnerAutoMemoryUse? autoMemoryUse;
       String output;
       if (simple) {
         // Admission owns the real B1 hard-stop check. Never invent token usage.
@@ -105,9 +124,20 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
           return;
         }
         binding = resolved.value;
-        if (!await database.transaction(
-          (tx) => _fresh(tx, incoming, grant, text, binding),
-        )) {
+        final prepared = await database.transaction((tx) async {
+          if (!await _fresh(tx, incoming, grant, text, binding)) return null;
+          final use = preferences == null
+              ? null
+              : await preferences!.forSourceInTx(tx, grant, incoming.messageId);
+          final memory = memoryNotes == null
+              ? null
+              : await memoryNotes!.forSourceInTx(tx, grant, incoming.messageId);
+          final auto = autoMemory == null
+              ? null
+              : await autoMemory!.forSourceInTx(tx, grant, incoming.messageId);
+          return _PreparedPreference(use, memory, auto);
+        });
+        if (prepared == null) {
           await _terminal(
             claim!,
             OwnerReplyAttemptStatus.discarded,
@@ -115,6 +145,50 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
           );
           return;
         }
+        final use = prepared.preferences;
+        final notes = prepared.memory;
+        final auto = prepared.autoMemory;
+        preferenceUse = use;
+        memoryUse = notes;
+        autoMemoryUse = auto;
+        final needsAdmission = use != null || notes != null || auto != null;
+        Future<bool> admission(
+          Tx tx, {
+          required AiId ai,
+          required String requestId,
+          required String providerId,
+          required String model,
+          required String baseUrl,
+        }) async =>
+            ai.value == grant.aiProfileId &&
+            requestId == claim!.requestId &&
+            (use == null || use.matchesRecipient(providerId, model, baseUrl)) &&
+            (notes == null ||
+                notes.matchesRecipient(providerId, model, baseUrl)) &&
+            (auto == null || auto.matchesRecipient(providerId, model, baseUrl)) &&
+            await _fresh(tx, incoming, grant, text, binding) &&
+            (use == null ||
+                await preferences!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  use,
+                )) &&
+            (notes == null ||
+                await memoryNotes!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  notes,
+                )) &&
+            (auto == null ||
+                await autoMemory!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  auto,
+                ));
+
         final result = await chat!.chat(
           ownerId: grant.ownerAccountId,
           ai: AiId.parse(grant.aiProfileId),
@@ -125,6 +199,10 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
           expectedProviderId: binding.providerId,
           expectedModel: binding.model,
           maxTokens: maxTokens,
+          preferenceChoices: use?.choices,
+          memoryNotes: notes?.notes,
+          autoMemoryEntries: auto?.entries,
+          dispatchAdmission: needsAdmission ? admission : null,
         );
         if (result.isErr) {
           // Runtime owns settlement/unknown usage; do not modify its ledger.
@@ -138,7 +216,28 @@ final class OwnerAiDirectReplyObserver implements AcceptedMessageObserver {
         output = result.value.text;
       }
       await database.transaction((tx) async {
-        if (!await _fresh(tx, incoming, grant, text, binding)) {
+        if (!await _fresh(tx, incoming, grant, text, binding) ||
+            (preferenceUse != null &&
+                !await preferences!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  preferenceUse,
+                )) ||
+            (memoryUse != null &&
+                !await memoryNotes!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  memoryUse,
+                )) ||
+            (autoMemoryUse != null &&
+                !await autoMemory!.isFreshInTx(
+                  tx,
+                  grant,
+                  incoming.messageId,
+                  autoMemoryUse,
+                ))) {
           await _finish(
             tx,
             claim!,
@@ -309,4 +408,11 @@ WHERE b.owner_id=? AND b.ai_profile_id=? AND b.capability='chat'
 
 final class _Rollback implements Exception {
   const _Rollback();
+}
+
+final class _PreparedPreference {
+  const _PreparedPreference(this.preferences, this.memory, this.autoMemory);
+  final OwnerReplyPreferenceUse? preferences;
+  final OwnerMemoryNoteUse? memory;
+  final OwnerAutoMemoryUse? autoMemory;
 }
