@@ -58,6 +58,28 @@ class _Model extends ChangeNotifier implements ShellViewModel {
   List<ShellOwnedAi> get ownAiAccounts => rows;
   @override
   ShellOwnAiDirectState ownAiDirectState(String account) => state;
+
+  // v2 shell members (an `implements` double does not inherit the
+  // ShellViewModel defaults).
+  @override
+  bool reduceMotion = false;
+  @override
+  Future<void> setReduceMotion(bool value) async {
+    reduceMotion = value;
+    notifyListeners();
+  }
+
+  @override
+  bool get conversationsLoaded => true;
+  @override
+  String? get partnerConversationId {
+    for (final ai in ownAiAccounts) {
+      final id = ownAiDirectState(ai.accountId).conversationId;
+      if (id != null && id.isNotEmpty) return id;
+    }
+    return null;
+  }
+
   @override
   Future<void> loadOwnAiDirectConsent(String account) async {
     loads++;
