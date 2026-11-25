@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:client_flutter/app/shell_view_model.dart';
 import 'package:client_flutter/features/ai_config/model_diagnostics_screen.dart';
 import 'package:client_flutter/net/model_diagnostics_api.dart';
+import 'package:client_flutter/ui/jy_palette.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -151,8 +152,10 @@ class _Loaders {
   final Future<DiagnosticsRead<ModelCatalog>> Function(String providerId)?
   catalog;
   final Future<DiagnosticsRead<TodayUsage>> Function(String profileId)? usage;
-  final Future<DiagnosticsRead<Rolling7Trend>> Function(String profileId)? trend;
-  final Future<DiagnosticsRead<BudgetLimits>> Function(String profileId)? budget;
+  final Future<DiagnosticsRead<Rolling7Trend>> Function(String profileId)?
+  trend;
+  final Future<DiagnosticsRead<BudgetLimits>> Function(String profileId)?
+  budget;
 }
 
 Widget _screen(
@@ -208,7 +211,10 @@ Future<void> _chooseIdentity(
   required bool catalog,
   required String id,
 }) async {
-  tester.state<ScrollableState>(find.byType(Scrollable).first).position.jumpTo(0);
+  tester
+      .state<ScrollableState>(find.byType(Scrollable).first)
+      .position
+      .jumpTo(0);
   await tester.pumpAndSettle();
   final key = catalog
       ? 'diagnostics-catalog-provider'
@@ -220,6 +226,34 @@ Future<void> _chooseIdentity(
     await tester.tap(find.text(id).last);
     await tester.pumpAndSettle();
   }
+}
+
+void _expectTone(
+  WidgetTester tester,
+  String key,
+  IconData icon,
+  Color Function(JyPalette palette) color,
+) {
+  final line = find.byKey(Key(key), skipOffstage: false);
+  expect(line, findsOneWidget);
+  final expected = color(JyPalette.of(tester.element(line)));
+  final icons = find.descendant(
+    of: line,
+    matching: find.byType(Icon, skipOffstage: false),
+    skipOffstage: false,
+  );
+  expect(icons, findsOneWidget);
+  final shown = tester.widget<Icon>(icons);
+  expect(shown.icon, icon);
+  expect(shown.color, expected);
+  final text = tester.widget<Text>(
+    find.descendant(
+      of: line,
+      matching: find.byType(Text, skipOffstage: false),
+      skipOffstage: false,
+    ),
+  );
+  expect(text.style?.color, expected);
 }
 
 void main() {
@@ -240,31 +274,59 @@ void main() {
                 return id == 'provider-one' ? first.future : second.future;
               },
             ),
-            providers: typed ? const [] : const ['provider-one', 'provider-two'],
+            providers: typed
+                ? const []
+                : const ['provider-one', 'provider-two'],
           ),
         );
         await tester.pumpAndSettle();
         await _chooseIdentity(
-          tester, typed: typed, catalog: true, id: 'provider-one',
+          tester,
+          typed: typed,
+          catalog: true,
+          id: 'provider-one',
         );
         await _tap(tester, 'diagnostics-catalog-load');
         await _chooseIdentity(
-          tester, typed: typed, catalog: true, id: 'provider-two',
+          tester,
+          typed: typed,
+          catalog: true,
+          id: 'provider-two',
         );
         await _tap(tester, 'diagnostics-catalog-load');
-        second.complete(DiagnosticsRead.loaded(ModelCatalog(['model-current'])));
+        second.complete(
+          DiagnosticsRead.loaded(ModelCatalog(['model-current'])),
+        );
         await tester.pumpAndSettle();
         expect(find.textContaining('model-current'), findsOneWidget);
 
         // Returning to the original id must still invalidate its old request.
         await _chooseIdentity(
-          tester, typed: typed, catalog: true, id: 'provider-one',
+          tester,
+          typed: typed,
+          catalog: true,
+          id: 'provider-one',
         );
-        expect(find.byKey(const Key('diagnostics-catalog-loaded')), findsNothing);
+        expect(
+          find.byKey(const Key('diagnostics-catalog-loaded')),
+          findsNothing,
+        );
         first.complete(DiagnosticsRead.loaded(ModelCatalog(['model-stale'])));
         await tester.pumpAndSettle();
-        expect(find.byKey(const Key('diagnostics-catalog-loaded')), findsNothing);
-        expect(find.byKey(const Key('diagnostics-catalog-not-requested')), findsOneWidget);
+        expect(
+          find.byKey(const Key('diagnostics-catalog-loaded')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('diagnostics-catalog-not-requested')),
+          findsOneWidget,
+        );
+        _expectTone(
+          tester,
+          'diagnostics-catalog-not-requested',
+          Icons.info_outline,
+          (p) => p.text3,
+        );
         expect(requested, ['provider-one', 'provider-two']);
       });
 
@@ -293,19 +355,31 @@ void main() {
         );
         await tester.pumpAndSettle();
         await _chooseIdentity(
-          tester, typed: typed, catalog: false, id: 'profile-one',
+          tester,
+          typed: typed,
+          catalog: false,
+          id: 'profile-one',
         );
         for (final section in ['usage', 'trend', 'budget']) {
           await _tap(tester, 'diagnostics-$section-load');
-          expect(find.byKey(Key('diagnostics-$section-loaded')), findsOneWidget);
+          expect(
+            find.byKey(Key('diagnostics-$section-loaded')),
+            findsOneWidget,
+          );
         }
         await _chooseIdentity(
-          tester, typed: typed, catalog: false, id: 'profile-two',
+          tester,
+          typed: typed,
+          catalog: false,
+          id: 'profile-two',
         );
         for (final section in ['usage', 'trend', 'budget']) {
           await _reveal(tester, 'diagnostics-$section-load');
           expect(find.byKey(Key('diagnostics-$section-loaded')), findsNothing);
-          expect(find.byKey(Key('diagnostics-$section-not-requested')), findsOneWidget);
+          expect(
+            find.byKey(Key('diagnostics-$section-not-requested')),
+            findsOneWidget,
+          );
         }
         expect(calls, 3);
       });
@@ -338,13 +412,19 @@ void main() {
         );
         await tester.pumpAndSettle();
         await _chooseIdentity(
-          tester, typed: typed, catalog: false, id: 'profile-one',
+          tester,
+          typed: typed,
+          catalog: false,
+          id: 'profile-one',
         );
         for (final section in ['usage', 'trend', 'budget']) {
           await _tap(tester, 'diagnostics-$section-load');
         }
         await _chooseIdentity(
-          tester, typed: typed, catalog: false, id: 'profile-two',
+          tester,
+          typed: typed,
+          catalog: false,
+          id: 'profile-two',
         );
         usage.complete(DiagnosticsRead.loaded(_usage()));
         trend.complete(DiagnosticsRead.loaded(_trend()));
@@ -353,7 +433,10 @@ void main() {
         for (final section in ['usage', 'trend', 'budget']) {
           await _reveal(tester, 'diagnostics-$section-load');
           expect(find.byKey(Key('diagnostics-$section-loaded')), findsNothing);
-          expect(find.byKey(Key('diagnostics-$section-not-requested')), findsOneWidget);
+          expect(
+            find.byKey(Key('diagnostics-$section-not-requested')),
+            findsOneWidget,
+          );
         }
         expect(calls, 3);
       });
@@ -478,6 +561,12 @@ void main() {
       for (final section in ['catalog', 'usage', 'trend', 'budget']) {
         await _tap(tester, 'diagnostics-$section-load');
         expect(find.byKey(Key('diagnostics-$section-loading')), findsOneWidget);
+        _expectTone(
+          tester,
+          'diagnostics-$section-loading',
+          Icons.hourglass_empty,
+          (p) => p.text2,
+        );
       }
       expect(calls, 4);
       session.lock();
@@ -595,6 +684,12 @@ void main() {
       find.byKey(const Key('diagnostics-catalog-not-requested')),
       findsOneWidget,
     );
+    _expectTone(
+      tester,
+      'diagnostics-catalog-not-requested',
+      Icons.info_outline,
+      (p) => p.text3,
+    );
 
     await _tap(tester, 'diagnostics-catalog-load');
     expect(calls, 1);
@@ -602,48 +697,76 @@ void main() {
     expect(find.textContaining('model-b'), findsOneWidget);
   });
 
-  testWidgets('unconfigured, unavailable and unknown read states stay distinct', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      _screen(
-        _Loaders(
-          catalog: (_) async => const DiagnosticsRead.unconfigured(),
-          usage: (_) async => const DiagnosticsRead.unavailable(),
-          trend: (_) async => const DiagnosticsRead.unknown(),
-          budget: (_) async => const DiagnosticsRead.unconfigured(),
+  testWidgets(
+    'unconfigured, unavailable and unknown read states stay distinct',
+    (tester) async {
+      await tester.pumpWidget(
+        _screen(
+          _Loaders(
+            catalog: (_) async => const DiagnosticsRead.unconfigured(),
+            usage: (_) async => const DiagnosticsRead.unavailable(),
+            trend: (_) async => const DiagnosticsRead.unknown(),
+            budget: (_) async => const DiagnosticsRead.unconfigured(),
+          ),
+          providers: const ['provider-one'],
+          profiles: const ['profile-one'],
         ),
-        providers: const ['provider-one'],
-        profiles: const ['profile-one'],
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    await _tap(tester, 'diagnostics-catalog-load');
-    expect(
-      find.byKey(const Key('diagnostics-catalog-unconfigured')),
-      findsOneWidget,
-    );
+      await _tap(tester, 'diagnostics-catalog-load');
+      expect(
+        find.byKey(const Key('diagnostics-catalog-unconfigured')),
+        findsOneWidget,
+      );
+      _expectTone(
+        tester,
+        'diagnostics-catalog-unconfigured',
+        Icons.warning_amber_outlined,
+        (p) => p.warning,
+      );
 
-    await _tap(tester, 'diagnostics-usage-load');
-    expect(
-      find.byKey(const Key('diagnostics-usage-unavailable')),
-      findsOneWidget,
-    );
+      await _tap(tester, 'diagnostics-usage-load');
+      expect(
+        find.byKey(const Key('diagnostics-usage-unavailable')),
+        findsOneWidget,
+      );
+      _expectTone(
+        tester,
+        'diagnostics-usage-unavailable',
+        Icons.error_outline,
+        (p) => p.danger,
+      );
 
-    await _tap(tester, 'diagnostics-trend-load');
-    expect(find.byKey(const Key('diagnostics-trend-unknown')), findsOneWidget);
+      await _tap(tester, 'diagnostics-trend-load');
+      expect(
+        find.byKey(const Key('diagnostics-trend-unknown')),
+        findsOneWidget,
+      );
+      _expectTone(
+        tester,
+        'diagnostics-trend-unknown',
+        Icons.warning_amber_outlined,
+        (p) => p.warning,
+      );
 
-    await _tap(tester, 'diagnostics-budget-load');
-    expect(
-      find.byKey(const Key('diagnostics-budget-unconfigured')),
-      findsOneWidget,
-    );
-    // Unconfigured budget must not be shown as a zero limit.
-    expect(find.textContaining('每日 0'), findsNothing);
-    // Nor may unconfigured usage be shown as a zero total.
-    expect(find.textContaining('已记录 0 tokens'), findsNothing);
-  });
+      await _tap(tester, 'diagnostics-budget-load');
+      expect(
+        find.byKey(const Key('diagnostics-budget-unconfigured')),
+        findsOneWidget,
+      );
+      _expectTone(
+        tester,
+        'diagnostics-budget-unconfigured',
+        Icons.warning_amber_outlined,
+        (p) => p.warning,
+      );
+      // Unconfigured budget must not be shown as a zero limit.
+      expect(find.textContaining('每日 0'), findsNothing);
+      // Nor may unconfigured usage be shown as a zero total.
+      expect(find.textContaining('已记录 0 tokens'), findsNothing);
+    },
+  );
 
   testWidgets('pending usage is shown as unknown, never as zero recorded', (
     tester,
@@ -662,9 +785,7 @@ void main() {
     expect(find.textContaining('已记录 15 tokens'), findsOneWidget);
     // The pending capability says unknown; it is never rendered as "0 tokens".
     await _reveal(tester, 'diagnostics-usage-unknown-chatFast');
-    final unknown = find.byKey(
-      const Key('diagnostics-usage-unknown-chatFast'),
-    );
+    final unknown = find.byKey(const Key('diagnostics-usage-unknown-chatFast'));
     expect(unknown, findsOneWidget);
     expect(
       find.descendant(of: unknown, matching: find.textContaining('未知')),
@@ -701,7 +822,9 @@ void main() {
     );
   });
 
-  testWidgets('loaded budget shows configured limits and offset', (tester) async {
+  testWidgets('loaded budget shows configured limits and offset', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       _screen(
         _Loaders(budget: (_) async => DiagnosticsRead.loaded(_budget())),
@@ -749,7 +872,11 @@ void main() {
       findsOneWidget,
     );
 
-    await _enter(tester, 'diagnostics-catalog-provider-input', 'provider-typed');
+    await _enter(
+      tester,
+      'diagnostics-catalog-provider-input',
+      'provider-typed',
+    );
     await _tap(tester, 'diagnostics-catalog-load');
     expect(requested, ['provider-typed']);
   });
@@ -825,6 +952,12 @@ void main() {
     await _tap(tester, 'diagnostics-usage-load');
 
     expect(find.byKey(const Key('diagnostics-usage-unknown')), findsOneWidget);
+    _expectTone(
+      tester,
+      'diagnostics-usage-unknown',
+      Icons.warning_amber_outlined,
+      (p) => p.warning,
+    );
     expect(find.textContaining('secret-detail-xyz'), findsNothing);
   });
 
