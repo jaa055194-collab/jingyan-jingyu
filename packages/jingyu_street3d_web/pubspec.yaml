@@ -1,0 +1,17 @@
+name: jingyu_street3d_web
+description: 鲸言鲸语「世界」页的 3D 街区网页（three.js 0.160.0）。纯资源包，没有 Dart 代码；Android WebView 宿主从 flutter_assets 加载 web/index.html，桥接协议见 PROTOCOL.md。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+
+# 只打包资源，不依赖 Flutter SDK，所以 dart pub get 也能解析。
+# Flutter 的目录资源不递归，三个目录分别列出。
+# LICENSE-feiyu-room-template.txt 随 web/src/actor.js（改编自 feiyu 模板，MIT）一起分发。
+flutter:
+  assets:
+    - web/
+    - web/vendor/
+    - web/src/
+    - LICENSE-feiyu-room-template.txt
