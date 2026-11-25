@@ -189,9 +189,22 @@ export class CameraRig {
     this.controls.maxDistance = maxDistance;
   }
 
-  flyTo(view, { mode = 'free', spaceId = null, id = null } = {}, ms = FLIGHT_MS) {
-    this.flight = { from: this.view, to: view, start: null, ms, mode, spaceId, id };
+  // A quiet flight only re-frames after a resize or a layout change; main.js does not report it.
+  flyTo(view, { mode = 'free', spaceId = null, id = null, quiet = false } = {}, ms = FLIGHT_MS) {
+    this.settle();
+    this.flight = { from: this.view, to: view, start: null, ms, mode, spaceId, id, quiet };
     this.onChange();
+  }
+
+  // Applies what is left of the damping at once, so a flight starts where the camera would have
+  // stopped and nothing drifts after it arrives.
+  settle() {
+    const c = this.controls;
+    c.enableDamping = false;
+    this.updating = true;
+    c.update();
+    this.updating = false;
+    c.enableDamping = true;
   }
 
   jumpTo(view, meta = {}) {
@@ -223,7 +236,7 @@ export class CameraRig {
         this.updating = true;
         c.update();
         this.updating = false;
-        this.onArrive({ mode: f.mode, spaceId: f.spaceId, id: f.id });
+        this.onArrive({ mode: f.mode, spaceId: f.spaceId, id: f.id, quiet: f.quiet });
       }
       this.remember();
       return true;

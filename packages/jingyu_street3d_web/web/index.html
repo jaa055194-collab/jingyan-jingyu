@@ -20,11 +20,18 @@
   #notice { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     padding: 32px; text-align: center; pointer-events: none; }
   #notice[hidden] { display: none; }
+  #overview { position: fixed; top: calc(12px + env(safe-area-inset-top)); right: 12px; z-index: 2;
+    padding: 8px 18px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.92); color: #2d3b48;
+    font: 600 15px/1.2 system-ui, -apple-system, "Noto Sans SC", "PingFang SC", sans-serif;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); }
+  #overview[hidden] { display: none; }
+  body.theme-dark #overview { background: rgba(30, 40, 54, 0.92); color: #d3dde8; }
 </style>
 </head>
 <body>
 <div id="stage" aria-label="3D 街区"></div>
 <div id="notice" role="status" hidden></div>
+<button id="overview" type="button" hidden>全景</button>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
