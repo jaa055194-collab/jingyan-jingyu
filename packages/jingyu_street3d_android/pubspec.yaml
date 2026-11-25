@@ -1,0 +1,24 @@
+name: jingyu_street3d_android
+description: 鲸言鲸语 3D 街区的 Android WebView 宿主插件。PlatformView jingyu/street3d_view 用 androidx.webkit 的 WebViewAssetLoader 承载 APK 内的页面（默认是 jingyu_street3d_web），用 addWebMessageListener 桥接消息。只支持 Android。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.14.0
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.jingyu.jingyu_street3d_android
+        pluginClass: Street3DAndroidPlugin
