@@ -106,8 +106,10 @@ export function overviewView(bounds, { fov = 50, aspect = 1, margin } = {}) {
       for (const y of [0, 7]) points.push([x, y, z]);
     }
   }
-  const az = portrait ? -Math.PI / 2 - 0.28 : Math.PI - 0.35;
-  return fitView(points, { az, elev: portrait ? 0.68 : 0.85, fov, aspect, margin, minRadius: 20 });
+  // Portrait looks nearly straight down the street from a little higher, so more of the screen
+  // height shows the street instead of the field around it.
+  const az = portrait ? -Math.PI / 2 - 0.18 : Math.PI - 0.35;
+  return fitView(points, { az, elev: 0.85, fov, aspect, margin, minRadius: 20 });
 }
 
 // One plot seen three-quarters from the front.
