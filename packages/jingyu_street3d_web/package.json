@@ -1,10 +1,12 @@
 {
   "name": "jingyu_street3d_web",
-  "version": "1.0.0",
   "private": true,
+  "version": "1.0.0",
+  "description": "3D street page (three.js r160) for 鲸言鲸语, loaded by the Android WebView host.",
   "type": "module",
-  "description": "three.js r160 3D street page for the jingyu WebView; Flutter asset-only package. npm is only used to run the node tests.",
   "scripts": {
+    "serve": "node scripts/serve.mjs",
+    "smoke": "node scripts/smoke.mjs",
     "test": "node --test"
   }
 }
