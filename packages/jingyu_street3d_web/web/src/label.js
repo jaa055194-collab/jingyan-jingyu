@@ -44,7 +44,8 @@ export function makeLabel(text, { height = 0.3, color = '#2d3b48', background = 
   map.colorSpace = THREE.SRGBColorSpace;
   map.minFilter = THREE.LinearFilter;
   map.generateMipmaps = false;
-  const material = new THREE.SpriteMaterial({ map, transparent: true, depthWrite: false });
+  // Tags keep their exact colours: no tone mapping and no fog at the far end of the street.
+  const material = new THREE.SpriteMaterial({ map, transparent: true, depthWrite: false, toneMapped: false, fog: false });
   const sprite = new THREE.Sprite(material);
   sprite.scale.set((height * w) / h, height, 1);
   sprite.renderOrder = 10;
