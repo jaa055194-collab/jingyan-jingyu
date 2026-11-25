@@ -6,10 +6,20 @@ String _read(String path) => File(path).readAsStringSync();
 
 void main() {
   group('Live2D viewer distribution', () {
-    test('no PurismCore runtime binary is committed', () {
+    // A developer who ran tool/fetch_purismcore.ps1 has the runtime on disk,
+    // so the guarantee is checked against git, not the working tree: the
+    // directory stays ignored and nothing under it is tracked or staged.
+    test('fetched PurismCore runtime stays ignored and untracked', () {
+      final ignored = _read('.gitignore')
+          .split(RegExp(r'\r?\n'))
+          .map((line) => line.trim());
+      expect(ignored, contains('web/runtime/'));
+
+      final tracked = Process.runSync('git', ['ls-files', '--', 'web/runtime']);
+      expect(tracked.exitCode, 0, reason: '${tracked.stderr}');
       expect(
-        File('web/runtime/purismcore/purismcore.js').existsSync(),
-        isFalse,
+        '${tracked.stdout}'.trim(),
+        isEmpty,
         reason: 'the pinned runtime is fetched locally, never committed',
       );
     });
