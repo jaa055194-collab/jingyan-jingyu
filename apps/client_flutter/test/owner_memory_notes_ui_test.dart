@@ -1,11 +1,27 @@
 import 'dart:convert';
 
+import 'package:client_flutter/features/ai_config/ai_config_problem_line.dart';
 import 'package:client_flutter/features/ai_config/owner_memory_notes_section.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'support/owner_memory_notes_fixture.dart';
 import 'support/owner_reply_preferences_fixture.dart';
+
+void _expectProblemIcon(Finder text) {
+  final line = find.ancestor(
+    of: text,
+    matching: find.byType(AiConfigProblemLine, skipOffstage: false),
+  );
+  expect(
+    find.descendant(
+      of: line,
+      matching: find.byIcon(Icons.error_outline, skipOffstage: false),
+      skipOffstage: false,
+    ),
+    findsOneWidget,
+  );
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -202,6 +218,9 @@ void main() {
     expect(
       find.byKey(const Key('memory-notes-unknown'), skipOffstage: false),
       findsOneWidget,
+    );
+    _expectProblemIcon(
+      find.byKey(const Key('memory-notes-unknown'), skipOffstage: false),
     );
     expect(
       find.byKey(const Key('memory-notes-read'), skipOffstage: false),

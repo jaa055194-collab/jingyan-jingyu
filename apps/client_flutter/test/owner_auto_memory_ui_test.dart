@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:client_flutter/features/ai_config/ai_config_problem_line.dart';
 import 'package:client_flutter/features/ai_config/owner_auto_memory_section.dart';
 import 'package:client_flutter/net/host_connection.dart';
 import 'package:client_flutter/net/owner_auto_memory_api.dart';
@@ -46,7 +47,8 @@ Map<String, Object?> _list({
 };
 
 class _AutoMemoryConnection extends HostConnection {
-  _AutoMemoryConnection() : super(Uri.parse('http://fixture.invalid'), 'fixture');
+  _AutoMemoryConnection()
+    : super(Uri.parse('http://fixture.invalid'), 'fixture');
 
   final settings = <String, Map<String, Object?>>{
     'profile-a': _settings(),
@@ -94,9 +96,7 @@ class _AutoMemoryConnection extends HostConnection {
     if (writeStatus != 200) {
       throw HostRequestException(
         Failure(
-          writeStatus == 409
-              ? FailureCode.conflict
-              : FailureCode.unavailable,
+          writeStatus == 409 ? FailureCode.conflict : FailureCode.unavailable,
           'auto memory write failed',
         ),
       );
@@ -152,6 +152,21 @@ class _AutoMemoryConnection extends HostConnection {
     }
     throw StateError('unexpected auto memory route $method $path');
   }
+}
+
+void _expectProblemIcon(Finder text) {
+  final line = find.ancestor(
+    of: text,
+    matching: find.byType(AiConfigProblemLine, skipOffstage: false),
+  );
+  expect(
+    find.descendant(
+      of: line,
+      matching: find.byIcon(Icons.error_outline, skipOffstage: false),
+      skipOffstage: false,
+    ),
+    findsOneWidget,
+  );
 }
 
 void main() {
@@ -282,7 +297,10 @@ void main() {
     await pumpSection(t);
     await tap(t, 'auto-memory-read');
     expect(find.textContaining('当前没有可用的本人私聊接收条件'), findsOneWidget);
-    expect(t.widget<SwitchListTile>(key('auto-memory-enabled')).onChanged, isNull);
+    expect(
+      t.widget<SwitchListTile>(key('auto-memory-enabled')).onChanged,
+      isNull,
+    );
   });
 
   testWidgets('stale revision retires the pending action', (t) async {
@@ -297,6 +315,7 @@ void main() {
     await tap(t, 'auto-memory-enabled');
     expect(key('auto-memory-enable-dialog'), findsNothing);
     expect(key('auto-memory-unknown'), findsOneWidget);
+    _expectProblemIcon(key('auto-memory-unknown'));
     expect(key('auto-memory-read'), findsOneWidget);
     expect(connection.calls.where((c) => c.$1 == 'PUT'), isEmpty);
   });

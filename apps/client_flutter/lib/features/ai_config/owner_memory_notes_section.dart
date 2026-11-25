@@ -4,6 +4,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart' show HostReadCancellation;
 import '../../net/owner_memory_notes_api.dart';
+import '../../ui/jy_tokens.dart';
+import 'ai_config_problem_line.dart';
 
 /// Manual notes are independent from chat history, reply preferences and the
 /// fixed rule greeting. The permission is default-off and only owner-private.
@@ -418,17 +420,8 @@ class _OwnerMemoryNotesSectionState extends State<OwnerMemoryNotesSection>
   }
 
   Widget _noticeText(String text, Key key, {bool error = false}) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Semantics(
-      liveRegion: true,
-      child: Text(
-        text,
-        key: key,
-        style: error
-            ? TextStyle(color: Theme.of(context).colorScheme.error)
-            : null,
-      ),
-    ),
+    padding: const EdgeInsets.symmetric(vertical: JySpace.xs),
+    child: AiConfigNoticeLine(text, textKey: key, problem: error),
   );
 
   String _problemText(OwnerMemoryProblem problem) => switch (problem) {

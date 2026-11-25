@@ -178,6 +178,16 @@ PersonaFileImport _fileImport({
   String json = personaSampleJson,
 }) => PersonaFileImport(name: name, card: PersonaCard.parseText(json));
 
+void _expectProblemIcon(String key) {
+  expect(
+    find.descendant(
+      of: find.byKey(Key(key)),
+      matching: find.byIcon(Icons.error_outline),
+    ),
+    findsOneWidget,
+  );
+}
+
 void main() {
   testWidgets('file import only fills the persona form and shows its source', (
     tester,
@@ -256,6 +266,7 @@ void main() {
         find.byKey(const Key('persona-import-paste-error')),
         findsOneWidget,
       );
+      _expectProblemIcon('persona-import-paste-error');
       await tester.tap(find.byKey(const Key('persona-import-paste-cancel')));
       await tester.pumpAndSettle();
       expect(_field(tester, 'persona-p0'), 'keep=me');
@@ -286,6 +297,7 @@ void main() {
     expect(_field(tester, 'persona-p0'), isEmpty);
     await _to(tester, const Key('persona-import-error'));
     expect(find.textContaining('64 KiB'), findsOneWidget);
+    _expectProblemIcon('persona-import-error');
     expect(writer.calls, isEmpty);
   });
 

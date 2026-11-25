@@ -2,6 +2,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
 import '../../net/model_diagnostics_api.dart';
+import '../../ui/jy_palette.dart';
+import '../../ui/jy_tokens.dart';
 
 /// Read-only "模型能力与预算诊断" screen.
 ///
@@ -385,18 +387,21 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     if (_needsProvider.contains(_catalog)) {
       return const _StateLine(
         key: Key('diagnostics-catalog-needs-provider'),
+        tone: _StateTone.idle,
         text: '请先显式指定要查询的已保存 provider；本页不做默认推断。',
       );
     }
     if (_catalog.phase == _Phase.idle) {
       return const _StateLine(
         key: Key('diagnostics-catalog-not-requested'),
+        tone: _StateTone.idle,
         text: '尚未读取。点击上面的按钮后才会请求宿主。',
       );
     }
     if (_catalog.phase == _Phase.loading) {
       return const _StateLine(
         key: Key('diagnostics-catalog-loading'),
+        tone: _StateTone.loading,
         text: '正在读取…',
       );
     }
@@ -404,6 +409,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     if (_catalog.threw || read == null) {
       return const _StateLine(
         key: Key('diagnostics-catalog-unknown'),
+        tone: _StateTone.warning,
         text: '状态未知：读取失败或响应无法解析；不会自动重试。',
       );
     }
@@ -414,7 +420,11 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
           key: const Key('diagnostics-catalog-loaded'),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('宿主返回 ${models.length} 个模型 id：'),
+            _StateLine(
+              key: const Key('diagnostics-catalog-summary'),
+              tone: _StateTone.success,
+              text: '宿主返回 ${models.length} 个模型 id：',
+            ),
             if (models.isEmpty)
               const Text('目录为空：宿主没有返回任何模型 id（不等于读取失败）。')
             else
@@ -424,26 +434,31 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
       case DiagnosticsReadStatus.unconfigured:
         return const _StateLine(
           key: Key('diagnostics-catalog-unconfigured'),
+          tone: _StateTone.warning,
           text: '未配置：宿主没有可查询的 provider 配置。',
         );
       case DiagnosticsReadStatus.notFound:
         return const _StateLine(
           key: Key('diagnostics-catalog-not-found'),
+          tone: _StateTone.danger,
           text: '未找到该 provider（可能不存在、不属于当前账号或不可见）。',
         );
       case DiagnosticsReadStatus.denied:
         return const _StateLine(
           key: Key('diagnostics-catalog-denied'),
+          tone: _StateTone.danger,
           text: '未认证或无权限读取该 provider。',
         );
       case DiagnosticsReadStatus.unavailable:
         return const _StateLine(
           key: Key('diagnostics-catalog-unavailable'),
+          tone: _StateTone.danger,
           text: '宿主暂时无法提供模型目录（例如未配置模型传输或上游不可用）；不会自动重试。',
         );
       case DiagnosticsReadStatus.unknown:
         return const _StateLine(
           key: Key('diagnostics-catalog-unknown'),
+          tone: _StateTone.warning,
           text: '状态未知：读取失败或响应无法解析；不会自动重试。',
         );
     }
@@ -518,18 +533,21 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     if (_needsProfile.contains(_usage)) {
       return const _StateLine(
         key: Key('diagnostics-usage-needs-profile'),
+        tone: _StateTone.idle,
         text: '请先显式指定要查询的 AI 档案；本页不做默认推断。',
       );
     }
     if (_usage.phase == _Phase.idle) {
       return const _StateLine(
         key: Key('diagnostics-usage-not-requested'),
+        tone: _StateTone.idle,
         text: '尚未读取。点击上面的按钮后才会请求宿主。',
       );
     }
     if (_usage.phase == _Phase.loading) {
       return const _StateLine(
         key: Key('diagnostics-usage-loading'),
+        tone: _StateTone.loading,
         text: '正在读取…',
       );
     }
@@ -537,6 +555,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     if (_usage.threw || read == null) {
       return const _StateLine(
         key: Key('diagnostics-usage-unknown'),
+        tone: _StateTone.warning,
         text: '状态未知：读取失败或响应无法解析；不会自动重试。',
       );
     }
@@ -547,9 +566,12 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
           key: const Key('diagnostics-usage-loaded'),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '预算日 ${usage.budgetDay} · 时区偏移 ${usage.offsetMinutes} 分钟 · '
-              '已记录 ${usage.recordedTokens} tokens',
+            _StateLine(
+              key: const Key('diagnostics-usage-summary'),
+              tone: _StateTone.success,
+              text:
+                  '预算日 ${usage.budgetDay} · 时区偏移 ${usage.offsetMinutes} 分钟 · '
+                  '已记录 ${usage.recordedTokens} tokens',
             ),
             const SizedBox(height: 4),
             const Text('按层：'),
@@ -576,6 +598,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
               for (final capability in usage.unknownCapabilities)
                 _StateLine(
                   key: Key('diagnostics-usage-unknown-$capability'),
+                  tone: _StateTone.warning,
                   text: '$capability：有未结算（pending）记录，实际用量未知，不按 0 计算。',
                 ),
             ],
@@ -584,26 +607,31 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
       case DiagnosticsReadStatus.unconfigured:
         return const _StateLine(
           key: Key('diagnostics-usage-unconfigured'),
+          tone: _StateTone.warning,
           text: '未配置：宿主尚未配置该档案的预算时区，因此无法确定“今日”，不显示任何用量数字。',
         );
       case DiagnosticsReadStatus.notFound:
         return const _StateLine(
           key: Key('diagnostics-usage-not-found'),
+          tone: _StateTone.danger,
           text: '未找到该 AI 档案（可能不存在、不属于当前账号或不可见）。',
         );
       case DiagnosticsReadStatus.denied:
         return const _StateLine(
           key: Key('diagnostics-usage-denied'),
+          tone: _StateTone.danger,
           text: '未认证或无权限读取该档案的用量。',
         );
       case DiagnosticsReadStatus.unavailable:
         return const _StateLine(
           key: Key('diagnostics-usage-unavailable'),
+          tone: _StateTone.danger,
           text: '宿主暂时无法提供用量（服务或连接不可用）；不会自动重试。',
         );
       case DiagnosticsReadStatus.unknown:
         return const _StateLine(
           key: Key('diagnostics-usage-unknown'),
+          tone: _StateTone.warning,
           text: '状态未知：读取失败或响应无法解析；不会自动重试。',
         );
     }
@@ -640,18 +668,21 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     if (_needsProfile.contains(_trend)) {
       return const _StateLine(
         key: Key('diagnostics-trend-needs-profile'),
+        tone: _StateTone.idle,
         text: '请先显式指定要查询的 AI 档案；本页不做默认推断。',
       );
     }
     if (_trend.phase == _Phase.idle) {
       return const _StateLine(
         key: Key('diagnostics-trend-not-requested'),
+        tone: _StateTone.idle,
         text: '尚未读取。点击上面的按钮后才会请求宿主。',
       );
     }
     if (_trend.phase == _Phase.loading) {
       return const _StateLine(
         key: Key('diagnostics-trend-loading'),
+        tone: _StateTone.loading,
         text: '正在读取…',
       );
     }
@@ -659,6 +690,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     if (_trend.threw || read == null) {
       return const _StateLine(
         key: Key('diagnostics-trend-unknown'),
+        tone: _StateTone.warning,
         text: '状态未知：读取失败或响应无法解析；不会自动重试。',
       );
     }
@@ -669,10 +701,13 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
           key: const Key('diagnostics-trend-loaded'),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '窗口 ${trend.window} · 口径 ${trend.basis} · '
-              '${trend.startDay} 至 ${trend.endDay} · '
-              '时区偏移 ${trend.offsetMinutes} 分钟',
+            _StateLine(
+              key: const Key('diagnostics-trend-summary'),
+              tone: _StateTone.success,
+              text:
+                  '窗口 ${trend.window} · 口径 ${trend.basis} · '
+                  '${trend.startDay} 至 ${trend.endDay} · '
+                  '时区偏移 ${trend.offsetMinutes} 分钟',
             ),
             const SizedBox(height: 4),
             for (final day in trend.days)
@@ -685,6 +720,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
               const SizedBox(height: 4),
               const _StateLine(
                 key: Key('diagnostics-trend-history-unknown'),
+                tone: _StateTone.warning,
                 text: '存在历史未结算（pending）记录（可能不在上面 7 天内）：这些用量仍然未知，不按 0 计算。',
               ),
             ],
@@ -693,26 +729,31 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
       case DiagnosticsReadStatus.unconfigured:
         return const _StateLine(
           key: Key('diagnostics-trend-unconfigured'),
+          tone: _StateTone.warning,
           text: '未配置：宿主尚未配置该档案的预算时区，因此无法划分记录日，不显示任何趋势数字。',
         );
       case DiagnosticsReadStatus.notFound:
         return const _StateLine(
           key: Key('diagnostics-trend-not-found'),
+          tone: _StateTone.danger,
           text: '未找到该 AI 档案（可能不存在、不属于当前账号或不可见）。',
         );
       case DiagnosticsReadStatus.denied:
         return const _StateLine(
           key: Key('diagnostics-trend-denied'),
+          tone: _StateTone.danger,
           text: '未认证或无权限读取该档案的趋势。',
         );
       case DiagnosticsReadStatus.unavailable:
         return const _StateLine(
           key: Key('diagnostics-trend-unavailable'),
+          tone: _StateTone.danger,
           text: '宿主暂时无法提供趋势（服务或连接不可用）；不会自动重试。',
         );
       case DiagnosticsReadStatus.unknown:
         return const _StateLine(
           key: Key('diagnostics-trend-unknown'),
+          tone: _StateTone.warning,
           text: '状态未知：读取失败或响应无法解析；不会自动重试。',
         );
     }
@@ -749,18 +790,21 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     if (_needsProfile.contains(_budget)) {
       return const _StateLine(
         key: Key('diagnostics-budget-needs-profile'),
+        tone: _StateTone.idle,
         text: '请先显式指定要查询的 AI 档案；本页不做默认推断。',
       );
     }
     if (_budget.phase == _Phase.idle) {
       return const _StateLine(
         key: Key('diagnostics-budget-not-requested'),
+        tone: _StateTone.idle,
         text: '尚未读取。点击上面的按钮后才会请求宿主。',
       );
     }
     if (_budget.phase == _Phase.loading) {
       return const _StateLine(
         key: Key('diagnostics-budget-loading'),
+        tone: _StateTone.loading,
         text: '正在读取…',
       );
     }
@@ -768,6 +812,7 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
     if (_budget.threw || read == null) {
       return const _StateLine(
         key: Key('diagnostics-budget-unknown'),
+        tone: _StateTone.warning,
         text: '状态未知：读取失败或响应无法解析；不会自动重试。',
       );
     }
@@ -778,9 +823,12 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
           key: const Key('diagnostics-budget-loaded'),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '每日 ${budget.dailyTokens} tokens · '
-              '时区偏移 ${budget.offsetMinutes} 分钟',
+            _StateLine(
+              key: const Key('diagnostics-budget-summary'),
+              tone: _StateTone.success,
+              text:
+                  '每日 ${budget.dailyTokens} tokens · '
+                  '时区偏移 ${budget.offsetMinutes} 分钟',
             ),
             const SizedBox(height: 4),
             const Text('分层上限：'),
@@ -801,26 +849,31 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
       case DiagnosticsReadStatus.unconfigured:
         return const _StateLine(
           key: Key('diagnostics-budget-unconfigured'),
+          tone: _StateTone.warning,
           text: '未配置：宿主没有该档案的完整预算配置（含显式时区），不显示任何上限数字。',
         );
       case DiagnosticsReadStatus.notFound:
         return const _StateLine(
           key: Key('diagnostics-budget-not-found'),
+          tone: _StateTone.danger,
           text: '未找到该 AI 档案（可能不存在、不属于当前账号或不可见）。',
         );
       case DiagnosticsReadStatus.denied:
         return const _StateLine(
           key: Key('diagnostics-budget-denied'),
+          tone: _StateTone.danger,
           text: '未认证或无权限读取该档案的预算。',
         );
       case DiagnosticsReadStatus.unavailable:
         return const _StateLine(
           key: Key('diagnostics-budget-unavailable'),
+          tone: _StateTone.danger,
           text: '宿主暂时无法提供预算（服务或连接不可用）；不会自动重试。',
         );
       case DiagnosticsReadStatus.unknown:
         return const _StateLine(
           key: Key('diagnostics-budget-unknown'),
+          tone: _StateTone.warning,
           text: '状态未知：读取失败或响应无法解析；不会自动重试。',
         );
     }
@@ -858,15 +911,43 @@ class _SectionCard extends StatelessWidget {
   );
 }
 
+/// How a diagnostics status line reads. Each tone pairs a Material icon
+/// with a JyPalette color for the icon and the text.
+enum _StateTone { idle, loading, success, warning, danger }
+
 class _StateLine extends StatelessWidget {
-  const _StateLine({super.key, required this.text});
+  const _StateLine({super.key, required this.tone, required this.text});
+  final _StateTone tone;
   final String text;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 2),
-    child: Text(text, style: Theme.of(context).textTheme.bodySmall),
-  );
+  Widget build(BuildContext context) {
+    final palette = JyPalette.of(context);
+    final (icon, color) = switch (tone) {
+      _StateTone.idle => (Icons.info_outline, palette.text3),
+      _StateTone.loading => (Icons.hourglass_empty, palette.text2),
+      _StateTone.success => (Icons.check_circle_outline, palette.success),
+      _StateTone.warning => (Icons.warning_amber_outlined, palette.warning),
+      _StateTone.danger => (Icons.error_outline, palette.danger),
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: JySpace.xs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: JySpace.sm),
+          Expanded(
+            child: Text(
+              text,
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CountLine extends StatelessWidget {

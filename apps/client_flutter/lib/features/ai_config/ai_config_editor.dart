@@ -17,6 +17,7 @@ import '../../net/owner_social_level_api.dart';
 import '../../net/persona_history_api.dart';
 import '../../ui/jy_palette.dart';
 import '../../ui/jy_tokens.dart';
+import 'ai_config_problem_line.dart';
 import 'owner_auto_memory_section.dart';
 import 'owner_memory_notes_section.dart';
 import 'owner_model_proactive_card.dart';
@@ -840,8 +841,11 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
           ),
           if (!canUse)
             const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text('未连接宿主；无法编辑配置。'),
+              padding: EdgeInsets.only(top: JySpace.sm),
+              child: AiConfigProblemLine.warning(
+                '未连接宿主；无法编辑配置。',
+                key: Key('ai-config-no-writer'),
+              ),
             ),
           if (_status != null && _statusGroup == null) _writeStatusBlock(),
           const Divider(height: 32),
@@ -884,13 +888,8 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
               if (_importError != null)
                 Padding(
                   key: const Key('persona-import-error'),
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    _importError!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
+                  padding: const EdgeInsets.only(top: JySpace.sm),
+                  child: AiConfigProblemLine(_importError!),
                 ),
               const SizedBox(height: 8),
               _field('persona-p0', _p0, 'P0（key=value，每行一条）', lines: 3),
@@ -1344,13 +1343,8 @@ class _PersonaPasteDialogState extends State<_PersonaPasteDialog> {
               if (_error != null)
                 Padding(
                   key: const Key('persona-import-paste-error'),
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
+                  padding: const EdgeInsets.only(top: JySpace.sm),
+                  child: AiConfigProblemLine(_error!),
                 ),
               const SizedBox(height: 8),
               Row(

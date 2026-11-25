@@ -404,11 +404,7 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
                       ? const LinearProgressIndicator()
                       : null,
                 ),
-                if (_readNotice case final notice?)
-                  Text(
-                    notice,
-                    style: TextStyle(color: theme.colorScheme.error),
-                  ),
+                if (_readNotice case final notice?) AiConfigProblemLine(notice),
                 const SizedBox(height: 16),
                 _modelSummary(),
                 KeyedSubtree(
@@ -625,18 +621,8 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
       ],
       if (notice != null)
         Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: Semantics(
-            liveRegion: true,
-            child: Text(
-              notice,
-              style: TextStyle(
-                color: _personaError
-                    ? Theme.of(context).colorScheme.error
-                    : null,
-              ),
-            ),
-          ),
+          padding: const EdgeInsets.only(top: JySpace.sm),
+          child: AiConfigNoticeLine(notice, problem: _personaError),
         ),
       if (draft == null && notice != null && _personaError)
         TextButton(

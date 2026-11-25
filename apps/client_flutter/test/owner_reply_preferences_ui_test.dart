@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:client_flutter/features/ai_config/ai_config_problem_line.dart';
 import 'package:client_flutter/net/host_connection.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jingyu_core/jingyu_core.dart';
@@ -16,6 +17,21 @@ const _save = 'owner-reply-preferences-save';
 const _disable = 'owner-reply-preferences-disable';
 const _clear = 'owner-reply-preferences-clear';
 const _clearConfirm = 'owner-reply-preferences-clear-confirm';
+
+void _expectProblemIcon(Finder text) {
+  final line = find.ancestor(
+    of: text,
+    matching: find.byType(AiConfigProblemLine, skipOffstage: false),
+  );
+  expect(
+    find.descendant(
+      of: line,
+      matching: find.byIcon(Icons.error_outline, skipOffstage: false),
+      skipOffstage: false,
+    ),
+    findsOneWidget,
+  );
+}
 
 void main() {
   late PreferencesConnection host;
@@ -179,6 +195,7 @@ void main() {
       );
       await tapPreference(t, _confirm);
       expect(preferenceKey('owner-reply-preferences-conflict'), findsOneWidget);
+      _expectProblemIcon(preferenceKey('owner-reply-preferences-conflict'));
       expect(preferenceKey(_confirm), findsNothing);
       expect(preferenceKey(_state), findsNothing);
       expect(find.textContaining('secret upstream payload'), findsNothing);
