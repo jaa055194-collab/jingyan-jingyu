@@ -841,8 +841,11 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
           ),
           if (!canUse)
             const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text('未连接宿主；无法编辑配置。'),
+              padding: EdgeInsets.only(top: JySpace.sm),
+              child: AiConfigProblemLine.warning(
+                '未连接宿主；无法编辑配置。',
+                key: Key('ai-config-no-writer'),
+              ),
             ),
           if (_status != null && _statusGroup == null) _writeStatusBlock(),
           const Divider(height: 32),

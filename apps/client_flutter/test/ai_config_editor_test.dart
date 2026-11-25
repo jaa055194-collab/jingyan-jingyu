@@ -260,6 +260,24 @@ void main() {
   ) async {
     await _pump(tester, null);
     expect(find.textContaining('未连接宿主'), findsOneWidget);
+    // No writer blocks editing but is not a failed read or write: warning tone.
+    final line = find.byKey(const Key('ai-config-no-writer'));
+    expect(line, findsOneWidget);
+    final palette = JyPalette.of(tester.element(line));
+    final icon = tester.widget<Icon>(
+      find.descendant(of: line, matching: find.byType(Icon)),
+    );
+    expect(icon.icon, Icons.warning_amber_outlined);
+    expect(icon.color, palette.warning);
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(of: line, matching: find.textContaining('未连接宿主')),
+          )
+          .style
+          ?.color,
+      palette.warning,
+    );
     await _to(tester, const Key('provider-create'));
     expect(
       tester

@@ -420,7 +420,11 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
           key: const Key('diagnostics-catalog-loaded'),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('宿主返回 ${models.length} 个模型 id：'),
+            _StateLine(
+              key: const Key('diagnostics-catalog-summary'),
+              tone: _StateTone.success,
+              text: '宿主返回 ${models.length} 个模型 id：',
+            ),
             if (models.isEmpty)
               const Text('目录为空：宿主没有返回任何模型 id（不等于读取失败）。')
             else
@@ -562,9 +566,12 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
           key: const Key('diagnostics-usage-loaded'),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '预算日 ${usage.budgetDay} · 时区偏移 ${usage.offsetMinutes} 分钟 · '
-              '已记录 ${usage.recordedTokens} tokens',
+            _StateLine(
+              key: const Key('diagnostics-usage-summary'),
+              tone: _StateTone.success,
+              text:
+                  '预算日 ${usage.budgetDay} · 时区偏移 ${usage.offsetMinutes} 分钟 · '
+                  '已记录 ${usage.recordedTokens} tokens',
             ),
             const SizedBox(height: 4),
             const Text('按层：'),
@@ -694,10 +701,13 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
           key: const Key('diagnostics-trend-loaded'),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '窗口 ${trend.window} · 口径 ${trend.basis} · '
-              '${trend.startDay} 至 ${trend.endDay} · '
-              '时区偏移 ${trend.offsetMinutes} 分钟',
+            _StateLine(
+              key: const Key('diagnostics-trend-summary'),
+              tone: _StateTone.success,
+              text:
+                  '窗口 ${trend.window} · 口径 ${trend.basis} · '
+                  '${trend.startDay} 至 ${trend.endDay} · '
+                  '时区偏移 ${trend.offsetMinutes} 分钟',
             ),
             const SizedBox(height: 4),
             for (final day in trend.days)
@@ -813,9 +823,12 @@ class _ModelDiagnosticsScreenState extends State<ModelDiagnosticsScreen> {
           key: const Key('diagnostics-budget-loaded'),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '每日 ${budget.dailyTokens} tokens · '
-              '时区偏移 ${budget.offsetMinutes} 分钟',
+            _StateLine(
+              key: const Key('diagnostics-budget-summary'),
+              tone: _StateTone.success,
+              text:
+                  '每日 ${budget.dailyTokens} tokens · '
+                  '时区偏移 ${budget.offsetMinutes} 分钟',
             ),
             const SizedBox(height: 4),
             const Text('分层上限：'),
@@ -900,7 +913,7 @@ class _SectionCard extends StatelessWidget {
 
 /// How a diagnostics status line reads. Each tone pairs a Material icon
 /// with a JyPalette color for the icon and the text.
-enum _StateTone { idle, loading, warning, danger }
+enum _StateTone { idle, loading, success, warning, danger }
 
 class _StateLine extends StatelessWidget {
   const _StateLine({super.key, required this.tone, required this.text});
@@ -913,6 +926,7 @@ class _StateLine extends StatelessWidget {
     final (icon, color) = switch (tone) {
       _StateTone.idle => (Icons.info_outline, palette.text3),
       _StateTone.loading => (Icons.hourglass_empty, palette.text2),
+      _StateTone.success => (Icons.check_circle_outline, palette.success),
       _StateTone.warning => (Icons.warning_amber_outlined, palette.warning),
       _StateTone.danger => (Icons.error_outline, palette.danger),
     };

@@ -10,16 +10,16 @@ Future<void> _pump(
   required ThemeData theme,
   String message = _message,
   Key? textKey,
+  bool warning = false,
 }) {
+  const key = Key('problem');
   return tester.pumpWidget(
     MaterialApp(
       theme: theme,
       home: Scaffold(
-        body: AiConfigProblemLine(
-          message,
-          key: const Key('problem'),
-          textKey: textKey,
-        ),
+        body: warning
+            ? AiConfigProblemLine.warning(message, key: key, textKey: textKey)
+            : AiConfigProblemLine(message, key: key, textKey: textKey),
       ),
     ),
   );
@@ -61,6 +61,47 @@ void main() {
     final danger = JyPalette.fallback(Brightness.dark).danger;
     expect(tester.widget<Icon>(_inLine(find.byType(Icon))).color, danger);
     expect(tester.widget<Text>(find.text(_message)).style?.color, danger);
+  });
+
+  testWidgets('a warning shows a warning icon and warning text', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      theme: ThemeData(extensions: const [JyPalette.light]),
+      textKey: const Key('problem-text'),
+      warning: true,
+    );
+
+    final icon = tester.widget<Icon>(_inLine(find.byType(Icon)));
+    expect(icon.icon, Icons.warning_amber_outlined);
+    expect(icon.color, JyPalette.light.warning);
+    final text = tester.widget<Text>(find.byKey(const Key('problem-text')));
+    expect(text.data, _message);
+    expect(text.style?.color, JyPalette.light.warning);
+    expect(
+      _inLine(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Semantics && widget.properties.liveRegion == true,
+        ),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a warning without a palette extension follows the theme', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      theme: ThemeData(brightness: Brightness.dark),
+      warning: true,
+    );
+
+    final warning = JyPalette.fallback(Brightness.dark).warning;
+    expect(tester.widget<Icon>(_inLine(find.byType(Icon))).color, warning);
+    expect(tester.widget<Text>(find.text(_message)).style?.color, warning);
   });
 
   testWidgets('a long problem wraps instead of overflowing', (tester) async {

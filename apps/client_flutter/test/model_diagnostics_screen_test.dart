@@ -848,6 +848,33 @@ void main() {
     );
   });
 
+  testWidgets('every loaded read leads with a success line', (tester) async {
+    await tester.pumpWidget(
+      _screen(
+        _Loaders(
+          catalog: (_) async => DiagnosticsRead.loaded(_catalog()),
+          usage: (_) async => DiagnosticsRead.loaded(_usage()),
+          trend: (_) async => DiagnosticsRead.loaded(_trend()),
+          budget: (_) async => DiagnosticsRead.loaded(_budget()),
+        ),
+        providers: const ['provider-one'],
+        profiles: const ['profile-one'],
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final section in const ['catalog', 'usage', 'trend', 'budget']) {
+      await _tap(tester, 'diagnostics-$section-load');
+      // The read worked: its summary line carries the success tone, while
+      // pending or unknown counts below it keep their own warning lines.
+      _expectTone(
+        tester,
+        'diagnostics-$section-summary',
+        Icons.check_circle_outline,
+        (p) => p.success,
+      );
+    }
+  });
+
   testWidgets('an explicit provider id is required before the catalog loads', (
     tester,
   ) async {
