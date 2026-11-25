@@ -1,0 +1,10 @@
+{
+  "name": "jingyu_street3d_web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "three.js r160 3D street page for the jingyu WebView; Flutter asset-only package. npm is only used to run the node tests.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
