@@ -275,7 +275,8 @@ sealed class Street3DPageMessage {
     }
     final v = envelope['v'];
     final type = envelope['type'];
-    final payload = envelope['payload'];
+    // PROTOCOL.md: a missing payload counts as {}; the page treats null the same way.
+    final payload = envelope['payload'] ?? const <String, Object?>{};
     if (v is! num || v != 1) {
       return const Street3DInvalidMessage('envelope v is not 1');
     }

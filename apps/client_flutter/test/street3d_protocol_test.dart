@@ -404,6 +404,21 @@ void main() {
       );
     });
 
+    test('a missing or null payload is read as {}, as PROTOCOL.md says', () {
+      for (final raw in [
+        jsonEncode({'v': 1, 'type': 'ready'}),
+        jsonEncode({'v': 1, 'type': 'ready', 'payload': null}),
+      ]) {
+        final message = Street3DPageMessage.parse(raw);
+        expect(message, isA<Street3DInvalidMessage>(), reason: raw);
+        expect(
+          (message as Street3DInvalidMessage).reason,
+          'ready.restored is invalid',
+          reason: raw,
+        );
+      }
+    });
+
     test('anything malformed, unknown or oversized is invalid', () {
       final raws = [
         'not json',
