@@ -159,4 +159,14 @@ export class SnapshotInterpolator {
       vx, vy, vz, spaceId: a.spaceId, motion: a.motion, settled: isStatic(snaps),
     };
   }
+
+  // True when the sample of every listed resident at nowMs is settled (unknown ids count as
+  // settled): drawing again before new data arrives would show the same picture.
+  settledAt(ids, nowMs) {
+    for (const id of ids) {
+      const s = this.sample(id, nowMs);
+      if (s && !s.settled) return false;
+    }
+    return true;
+  }
 }

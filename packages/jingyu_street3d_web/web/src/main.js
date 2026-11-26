@@ -222,16 +222,21 @@ function onPresence(p, ref) {
     reportErrors(r.errors, ref);
     return;
   }
-  const changes = interp.ingest(r.t, r.residents, performance.now());
+  const now = performance.now();
+  const changes = interp.ingest(r.t, r.residents, now);
   reportErrors(r.errors, ref);
   if (!changes) return; // t did not increase: the whole message is dropped
-  refreshResidents();
-  requestRender();
+  const swapped = refreshResidents();
+  // The host repeats presence at its poll rate even when nobody moves. Draw only when this
+  // message can change the picture, so an idle street draws no frames.
+  if (changes.changed || swapped || !interp.settledAt(actors.keys(), now)) requestRender();
 }
 
 // Keeps an actor for each resident that fits the on-screen limit (PROTOCOL.md section 6).
+// Returns whether any actor was added or removed.
 function refreshResidents() {
-  if (!rig) return;
+  if (!rig) return false;
+  let swapped = false;
   const focusSpaceId = rig.mode === 'villa' || rig.mode === 'resident' ? rig.spaceId : null;
   const sel = selectResidents(interp.metas(), {
     maxResidents: config.maxResidents,
@@ -245,6 +250,7 @@ function refreshResidents() {
     if (shown.has(id) && meta && actor.matches(meta)) continue;
     actor.dispose();
     actors.delete(id);
+    swapped = true;
   }
   for (const id of sel.shown) {
     if (actors.has(id)) continue;
@@ -252,7 +258,9 @@ function refreshResidents() {
     const actor = new ResidentActor({ id, spaceId: meta.spaceId, role: meta.role, label: meta.label ?? '' });
     actors.set(id, actor);
     stage.scene.add(actor.group);
+    swapped = true;
   }
+  return swapped;
 }
 
 function onPause() {

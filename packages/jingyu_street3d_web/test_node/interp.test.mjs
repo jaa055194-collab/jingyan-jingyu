@@ -217,3 +217,26 @@ describe('SnapshotInterpolator.clear (PROTOCOL.md section 5, pause and resume)',
     near(ip.sample('a', 9400), { x: 6.5, vx: 5, settled: false }, 'render time 9100');
   });
 });
+
+describe('SnapshotInterpolator.settledAt (the page draws for presence only when the picture can change)', () => {
+  test('a repeated snapshot leaves an idle street settled; a move stays unsettled until it has played out', () => {
+    const ip = new SnapshotInterpolator();
+    const at = (t) => 500 * (t + 1); // 2 Hz from 1000 ms, so the delay is 750 ms
+    const stand = (x) => [res('a', x, 0, { motion: 'idle' })];
+    const unchanged = { added: [], removed: [], changed: false, metaChanged: [] };
+    for (let t = 1; t <= 8; t += 1) ip.ingest(t, stand(0), at(t));
+    assert.deepEqual(ip.ingest(9, stand(0), at(9)), unchanged);
+    assert.equal(ip.delay, 750);
+    assert.equal(ip.settledAt(['a'], at(9)), true);
+    assert.equal(ip.settledAt(['a', 'nobody'], at(9)), true, 'unknown ids count as settled');
+    assert.equal(ip.settledAt([], at(9)), true);
+    assert.equal(ip.ingest(10, stand(1), at(10)).changed, true);
+    assert.equal(ip.settledAt(['a'], at(10)), false);
+    // The next message repeats the new position, so nothing changed, but at render time the resident is still on the way.
+    assert.deepEqual(ip.ingest(11, stand(1), at(11)), unchanged);
+    near(ip.sample('a', at(11)), { x: 0.5, settled: false }, 'render time 5250');
+    assert.equal(ip.settledAt(new Map([['a', null]]).keys(), at(11)), false, 'accepts any iterable, such as Map keys');
+    for (let t = 12; t <= 15; t += 1) ip.ingest(t, stand(1), at(t));
+    assert.equal(ip.settledAt(['a'], at(15)), true, 'every kept snapshot is at the new position');
+  });
+});
