@@ -1,6 +1,6 @@
 # Live2D 二期调研：开源实现与公开资料汇总（Android）
 
-> 调研日期 2026-11-25（Asia/Shanghai），部分条目于 2026-11-26 复核（见 6.3 与第 7 节）；仓库基线 HEAD `913a1072b1df`。本文只整理调研笔记中有据可查的事实（笔记与源码副本不入库）；第 5 节中 5.3 是本 PR 已实现的增量 A，其余是计划。
+> 调研日期 2026-11-25（Asia/Shanghai），部分条目于 2026-11-26 复核（见 6.3 与第 7 节）；仓库基线 HEAD `913a1072b1df`。本文只整理调研笔记中有据可查的事实（笔记与源码副本不入库）；第 5 节中 5.3、5.4 是本 PR 已实现的部分（增量 A 与增量 B 的第一步 B1），其余是计划。
 > 外部事实均给出仓库 URL、版本 / 标签或提交（短 SHA）、许可（SPDX id；非 SPDX 许可写原名）；未另注明时，截至日期为 2026-11-25。
 > 标注：**自报** = 项目自己公布、未独立复现；**未核实** = 笔记未能证实；**矛盾** = 来源说法不一致；**推论** = 由笔记事实推出、尚未验证；**建议** = 本文提出的我方设计，不是上游事实。
 
@@ -17,7 +17,8 @@
 - **行为层**：眨眼、呼吸、视线、口型、表情、动作、物理与空闲调度，参考 MIT / Apache-2.0 项目的实现改编，并保留原许可声明。官方 SDK、GPL 与无许可证的代码只作行为基准，或直接排除（4.0）。
 - **落地顺序**：
   - 增量 A 与本文在同一 PR 实现（5.3），包括运行时打包、Android 承载、纹理预算和就绪后的故障处理。
-  - 后续计划（5.2）：B 参数映射与持久化，C 行为层，D 热切换与 VRM 回退，E 真机验证与性能测量。
+  - 增量 B 的第一步 B1 也在本 PR 实现（5.4）：查看器回报模型的参数与 part ID，client kit 据此与 model3 `Groups` 建议口型与眨眼参数，不保存、不启用。
+  - 后续计划（5.2）：B 的其余部分（映射向导、持久化与启用），C 行为层，D 热切换与 VRM 回退，E 真机验证与性能测量。
 - **未决**（第 6 节）：
   - 实现来源与专利的法律评估；
   - 真机性能数据；
@@ -294,7 +295,7 @@
 
 ## 5. 适配到本应用的方案
 
-> 5.1 是仓库基线 HEAD `913a1072b1df` 的现状；5.3 是本 PR 实现的增量 A；5.2 中的增量 B–E 是计划，尚未实现。
+> 5.1 是仓库基线 HEAD `913a1072b1df` 的现状；5.3 是本 PR 实现的增量 A，5.4 是增量 B 的第一步 B1；5.2 中其余的增量 B–E 是计划，尚未实现。
 
 ### 5.1 现有模块
 
@@ -316,7 +317,7 @@
 | 纹理上限（3.4）与 Mochi2D 的手机预算 256 MiB（2.3） | 全部纹理共用一个缩放比例，同时满足 `MAX_TEXTURE_SIZE` 与 256 MiB 预算（按含 mipmap 的 4/3 估算）；逐张解码、缩放、上传后立即释放。只借鉴 Mochi2D 的预算数值，不复制其代码；数值是估计，实机测量后再调整 | 增量 A（本 PR，5.3） |
 | 渲染进程可能被系统杀掉（3.3），WebGL 上下文可能被强制丢失（3.4） | 预览就绪后，渲染进程退出、上下文丢失、绘制失败都转为失败状态，用户可重试；正式启用为形象后改为回退默认 VRM（增量 D） | 增量 A（本 PR，5.3） |
 | 行为层与每帧分层（4.1–4.9） | 在查看器内按 4.1 的顺序实现；motion3 / exp3 / pose3 / physics3 求值优先改编 renpy 中 MIT 许可的代码（改编前人工确认不是 Cubism Framework 的逐行翻译，见 4.0）；眨眼、呼吸、视线、口型改编 airi、my-neuro、N.E.K.O、pixi-live2d-display、Kokoro-Engine。改编文件保留原版权与许可声明，README 列出来源 | 增量 C（建议） |
-| 参数映射与持久化（4.11） | 查看器加载模型后回报参数 / part ID，供 `Live2DParamMap` 校验；向导按 4.11 打分，逐项校验通过才启用对应行为；模型改存到应用私有的持久目录，保存与启用各需用户确认 | 增量 B（建议） |
+| 参数映射与持久化（4.11） | 查看器加载模型后回报参数 / part ID，供 `Live2DParamMap` 校验；向导按 4.11 打分，逐项校验通过才启用对应行为；模型改存到应用私有的持久目录，保存与启用各需用户确认 | 增量 B：回报 ID 与口型 / 眨眼建议已实现（B1，5.4）；向导、持久化与启用是计划（建议） |
 | 热切换（4.10） | 整页只保留一个 WebGL 上下文并复用；预算容得下两份时可回滚（my-neuro 式），否则先卸载旧模型（airi 式）；任何失败都回退默认 VRM | 增量 D（建议） |
 | 验证（3.5、M10 性能目标） | 本地 AVD 关闭了 GPU，WebGL 结果须在开启 GPU 的模拟器或真机上复核；帧率与显存按 M10 目标在真机实测，测前文档只写估计 | 增量 E |
 
@@ -346,6 +347,28 @@
   - Flutter 侧用模拟平台通道测试（`apps/client_flutter/test/android_live2d_renderer_host_test.dart`、`live2d_preview_view_test.dart` 与控制器测试）。
   - Android 端：路由规则用 JVM 单元测试覆盖（`app/src/test/kotlin/com/jingyu/client_flutter/Live2DViewerRoutesTest.kt`，8 项；符号链接逃逸一项需要能创建符号链接的系统，在 Windows 上跳过）。`flutter build apk --debug` 通过，安装包的 `assets/live2d/viewer/` 含 4 个页面文件和本地拉取的运行时及其 `LICENSE`。
   - 帧率、显存、画质，以及与 3D 房间同时打开时的上下文占用，都未在真机上测量（增量 E、6.2）。
+
+### 5.4 增量 B 第一步（B1）：模型信息与映射建议
+
+> 以下内容已在本 PR 实现；没有界面，不构建、不保存、也不启用映射。验证范围见本节末尾，均未在真机上运行。
+
+- **查看器回报模型信息**（`live2d_viewer.js`）：首帧成功后，`ready` 事件附带运行时枚举的 `parameters`（运行时顺序，每项 `{id, min, max, default}`，取值只在是有限数时给出）与 `parts`（part ID）。每个列表要么完整，要么省略：来源缺失、格式不对或超过 4096 项时省略该字段。列表在首帧之后读取，读取出错只省略字段，不会让加载失败，也不改变 `ready` 的时机。
+- **client kit 解析**（`Live2DModelInfo`）：`Live2DRendererBridge` 收到 `ready` 时解析，`Live2DPreviewController.modelInfo` 只在就绪状态下有值。字段格式不对时（不是列表、超过 4096 项、ID 为空或超过 256 个字符、ID 重复、取值不是有限数、最小值大于最大值）只记录 `modelInfoError`：预览照常就绪，但没有 ID 集合，映射也就无法启用。5.1 所说的缺口由此补上：`Live2DParamMap` 启用前要求的完整 ID 集合现在来自运行时（启用流程尚未接入）。
+- **读取 model3 `Groups`**（`validateLive2DPackage`）：预检通过时，把清单的 `Groups` 按文件顺序读进 `Live2DPackageValidation.groups`，再随 `Live2DPreviewBundle` 交给预览；生成的清单不写出它们。`Groups` 只供建议，不会让预检失败：不是对象、或 `Name` 为空或超过 256 个字符的条目跳过，不合格的 ID 也跳过；`Groups` 不是列表，或条目总数、ID 总数超过 4096 时，整体不读。不保留 `Target`：Cubism Framework 查找 `EyeBlink` / `LipSync` 组时只比较 `Name`、取第一个同名组，不读取 `Target`（CubismWebFramework @ `d4da0aa07e47` 的 `cubismmodelsettingjson.ts` L408-517）。
+- **映射建议**（`Live2DParamProposal.forModel`）：为 `Live2DParamMap` 的 `mouthOpen`、`blinkLeft`、`blinkRight` 三个槽给出建议，候选只来自运行时回报的参数 ID，按原样精确匹配。证据由强到弱：
+  1. 第一个名为 `LipSync` / `EyeBlink` 的组，查找方式与 Cubism Framework 相同；只算运行时回报过的 ID，组里没有这样的 ID 时忽略该组。
+  2. 标准 ID `ParamMouthOpenY`、`ParamEyeLOpen`、`ParamEyeROpen`（4.11）。
+  3. 它们的 Cubism 2 写法 `PARAM_MOUTH_OPEN_Y`、`PARAM_EYE_L_OPEN`、`PARAM_EYE_R_OPEN`。官方示例 Wanko 的参数就用这种写法（CubismWebSamples @ `b1de66b0b1f1` 的 `Wanko.model3.json`，`Groups` 在 L32-48）；hacxy/l2d-widget（MIT）@ `6a7b63d414d5` 也以 `PARAM_MOUTH_OPEN_Y` 作口型参数的示例（`src/types.ts` L52、L55）。
+- **取舍**：
+  - 组优先于组外的标准 ID。口型取 `LipSync` 组里的标准 ID（含 Cubism 2 写法），没有就取组里第一个 ID。
+  - `EyeBlink` 组不标明哪个 ID 属于哪只眼：组里某个 ID 是该眼的标准 ID（含 Cubism 2 写法），或者去掉另一只眼的标准 ID 后只剩一个 ID 时，才给该眼建议；否则不给，由用户选。
+  - 没有可用的组时回退标准 ID；LipSync 组为空时回退 `ParamMouthOpenY` 也是上游的通行做法（4.11）。
+  - 4.11 中的 `.vtube.json`、`cdi3.json` 显示名与取值范围启发式留给映射向导（增量 B 的下一步）；表情与动作不在建议之列。
+- **验证范围**：
+  - 查看器：`node --test` 跑 `test/viewer_behavior.test.cjs` 24 项（含 `ready` 附带的列表）、`test/texture_budget.test.cjs` 16 项。
+  - client kit：`live2d_model_info_test` 9 项、`live2d_renderer_bridge_test` 16 项、`live2d_renderer_controller_test` 19 项、`live2d_package_test` 37 项、`live2d_param_proposal_test` 14 项；全套 375 项通过，`flutter analyze` 无问题。
+  - 应用：Live2D 相关的 4 个测试文件 35 项通过，`flutter analyze` 无问题。
+  - 没有用真实模型在设备上核对回报的 ID 与建议。
 
 ## 6. 风险与未决问题
 
@@ -414,7 +437,10 @@
 - <https://github.com/elevenyellow/handcrafted-persona-engine>、<https://github.com/Zao-chen/ZcChat>、<https://github.com/TEN-framework/ten-framework>、<https://github.com/DD-MASTERT/AI-Girlfriend-Desktop-Pet>、<https://github.com/kiyotakali/Miru>、<https://github.com/InariNGT-Ofiicial/jingyu-live2d-agent>
 - WebAssembly memory-control 提案：<https://github.com/WebAssembly/memory-control/blob/main/proposals/memory-control/Overview.md>；Cubism 标准参数表：<https://docs.live2d.com/en/cubism-editor-manual/standard-parametor-list/>；<https://laplace.live/persona/live2d/bindings>
 
-**第 5 节：本 PR 的实现（5.3）**
+**第 5 节：本 PR 的实现（5.3、5.4）**
 
 - WebGL 上下文丢失：Khronos WebGL wiki「HandlingContextLost」<https://wikis.khronos.org/webgl/index.php?title=HandlingContextLost>。只有 `webglcontextlost` 的处理函数调用 `preventDefault()`，浏览器才会发出 `webglcontextrestored`（复核 2026-11-26）
 - Flutter 测试中的通道替身：`TestDefaultBinaryMessenger.handlePlatformMessage` <https://api.flutter.dev/flutter/flutter_test/TestDefaultBinaryMessenger/handlePlatformMessage.html>
+- Cubism Framework 的组查找（5.4）：`cubismmodelsettingjson.ts` L408-517 <https://github.com/Live2D/CubismWebFramework/blob/d4da0aa07e47d2c1e4f5fa7ea6047861ea5e5d0b/src/cubismmodelsettingjson.ts#L408-L517>（复核 2026-11-26）
+- 官方示例 Wanko 的 `Groups`（5.4）：<https://github.com/Live2D/CubismWebSamples/blob/b1de66b0b1f1cb881d95fb6158622aeb6a2827bd/Samples/Resources/Wanko/Wanko.model3.json#L32-L48>（复核 2026-11-26）
+- hacxy/l2d-widget（MIT）的口型参数示例（5.4）：<https://github.com/hacxy/l2d-widget/blob/6a7b63d414d5046a357e163582d6f6b7000d5f5a/src/types.ts#L52-L55>（复核 2026-11-26）
