@@ -72,7 +72,10 @@ class Street3DAndroidController {
     } on PlatformException catch (error) {
       _fail(_kindOf(error.code), error.message ?? error.code);
     } on MissingPluginException catch (error) {
-      _fail(Street3DAndroidFailureKind.loadFailed, error.message ?? 'No street view.');
+      _fail(
+        Street3DAndroidFailureKind.loadFailed,
+        error.message ?? 'No street view.',
+      );
     }
   }
 
@@ -115,7 +118,9 @@ class Street3DAndroidController {
           _fail(_kindOf(arguments['kind']), '${arguments['detail'] ?? ''}');
         }
       default:
-        throw MissingPluginException('${call.method} is not a street view call.');
+        throw MissingPluginException(
+          '${call.method} is not a street view call.',
+        );
     }
     return null;
   }
