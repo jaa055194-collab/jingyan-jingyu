@@ -21,12 +21,19 @@
 // classes and TestShellModel; members only newer models have are declared
 // without @override, and noSuchMethod reports anything still missing.
 //
+// The -data scenarios show pages with data instead: each pushes a page built
+// in ui_redesign_v2_sample_data.dart, which must sit next to this file
+// (capture.ps1 stages both). That file builds the pages with their public
+// constructors only, so when the redesign changes a page's constructor, only
+// that file changes.
+//
 // Fonts: the app's FontManifest.json supplies the icon fonts under their own
 // family names. msyh.ttc from the Windows fonts folder stands in for Ahem,
 // Roboto, FlutterTest and every other family the rendered text asks for (the
 // page is rendered again after a new family is registered), so Chinese text
 // renders as on Windows; emoji families get seguiemj.ttf.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -40,6 +47,7 @@ import 'package:client_flutter/app/shell_app.dart';
 import 'package:client_flutter/app/shell_view_model.dart';
 
 import '../../test/ui_test.dart' show TestShellModel;
+import 'ui_redesign_v2_sample_data.dart';
 
 const _imageKey = Key('ui-redesign-v2-capture');
 
@@ -170,6 +178,61 @@ final List<CaptureScenario> captureScenarios = [
     'ai-config-edit',
     () => CaptureModel(),
     (tester, _) => openFromSettings(tester, 'open-ai-config-write', 'AI 运行配置'),
+  ),
+  // States with data. CaptureModel has no host connection, so on 0300369 the
+  // shell wires no loaders into these pages. Each -data scenario pushes the
+  // page from ui_redesign_v2_sample_data.dart (fake loaders that return its
+  // sample rows) on the root navigator, over the conversation list.
+  CaptureScenario(
+    'contacts-data',
+    () => CaptureModel(),
+    (tester, _) => openPage(tester, contactsDataPage),
+  ),
+  CaptureScenario(
+    'creative-data',
+    () => CaptureModel(),
+    (tester, _) => openPage(tester, creativeDataPage),
+  ),
+  CaptureScenario(
+    'inbox-data',
+    () => CaptureModel(),
+    (tester, _) => openPage(tester, inboxDataPage),
+  ),
+  CaptureScenario(
+    'world-data',
+    () => CaptureModel(),
+    (tester, _) => openPage(tester, worldDataPage),
+  ),
+  // 语音音色 after reading the voice profile of 小鲸's AI profile.
+  CaptureScenario('voice-data', () => CaptureModel(), (tester, _) async {
+    await openPage(tester, voiceDataPage);
+    final input = find.byKey(const Key('voice-ai-id'));
+    if (input.evaluate().isEmpty) {
+      debugPrint('CAPTURE_WARN no voice-ai-id field');
+      return;
+    }
+    await tester.enterText(input, sampleAiProfileId);
+    await tester.tap(find.byKey(const Key('voice-read')), warnIfMissed: false);
+    await _settle(tester);
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (find.byKey(const Key('voice-profile')).evaluate().isEmpty) {
+      debugPrint('CAPTURE_WARN reading $sampleAiProfileId showed no profile');
+    }
+  }),
+  CaptureScenario(
+    'voice-calls-data',
+    () => CaptureModel(),
+    (tester, _) => openPage(tester, voiceCallsDataPage),
+  ),
+  CaptureScenario(
+    'ai-config-check-data',
+    () => CaptureModel(),
+    (tester, _) => openPage(tester, aiConfigCheckDataPage),
+  ),
+  CaptureScenario(
+    'ai-config-edit-data',
+    () => CaptureModel(),
+    (tester, _) => openPage(tester, aiConfigEditDataPage),
   ),
   // Onboarding, step 1/3: signed out.
   CaptureScenario('onboarding-host', () => CaptureModel(signedIn: false)),
@@ -376,6 +439,17 @@ Future<void> openFromSettings(
       .stateList<NavigatorState>(find.byType(Navigator))
       .any((navigator) => navigator.canPop());
   if (!pushed) debugPrint('CAPTURE_WARN tapping $title pushed no page');
+}
+
+/// Pushes the page [build] makes on the root navigator, over whatever the app
+/// shows, and lets it load. Prints CAPTURE_WARN when nothing was pushed.
+Future<void> openPage(WidgetTester tester, Widget Function() build) async {
+  final navigator = tester.state<NavigatorState>(find.byType(Navigator).first);
+  unawaited(navigator.push(MaterialPageRoute<void>(builder: (_) => build())));
+  await _settle(tester);
+  if (!navigator.canPop()) {
+    debugPrint('CAPTURE_WARN pushing the page did nothing');
+  }
 }
 
 /// Taps the button labelled [text]. Prints CAPTURE_WARN when it is missing

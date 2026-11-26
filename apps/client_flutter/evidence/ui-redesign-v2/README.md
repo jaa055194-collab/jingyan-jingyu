@@ -3,8 +3,9 @@
 These are harness renders for the v2 client redesign (ticket ui-redesign-v2-58efb3240b0f). They come from `flutter test` with a fake model. They are not native-window captures and do not show a live host.
 
 - `ui_redesign_v2_capture_test.dart` is the capture test. A `CaptureModel` (extends `TestShellModel` from `test/ui_test.dart`, with a `noSuchMethod` fallback) drives the real `WhaleChatApp`. Each scenario renders at 412x915 or 1280x800 logical pixels (device pixel ratio 1), in light or dark, and is saved as `<scenario>-<size>-<theme>.png`. The test only runs when `CAPTURE_OUT` is set. A plain `flutter test` of the file reports one skipped test.
-- Scenarios reach their page the way a user does: they tap a conversation row, a navigation destination, the settings button, an entry in settings or 下一步. A chat opens as its own page on the phone and in the right pane on the wide layout. Long lists are scrolled by setting the scroll offset. When a step fails, the test prints `CAPTURE_WARN`.
-- `before/` holds main `0300369`. Each batch was rendered from a byte-identical copy of the test (SHA-256 checked) in the clean detached baseline worktree. Afterwards the copy, its directory and `build/` were removed, and the worktree was clean again.
+- `ui_redesign_v2_sample_data.dart`, next to the test, builds the pages of the `-data` scenarios with their sample data (see States with data below).
+- Scenarios reach their page the way a user does: they tap a conversation row, a navigation destination, the settings button, an entry in settings or 下一步. A chat opens as its own page on the phone and in the right pane on the wide layout. Long lists are scrolled by setting the scroll offset. When a step fails, the test prints `CAPTURE_WARN`. The `-data` scenarios push their page directly instead.
+- `before/` holds main `0300369`. Each batch was rendered in the clean detached baseline worktree from a byte-identical copy of the test (SHA-256 checked) and, for the `-data` scenarios, of `ui_redesign_v2_sample_data.dart`. Afterwards the copies, their directory and `build/` were removed, and the worktree was clean again.
 - `start-11a30e0/` holds the eight renders that come out differently on `11a30e0`, where the redesign branches start. See the last section.
 - `after/` will hold the integration branch once the pages are merged.
 
@@ -12,7 +13,7 @@ Fonts: icon fonts load from the app's `FontManifest.json` under their own family
 
 ## Before (main 0300369)
 
-Every scenario has four files: `<scenario>-412x915-light.png`, `-412x915-dark`, `-1280x800-light` and `-1280x800-dark`, 84 in all. The render run exited 0 with no framework exceptions and no `CAPTURE_WARN`, and every image was viewed.
+Every scenario has four files: `<scenario>-412x915-light.png`, `-412x915-dark`, `-1280x800-light` and `-1280x800-dark`: 84 for the 21 scenarios in the first table and 32 for the eight `-data` scenarios further down, 116 in all. Every render run exited 0 with no framework exceptions and no `CAPTURE_WARN`, and every image was viewed.
 
 | Scenario | State | What the render shows |
 |---|---|---|
@@ -38,7 +39,7 @@ Every scenario has four files: `<scenario>-412x915-light.png`, `-412x915-dark`, 
 | `onboarding-character` | Signed in as account-a, world setup not done: step 2/3. | 选择你的形象 with 账号 ID：account-a, the choices 小鲸 (selected), 小狐 and 小猫, then 下一步 and 稍后设置，先进入聊天. |
 | `onboarding-room` | Step 3/3, after tapping 下一步. | 创建你的房间 with the presets 安静书房 (selected), 创作空间 and 花园小屋, 生成预览, 尚未生成预览。, 确认并进入 disabled, and 稍后设置，先进入聊天. |
 
-Pages that read from the host: on 0300369 the shell and settings wire their host readers only when the model is a `ClientRuntime` with a live connection. `CaptureModel` is not one, so `contacts`, `creative`, `inbox`, `voice`, `voice-calls`, `ai-config-check` and `ai-config-edit` show their state without a host connection. States with data would need a fake `ClientRuntime` and `HostConnection`, and are not rendered yet.
+Pages that read from the host: on 0300369 the shell and settings wire their host readers only when the model is a `ClientRuntime` with a live connection. `CaptureModel` is not one, so `contacts`, `creative`, `inbox`, `voice`, `voice-calls`, `ai-config-check` and `ai-config-edit` show their state without a host connection. The `-data` scenarios below show the same pages with data.
 
 Render log (time +08:00, test SHA-256 prefix):
 
@@ -46,6 +47,24 @@ Render log (time +08:00, test SHA-256 prefix):
 - 2026-11-25 01:46: all four `conversations*` scenarios, test `6618766F5463`. `conversations-412x915-light` came out byte-identical to the 01:14 render.
 - 2026-11-25 02:16: all eight scenarios, test `409629982FFF`. The 16 `conversations*` images came out byte-identical to the 01:46 renders.
 - 2026-11-25 03:39: all 21 scenarios, test `04FBB86F2204`. The 32 images committed before came out byte-identical.
+- 2026-11-26 07:48: all 29 scenarios, test `79C0BBFC94B0`, sample data `A89D5BE1107C`. The 84 images committed before came out byte-identical, and so did the 32 `-data` images of a first run at 06:54, when the two files differed only in comments.
+
+### States with data
+
+`ui_redesign_v2_sample_data.dart` builds eight pages with their public constructors, using only arguments that the widget tests in `test/` already pass. Fake loaders return its sample rows at once. Accept and deny do nothing and the AI config writer throws, so nothing reaches a host. Each `-data` scenario starts from the signed-in conversation list and pushes its page on the root navigator, so the page fills the window at both sizes. The tab pages (联系人, 动态, 收件箱) show without the navigation bar or rail and without a back button. The other pages show their app bar with a back button. Compare After `-data` renders with these, not with the tab scenarios. The names come from the capture test's sample conversations: the user is account-a, and 小鲸 is the own AI, account ai-xiaojing with AI profile profile-xiaojing. None of it is real personal data. When the redesign changes one of these constructors, only this file changes.
+
+| Scenario | Data | What the render shows |
+|---|---|---|
+| `contacts-data` | 联系人: incoming friend requests from 阿哲 (azhe) and 阿青 (aqing), and the friends 林雾 (linwu) and 妈妈 (mom). | The header and read-only note, four rows with 对方请求添加你 or 好友, 接受 and 拒绝 on the two requests, then 按账号 ID 查询关系 and 查询关系. |
+| `creative-data` | 动态: weekly reports 2026-11-22 (generated), 2026-11-15 (missed) and 2026-11-08 (deferred), the annual report 2025, and the radio episodes 2026-11-25 (cached for offline play) and 2026-11-24. | 关系周报 / 年报 with 已生成 · 共同话题：徒步、灯光展、读书会, 已错过, 待重试 and 已生成 · 共同话题：旅行、读书、电影 (the two generated reports can expand), then 深夜电台 with 可离线播放 or 在线播放 and each script. |
+| `inbox-data` | 收件箱: pending friend requests from azhe and aqing, a weekly report notice from ai-xiaojing (unread), a group invite to 周末徒步小队 and a friend request from linwu (both accepted). On 0300369 the host only sends friendRequest notifications; the other two kinds are made up for the sample. | 刷新收件箱, five rows with 来自, the sender id and the time: 接受 and 拒绝 on the two pending requests, the status on the others, and the note under the list. Phone: the timestamps wrap. |
+| `world-data` | 世界状态, the page that settings opens (the 世界 tab is a different page), for space home: the layout is read, presence is not found, avatars are denied. | The read-only note, home in the space field, 刷新/加载, then 世界布局 · 已读取 (version 5, 温馨木屋, #6FA8DC, three rooms), 在场 · 未找到 and 形象 · 无权限. |
+| `voice-data` | 语音音色 after entering profile-xiaojing and tapping 读取: revision 3 (vendor-a, tts-model-2, voice-xiaojing) with revision 4 pending. | 已读取音色档案（只读）, the profile card (provider, model, voiceId, revision 3, consentRef, activatedAt, 待生效 revision：4, 待生效参数键：speed, 参数键：speed、pitch) and the 语音文件 panel, 当前不可用. |
+| `voice-calls-data` | 语音通话列表: three calls with ai-xiaojing, on 2026-11-25 (ended), 2026-11-24 (missed) and 2026-11-23 (ended). | 状态过滤 全部, 刷新, and three cards, 已结束, 未接来电 and 已结束, each with the call id, AI profile, peer account and start time. |
+| `ai-config-check-data` | AI 运行配置体检: persona, bindings and provider configured, budget not. | 人格 · 已配置 (profile-xiaojing, version 3, the p0–p2 fields), 绑定 · 已配置 (chat and tts on provider-main), 预算 · 未配置, and Provider · 已配置 (vendor-a, its base URL, the mask sk-…7f2c, 已启用, 能力：chat、tts). |
+| `ai-config-edit-data` | AI 运行配置 (the editor) for the own AI ai-xiaojing, whose profile resolves to profile-xiaojing. | ai-xiaojing selected, 档案：profile-xiaojing, and the 人格 card with its fields and 初始化人格 and 保存人格修改 enabled. 导入人格文件 and 读取人格历史 stay disabled (no file picker or history reader is passed). The Provider card starts at the bottom edge. |
+
+Between `0300369` and `11a30e0` only `chat_pane.dart` and `settings_screen.dart` change in `lib/` (see the next section). None of these pages uses them, and the pushed page covers the shell. So the `-data` scenarios were not rendered on `11a30e0` and have no `start-11a30e0/` counterpart.
 
 ## 0300369 and the redesign start 11a30e0
 
