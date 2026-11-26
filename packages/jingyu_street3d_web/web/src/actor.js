@@ -1,5 +1,5 @@
 // Procedural chibi resident for the 3D street (one per shown resident, at most 8 on screen).
-// Adapted from feiyu-src public/room/actor3d.js (ChibiActor; dafiyu-house-template 3.0.0, MIT, see CREDITS.md).
+// Adapted from feiyu-room-template public/room/actor3d.js (ChibiActor; MIT, see CREDITS.md).
 // Kept: toon shading (MeshToonMaterial with a stepped gradient map), chibi proportions (big head on a
 // short body), the soft canvas blob shadow, and the walk bob |sin(8t)| * 0.025 with swinging limbs.
 // Changed: far fewer parts, geometries and materials shared by every resident, colours picked from the
