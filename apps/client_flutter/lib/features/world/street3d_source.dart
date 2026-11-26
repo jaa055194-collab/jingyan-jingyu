@@ -135,28 +135,38 @@ class HostStreet3DDataSource implements Street3DDataSource {
         friendsFailed = true;
       }
     }
-    final picked = owners.take(street3dMaxSpaces).toList();
-    final reads = await Future.wait([
-      for (final owner in picked) _read(owner.id),
-    ]);
     final spaces = <Street3DSpace>[];
     var failed = 0;
     Object? firstError;
-    for (var i = 0; i < picked.length; i++) {
-      final (:layout, :error) = reads[i];
-      if (layout != null) {
-        // Consecutive slots, so the villas that exist stand side by side.
-        spaces.add(
-          Street3DSpace(
-            layout: layout,
-            slot: spaces.length,
-            label: picked[i].label,
-            relation: picked[i].relation,
-          ),
-        );
-      } else if (error != null) {
-        failed += 1;
-        firstError ??= error;
+    // Owners are read in order, in batches. An owner with no villa takes no
+    // place, so the next owner's villa can have it; a villa that could not be
+    // read keeps its place, so a host that is down is not asked for more.
+    var next = 0;
+    while (next < owners.length && spaces.length + failed < street3dMaxSpaces) {
+      final batch = owners
+          .skip(next)
+          .take(street3dMaxSpaces - spaces.length - failed)
+          .toList();
+      next += batch.length;
+      final reads = await Future.wait([
+        for (final owner in batch) _read(owner.id),
+      ]);
+      for (var i = 0; i < batch.length; i++) {
+        final (:layout, :error) = reads[i];
+        if (layout != null) {
+          // Consecutive slots, so the villas that exist stand side by side.
+          spaces.add(
+            Street3DSpace(
+              layout: layout,
+              slot: spaces.length,
+              label: batch[i].label,
+              relation: batch[i].relation,
+            ),
+          );
+        } else if (error != null) {
+          failed += 1;
+          firstError ??= error;
+        }
       }
     }
     // Nothing to draw and something failed: report it instead of an empty street.

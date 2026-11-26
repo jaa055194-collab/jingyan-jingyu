@@ -37,14 +37,17 @@ WorldSpaceLayout _layout(
   'updatedAt': '2026-11-25T08:00:00.000Z',
 });
 
-WorldPresenceRecord _record(String id, {String spaceId = 'alice'}) =>
-    WorldPresenceRecord.fromJson({
-      'residentId': id,
-      'spaceId': spaceId,
-      'position': {'x': 1.5, 'y': 0, 'z': -3},
-      'motion': 'walk',
-      'updatedAt': '2026-11-25T08:00:01.000Z',
-    });
+WorldPresenceRecord _record(
+  String id, {
+  String spaceId = 'alice',
+  String updatedAt = '2026-11-25T08:00:01.000Z',
+}) => WorldPresenceRecord.fromJson({
+  'residentId': id,
+  'spaceId': spaceId,
+  'position': {'x': 1.5, 'y': 0, 'z': -3},
+  'motion': 'walk',
+  'updatedAt': updatedAt,
+});
 
 Map<String, Object?> _decode(String json) =>
     jsonDecode(json) as Map<String, Object?>;
@@ -213,52 +216,80 @@ void main() {
       expect((rooms.first as Map)['furniture'], isEmpty);
     });
 
+    test('presence sends each resident with valid ids once', () {
+      final host = Street3DHostMessages(clock: () => _clock);
+      final one = _decode(
+        host.presence(42, [
+          Street3DResident(
+            record: _record('ai1'),
+            label: '小鲸',
+            role: Street3DRole.ownAi,
+          ),
+        ]),
+      );
+      expect(one['type'], 'presence');
+      expect(one['payload'], {
+        't': 42,
+        'residents': [
+          {
+            'residentId': 'ai1',
+            'spaceId': 'alice',
+            'x': 1.5,
+            'y': 0.0,
+            'z': -3.0,
+            'motion': 'walk',
+            'updatedAt': '2026-11-25T08:00:01.000Z',
+            'label': '小鲸',
+            'role': 'own_ai',
+          },
+        ],
+      });
+      final some = _decode(
+        host.presence(43, [
+          Street3DResident(record: _record('bad id')),
+          Street3DResident(record: _record('r0', spaceId: 'bad space')),
+          for (var i = 0; i < 5; i++) Street3DResident(record: _record('r$i')),
+          Street3DResident(record: _record('r1')),
+        ]),
+      );
+      final residents = (some['payload'] as Map)['residents'] as List;
+      expect(
+        [for (final r in residents) (r as Map)['residentId']],
+        ['r0', 'r1', 'r2', 'r3', 'r4'],
+      );
+      expect((residents.first as Map).containsKey('label'), isFalse);
+      expect((residents.first as Map)['role'], 'other');
+    });
+
     test(
-      'presence keeps the first 32 residents with valid, unrepeated ids',
+      'over 32 residents, presence keeps self, own AIs, then the newest',
       () {
+        String other(int i) => 'o${i.toString().padLeft(2, '0')}';
+        const older = '2026-11-25T07:00:00.000Z';
         final host = Street3DHostMessages(clock: () => _clock);
-        final one = _decode(
-          host.presence(42, [
+        final json = _decode(
+          host.presence(44, [
+            for (var i = 0; i < 40; i++)
+              Street3DResident(record: _record(other(i))),
             Street3DResident(
-              record: _record('ai1'),
-              label: '小鲸',
+              record: _record('new', updatedAt: '2026-11-25T08:01:00.000Z'),
+            ),
+            Street3DResident(
+              record: _record('ai1', updatedAt: older),
               role: Street3DRole.ownAi,
+            ),
+            Street3DResident(
+              record: _record('me', updatedAt: older),
+              role: Street3DRole.self,
             ),
           ]),
         );
-        expect(one['type'], 'presence');
-        expect(one['payload'], {
-          't': 42,
-          'residents': [
-            {
-              'residentId': 'ai1',
-              'spaceId': 'alice',
-              'x': 1.5,
-              'y': 0.0,
-              'z': -3.0,
-              'motion': 'walk',
-              'updatedAt': '2026-11-25T08:00:01.000Z',
-              'label': '小鲸',
-              'role': 'own_ai',
-            },
-          ],
-        });
-        final many = _decode(
-          host.presence(43, [
-            Street3DResident(record: _record('bad id')),
-            Street3DResident(record: _record('r0', spaceId: 'bad space')),
-            for (var i = 0; i < 40; i++)
-              Street3DResident(record: _record('r$i')),
-            Street3DResident(record: _record('r1')),
-          ]),
-        );
-        final residents = (many['payload'] as Map)['residents'] as List;
+        final residents = (json['payload'] as Map)['residents'] as List;
+        // Role first, then the newest; equal times go by residentId.
         expect(
           [for (final r in residents) (r as Map)['residentId']],
-          [for (var i = 0; i < 32; i++) 'r$i'],
+          ['me', 'ai1', 'new', for (var i = 0; i < 29; i++) other(i)],
         );
-        expect((residents.first as Map).containsKey('label'), isFalse);
-        expect((residents.first as Map)['role'], 'other');
       },
     );
 

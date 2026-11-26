@@ -200,21 +200,42 @@ class Street3DHostMessages {
 
   /// A full snapshot of the residents in the street's spaces; the page
   /// removes the ones missing from it. [t] must grow with every presence
-  /// message of a page session. The first [street3dMaxResidentsPerMessage]
-  /// residents with valid, unrepeated ids go out.
+  /// message of a page session. Residents with valid, unrepeated ids go out.
+  /// Over [street3dMaxResidentsPerMessage], the ones kept are the account
+  /// itself, then its AIs, then the most recently updated, as PROTOCOL.md
+  /// ranks them; the host does not know where the page's camera is.
   String presence(int t, List<Street3DResident> residents) {
     final seen = <String>{};
-    final kept = [
+    final valid = [
       for (final resident in residents)
         if (isStreet3DId(resident.record.residentId) &&
             isStreet3DId(resident.record.spaceId) &&
             seen.add(resident.record.residentId))
           resident,
-    ].take(street3dMaxResidentsPerMessage);
+    ];
+    if (valid.length > street3dMaxResidentsPerMessage) valid.sort(_byPriority);
     return _encode('presence', {
       't': t,
-      'residents': [for (final resident in kept) resident.toJson()],
+      'residents': [
+        for (final resident in valid.take(street3dMaxResidentsPerMessage))
+          resident.toJson(),
+      ],
     });
+  }
+
+  /// Self, then own AIs, then the newest update, then residentId. The ids are
+  /// unrepeated, so the order is total and the sort needs no stability.
+  static int _byPriority(Street3DResident a, Street3DResident b) {
+    int rank(Street3DRole role) => switch (role) {
+      Street3DRole.self => 0,
+      Street3DRole.ownAi => 1,
+      _ => 2,
+    };
+    final byRole = rank(a.role).compareTo(rank(b.role));
+    if (byRole != 0) return byRole;
+    final byTime = b.record.updatedAt.compareTo(a.record.updatedAt);
+    if (byTime != 0) return byTime;
+    return a.record.residentId.compareTo(b.record.residentId);
   }
 
   /// Stop drawing, for example while the app is in the background.

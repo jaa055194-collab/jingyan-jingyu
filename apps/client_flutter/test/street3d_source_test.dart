@@ -40,10 +40,12 @@ HostStreet3DDataSource _source({
   List<FriendContact> friends = const [],
   Object? friendsError,
   List<ShellOwnedAi> ownAis = const [],
+  List<String>? reads,
 }) => HostStreet3DDataSource(
   selfId: 'alice',
   ownAis: ownAis,
   readLayout: (id) async {
+    reads?.add(id);
     final answer = layouts[id] ?? _missing;
     if (answer is WorldSpaceLayout) return answer;
     throw answer;
@@ -137,6 +139,40 @@ void main() {
     final street = await _source().loadStreet();
     expect(street.spaces, isEmpty);
     expect(street.failedSpaces, 0);
+  });
+
+  test('an owner with no villa leaves its place to the next; a failed one keeps it', () async {
+    String friend(int i) => 'f${i.toString().padLeft(2, '0')}';
+    final reads = <String>[];
+    final street = await _source(
+      friends: [
+        for (var i = 1; i <= 13; i++)
+          FriendContact(
+            accountId: friend(i),
+            displayName: '朋友$i',
+            state: FriendState.friends,
+          ),
+      ],
+      layouts: {
+        'alice': _layout('alice'),
+        for (var i = 2; i <= 13; i++)
+          friend(i): i == 3 ? _down : _layout(friend(i)),
+      },
+      reads: reads,
+    ).loadStreet();
+    // f01 has no villa, so f12 is read in a second batch. f03 could not be
+    // read but keeps its place, so the street is full without f13.
+    expect(reads, ['alice', for (var i = 1; i <= 12; i++) friend(i)]);
+    expect(street.spaceIds, [
+      'alice',
+      friend(2),
+      for (var i = 4; i <= 12; i++) friend(i),
+    ]);
+    expect(street.failedSpaces, 1);
+    expect(
+      [for (final s in street.spaces) s.slot],
+      [for (var i = 0; i < 11; i++) i],
+    );
   });
 
   test('presence merges the spaces and lists each resident once', () async {

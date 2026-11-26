@@ -40,7 +40,7 @@
 2. 宿主每收到一次 `hello`，都按新会话处理：先回 `hello-ack`，再依次发 `theme`（可选）、`layout` 和最近一次 `presence`。页面重载（WebView 重建）时会再发 `hello`，宿主同样全部重发。
 3. 页面在收到 `hello-ack` 之前收到的其它消息先排队，最多 64 条，超出时丢最旧的；排队中的 `presence` 只保留最新一条。收到 `hello-ack` 后，页面按到达顺序处理队列。
 4. 页面处理完 `hello-ack` 和第一条 `layout`、画出首帧后发 `ready`。
-5. 主版本不符：`hello-ack.payload.v` 的 major 不是 1 时，页面发 `error`（`protocol_mismatch`，致命），之后只显示错误提示，忽略后续消息。宿主不支持 `hello.payload.v` 的主版本时，仍然回 `hello-ack`（带宿主自己的版本），由页面进入错误态。宿主收到任何致命 `error` 后，改显示原生降级界面。
+5. 主版本不符：`hello-ack.payload.v` 的 major 不是 1 时，页面发 `error`（`protocol_mismatch`，致命），之后只显示错误提示，忽略后续消息。宿主不支持 `hello.payload.v` 的主版本时，不回 `hello-ack`，也不再发任何消息，直接改显示原生降级界面（提示版本不一致）。宿主收到任何致命 `error` 后，同样改显示原生降级界面。
 6. WebGL 上下文丢失：页面调用 `preventDefault()`，停止渲染循环，发 `error`（`context_lost`，非致命）。上下文恢复后，页面用内存里的 layout 和 presence 重建 GPU 资源，然后发 `ready`（`restored: true`）。宿主不必重发数据，重发也没有副作用。
 7. 宿主界面不可见（切到后台、被别的路由盖住）时发 `pause`，回到前台时发 `resume`。`pause` 期间宿主不发 `presence`。此外，页面在 `document.hidden` 时也会自行停止渲染循环。
 
@@ -95,7 +95,7 @@
 `{t, residents:[Resident, ...]}`
 
 - `t`：宿主的单调毫秒计数（例如 Dart 的 `Stopwatch`），同一页面会话内严格递增。如果 `t` 不大于已处理过的最大值，整条丢弃（latest wins）。
-- 每条都是全量快照：不在本条里的居民从场景中移除。每条最多 32 个居民，多出的丢弃。
+- 每条都是全量快照：不在本条里的居民从场景中移除。每条最多 32 个居民，多出的丢弃。宿主手上超过 32 个时，按第 7 节的优先级挑出 32 个再发；宿主不知道镜头位置，跳过“镜头所在别墅”这一级。
 - `Resident`：`{residentId, spaceId, x, y, z, motion, updatedAt?, label?, role?}`
   - `x`、`y`、`z`：单位米，是 `spaceId` 对应地块的局部坐标（见第 6 节），必须是有限数。宿主机 JSON 里的 `position{x,y,z}` 在这里拍平成三个字段。
   - `motion`：`idle`、`walk`、`sit`、`wave`（FR-40，即宿主机 `PresenceMotion.wire`），不认识的按 `idle` 处理。

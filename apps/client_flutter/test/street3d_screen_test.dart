@@ -302,6 +302,20 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets(
+    'a page of another major version gets no hello-ack, only the notice',
+    (tester) async {
+      final page = await _Harness(_Source(_street())).open(tester);
+      page.say('hello', {..._hello, 'v': '2.0'});
+      await tester.pump();
+      expect(page.sent, isEmpty);
+      expect(page.disposed, isTrue);
+      expect(find.text('3D 页面和应用版本不一致'), findsOneWidget);
+      expect(find.byKey(const Key('street3d-retry')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('a street that cannot be read can be retried', (tester) async {
     final source = _Source(_street())..loadError = _down;
     await _Harness(source).open(tester);
