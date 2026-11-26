@@ -447,4 +447,114 @@ void main() {
       expect(_has(r, Live2DPackageIssueCode.duplicateEntry), isTrue);
     });
   });
+
+  group('validateLive2DPackage: groups', () {
+    String withGroups(Object? groups) => jsonEncode({
+          'Version': 3,
+          'FileReferences': {
+            'Moc': 'avatar.moc3',
+            'Textures': ['tex0.png'],
+          },
+          'Groups': groups,
+        });
+
+    Live2DPackageValidation validate(Object? groups) {
+      final r = validateLive2DPackage(
+        _zip(_validEntries(model3Text: withGroups(groups))),
+      );
+      expect(r.ok, isTrue, reason: r.issues.join(', '));
+      return r;
+    }
+
+    List<Map<String, Object>> groupsOf(List<Live2DModelGroup> groups) => [
+          for (final group in groups) {'name': group.name, 'ids': group.ids},
+        ];
+
+    test('reads names and IDs in file order, whatever the target', () {
+      final r = validate([
+        {
+          'Target': 'Parameter',
+          'Name': 'EyeBlink',
+          'Ids': ['ParamEyeLOpen', 'ParamEyeROpen'],
+        },
+        {'Target': 'Part', 'Name': 'LipSync', 'Ids': ['ParamMouthOpenY']},
+        {'Name': 'LipSync', 'Ids': <String>[]},
+      ]);
+      expect(groupsOf(r.groups), [
+        {'name': 'EyeBlink', 'ids': ['ParamEyeLOpen', 'ParamEyeROpen']},
+        {'name': 'LipSync', 'ids': ['ParamMouthOpenY']},
+        {'name': 'LipSync', 'ids': <String>[]},
+      ]);
+      expect(() => r.groups.clear(), throwsUnsupportedError);
+      expect(() => r.groups.first.ids.clear(), throwsUnsupportedError);
+    });
+
+    test('skips entries and IDs that no lookup can match', () {
+      final long = 'x' * 257;
+      final r = validate([
+        'EyeBlink',
+        {'Ids': ['A']},
+        {'Name': '', 'Ids': ['A']},
+        {'Name': long, 'Ids': ['A']},
+        {'Name': 7, 'Ids': ['A']},
+        {'Name': 'LipSync', 'Ids': 'ParamMouthOpenY'},
+        {'Name': 'EyeBlink', 'Ids': ['A', 3, '', long, null, 'B', 'x' * 256]},
+      ]);
+      expect(groupsOf(r.groups), [
+        {'name': 'LipSync', 'ids': <String>[]},
+        {'name': 'EyeBlink', 'ids': ['A', 'B', 'x' * 256]},
+      ]);
+    });
+
+    test('gives no groups for a Groups value it cannot read whole', () {
+      const max = Live2DModelInfo.maxEntries;
+      for (final groups in [
+        null,
+        'EyeBlink',
+        {'Name': 'EyeBlink', 'Ids': ['A']},
+        [
+          for (var i = 0; i <= max; i++) {'Name': 'G$i', 'Ids': <String>[]},
+        ],
+        [
+          {'Name': 'EyeBlink', 'Ids': List.filled(max, 'A')},
+          {'Name': 'LipSync', 'Ids': ['B']},
+        ],
+      ]) {
+        expect(validate(groups).groups, isEmpty);
+      }
+      final atLimit = validate([
+        {'Name': 'EyeBlink', 'Ids': List.filled(max - 1, 'A')},
+        {'Name': 'LipSync', 'Ids': ['B']},
+      ]);
+      expect(atLimit.groups.map((group) => group.ids.length), [max - 1, 1]);
+    });
+
+    test('leaves groups empty for an invalid package', () {
+      final r = validateLive2DPackage(_zip([
+        _textFile(
+          'model/avatar.model3.json',
+          withGroups([
+            {'Name': 'LipSync', 'Ids': ['ParamMouthOpenY']},
+          ]),
+        ),
+        _bytesFile('model/avatar.moc3', _moc3()),
+      ]));
+      expect(r.ok, isFalse);
+      expect(r.groups, isEmpty);
+    });
+
+    test('hands the groups to the preview without writing them out', () {
+      final bundle = prepareLive2DPreview(_zip(_validEntries(
+        model3Text: withGroups([
+          {'Target': 'Parameter', 'Name': 'LipSync', 'Ids': ['ParamMouthOpenY']},
+        ]),
+      )));
+      expect(groupsOf(bundle.groups), [
+        {'name': 'LipSync', 'ids': ['ParamMouthOpenY']},
+      ]);
+      final manifest =
+          jsonDecode(utf8.decode(bundle.files[bundle.model3Name]!));
+      expect(manifest, isNot(contains('Groups')));
+    });
+  });
 }

@@ -14,6 +14,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart' as crypto;
 
+import 'live2d_model_info.dart';
 import 'live2d_preview_inflate_stub.dart'
     if (dart.library.io) 'live2d_preview_inflate_io.dart';
 import 'plugin_package.dart';
@@ -21,11 +22,16 @@ import 'plugin_package.dart';
 /// Checked renderer inputs only. Names are generated, never taken from the ZIP.
 /// This is not a fully decoded model or a ready-to-render signal.
 final class Live2DPreviewBundle {
-  Live2DPreviewBundle._(Map<String, Uint8List> files)
+  Live2DPreviewBundle._(Map<String, Uint8List> files, this.groups)
       : files = Map.unmodifiable(files);
 
   String get model3Name => 'model.model3.json';
   final Map<String, Uint8List> files;
+
+  /// The package manifest's `Groups`, as [Live2DPackageValidation.groups]
+  /// reads them, for mapping suggestions (`Live2DParamProposal`). The
+  /// generated manifest leaves them out.
+  final List<Live2DModelGroup> groups;
 }
 
 /// Prepare an isolated static preview, without extracting arbitrary ZIP entries.
@@ -47,7 +53,7 @@ Live2DPreviewBundle prepareLive2DPreview(
   if (!result.ok) {
     throw FormatException('Live2D preview rejected: ${result.issues.first.code.name}');
   }
-  return Live2DPreviewBundle._(output);
+  return Live2DPreviewBundle._(output, result.groups);
 }
 
 /// Safety and resource limits for a local Live2D package.
@@ -113,6 +119,25 @@ class Live2DPackageIssue {
       path == null ? '${code.name}: $message' : '${code.name}($path): $message';
 }
 
+/// A `Groups` entry of a model3 manifest.
+///
+/// The Cubism framework looks a group up by [name], such as `EyeBlink` or
+/// `LipSync`, takes the first group with that name and drives every one of its
+/// [ids]; it does not read the entry's `Target` (`CubismModelSettingJson` in
+/// Live2D/CubismWebFramework).
+final class Live2DModelGroup {
+  Live2DModelGroup({required this.name, required Iterable<String> ids})
+      : ids = List.unmodifiable(ids);
+
+  final String name;
+
+  /// The group's IDs in file order.
+  final List<String> ids;
+
+  @override
+  String toString() => 'Live2DModelGroup($name, $ids)';
+}
+
 class Live2DPackageValidation {
   const Live2DPackageValidation._({
     required this.ok,
@@ -122,6 +147,7 @@ class Live2DPackageValidation {
     required this.totalPixels,
     required this.sha256Hex,
     required this.issues,
+    this.groups = const [],
   });
 
   final bool ok;
@@ -133,6 +159,16 @@ class Live2DPackageValidation {
   final int totalPixels;
   final String sha256Hex;
   final List<Live2DPackageIssue> issues;
+
+  /// The manifest's `Groups` in file order, or empty unless [ok].
+  ///
+  /// Groups only feed mapping suggestions, so they never fail validation. An
+  /// entry without a string `Name` of 1 to [Live2DModelInfo.maxIdLength]
+  /// characters is skipped, and so is any ID that is not such a string: no
+  /// group lookup or runtime ID can match them. A `Groups` value that is not a
+  /// list, or that holds more than [Live2DModelInfo.maxEntries] entries or IDs
+  /// in total, gives no groups.
+  final List<Live2DModelGroup> groups;
 
   bool get hasIssues => issues.isNotEmpty;
 
@@ -400,6 +436,32 @@ _PreScan _preScanCentralDirectory(
     blocking = true;
   }
   return _PreScan(!blocking, issues);
+}
+
+/// Reads a model3 `Groups` value by the rules of
+/// [Live2DPackageValidation.groups].
+List<Live2DModelGroup> _readGroups(Object? raw) {
+  const maxEntries = Live2DModelInfo.maxEntries;
+  bool isId(Object? value) =>
+      value is String &&
+      value.isNotEmpty &&
+      value.length <= Live2DModelInfo.maxIdLength;
+  if (raw is! List || raw.length > maxEntries) return const [];
+  final groups = <Live2DModelGroup>[];
+  var idCount = 0;
+  for (final entry in raw) {
+    if (entry is! Map<String, Object?>) continue;
+    final ids = entry['Ids'];
+    final rawIds = ids is List ? ids : const <Object?>[];
+    idCount += rawIds.length;
+    if (idCount > maxEntries) return const [];
+    final name = entry['Name'];
+    if (name is! String || !isId(name)) continue;
+    groups.add(
+      Live2DModelGroup(name: name, ids: rawIds.whereType<String>().where(isId)),
+    );
+  }
+  return List.unmodifiable(groups);
 }
 
 /// Validate a local Live2D package. Pure function: deterministic for one input.
@@ -838,5 +900,6 @@ Live2DPackageValidation _validateLive2DPackage(
     totalPixels: totalPixels,
     sha256Hex: sha256Hex,
     issues: List<Live2DPackageIssue>.unmodifiable(issues),
+    groups: ok ? _readGroups(root['Groups']) : const [],
   );
 }
