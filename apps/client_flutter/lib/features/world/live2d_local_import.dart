@@ -58,7 +58,10 @@ Future<Live2DImportSession?> openLocalLive2DZip({
       await temporaryZip.delete();
       temporaryZip = null;
     }
-    return Live2DImportSession(stage.dispose);
+    return Live2DImportSession(
+      stage.dispose,
+      previewDirectory: stage.directory.path,
+    );
   } on Live2DPreviewCleanupFailure catch (failure) {
     await _tryCleanup(failure.retryCleanup);
     throw const Live2DImportFailure('无法暂存模型包。');

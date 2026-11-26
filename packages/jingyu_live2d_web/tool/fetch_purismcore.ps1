@@ -19,7 +19,9 @@ if ($actual -ne $expected) {
 $extract = Join-Path $env:TEMP 'PurismCore-v1.1.0-Web'
 if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
 Expand-Archive -LiteralPath $zip -DestinationPath $extract
+# The pinned release zip holds a single top-level folder.
+$release = Join-Path $extract 'PurismCore-v1.1.0-Web'
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
-Copy-Item -LiteralPath (Join-Path $extract 'Core/purismcore.js') -Destination (Join-Path $dest 'purismcore.js') -Force
-Copy-Item -LiteralPath (Join-Path $extract 'LICENSE') -Destination (Join-Path $dest 'LICENSE') -Force
+Copy-Item -LiteralPath (Join-Path $release 'Core/purismcore.js') -Destination (Join-Path $dest 'purismcore.js') -Force
+Copy-Item -LiteralPath (Join-Path $release 'LICENSE') -Destination (Join-Path $dest 'LICENSE') -Force
 Write-Host "PurismCore runtime installed to $dest"

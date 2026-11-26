@@ -59,6 +59,32 @@ void main() {
   );
 
   test(
+    'the session names its stage directly inside the preview directory',
+    () async {
+      // Android serves only directories inside <cacheDir>/live2d-preview,
+      // the directory that getLive2DPreviewDirectory returns.
+      final source = File.fromUri(parent.uri.resolve('selected.zip'));
+      await source.writeAsBytes(base64Decode(_previewZip));
+      final session = await openLocalLive2DZip(
+        platform: _Picker(parent.path, {
+          'path': source.path,
+          'temporary': false,
+        }),
+      );
+      final stage = Directory(session!.previewDirectory!);
+      expect(stage.isAbsolute, isTrue);
+      expect(stage.parent.path, parent.path);
+      // The file the preview view loads from the served base URL.
+      expect(
+        await File.fromUri(stage.uri.resolve('model.model3.json')).exists(),
+        isTrue,
+      );
+      await session.close();
+      expect(await stage.exists(), isFalse);
+    },
+  );
+
+  test(
     'a pending picker blocks overlapping imports and releases its guard',
     () async {
       final pending = Completer<Map<Object?, Object?>?>();

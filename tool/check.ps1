@@ -37,17 +37,17 @@ foreach ($p in $packages) {
   }
 }
 
-# The viewer's protocol behaviour needs a JavaScript runtime; the GitHub
-# windows-latest image provides Node.js.
+# The viewer's protocol behaviour and the renderer's texture budget need a
+# JavaScript runtime; the GitHub windows-latest image provides Node.js.
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
-  $failed += 'node (viewer behaviour tests)'
+  $failed += 'node (viewer behaviour and texture budget tests)'
 } else {
-  Write-Host '=== packages/jingyu_live2d_web (viewer behaviour) ==='
+  Write-Host '=== packages/jingyu_live2d_web (viewer behaviour, texture budget) ==='
   Push-Location (Join-Path $root 'packages/jingyu_live2d_web')
   try {
-    & $node.Source --test test/viewer_behavior.test.cjs
-    if ($LASTEXITCODE -ne 0) { $failed += 'jingyu_live2d_web (viewer behaviour)' }
+    & $node.Source --test test/viewer_behavior.test.cjs test/texture_budget.test.cjs
+    if ($LASTEXITCODE -ne 0) { $failed += 'jingyu_live2d_web (node tests)' }
   } finally {
     Pop-Location
   }

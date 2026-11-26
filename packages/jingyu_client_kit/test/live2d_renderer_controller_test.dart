@@ -9,6 +9,10 @@ final class FakeLive2DRendererHost implements Live2DRendererHost {
   final List<Map<String, Object?>> commands = <Map<String, Object?>>[];
   Object? sendError;
 
+  /// Runs inside [send] after the command is recorded and before [send]
+  /// completes, so a test can deliver events while a command is in flight.
+  Future<void> Function(Map<String, Object?> command)? onSend;
+
   @override
   Stream<Map<String, Object?>> get events => _events.stream;
 
@@ -17,9 +21,13 @@ final class FakeLive2DRendererHost implements Live2DRendererHost {
     final error = sendError;
     if (error != null) throw error;
     commands.add(command);
+    final hook = onSend;
+    if (hook != null) await hook(command);
   }
 
   void emit(Map<String, Object?> event) => _events.add(event);
+
+  void emitError(Object error) => _events.addError(error);
 
   Future<void> close() => _events.close();
 }
@@ -201,5 +209,197 @@ void main() {
       await expectation;
       expect(controller.state, Live2DPreviewState.disposed);
     });
+
+    Future<void> startReady() async {
+      final ready = controller.start(
+        modelId: 'model.a',
+        model3Url: 'http://127.0.0.1:8000/model.model3.json',
+        textureUrls: const [],
+        profileRev: 1,
+      );
+      host.emit({'event': 'ready', 'modelId': 'model.a', 'profileRev': 1});
+      await ready;
+      expect(controller.state, Live2DPreviewState.ready);
+    }
+
+    test('host errors before a load are ignored', () async {
+      host.emitError(StateError('stray'));
+      await pumpEventQueue();
+      expect(controller.state, Live2DPreviewState.idle);
+      expect(controller.failure, isNull);
+    });
+
+    test(
+      'a viewer error after ready fails the preview with its message',
+      () async {
+        await startReady();
+        host.emit({'event': 'error', 'message': 'WebGL context lost'});
+        await pumpEventQueue();
+        expect(controller.state, Live2DPreviewState.failed);
+        expect(controller.error, 'WebGL context lost');
+        expect(controller.failure?.message, 'WebGL context lost');
+        expect(controller.failure?.timedOut, isFalse);
+        expect(controller.failure?.cause, isNull);
+      },
+    );
+
+    test(
+      'a host stream error after ready fails the preview with its cause',
+      () async {
+        await startReady();
+        final gone = StateError('render process gone');
+        host.emitError(gone);
+        await pumpEventQueue();
+        expect(controller.state, Live2DPreviewState.failed);
+        expect(controller.error, contains('render process gone'));
+        expect(controller.failure?.cause, same(gone));
+      },
+    );
+
+    test(
+      'a host stream error while loading rejects start with its cause',
+      () async {
+        final loading = controller.start(
+          modelId: 'model.a',
+          model3Url: 'http://127.0.0.1:8000/model.model3.json',
+          textureUrls: const [],
+          profileRev: 1,
+        );
+        final failure = StateError('page load failed');
+        host.emitError(failure);
+        await expectLater(
+          loading,
+          throwsA(
+            isA<Live2DPreviewException>().having(
+              (error) => error.cause,
+              'cause',
+              same(failure),
+            ),
+          ),
+        );
+        expect(controller.state, Live2DPreviewState.failed);
+        expect(controller.failure?.cause, same(failure));
+      },
+    );
+
+    test(
+      'frame pings and repeated ready events after ready change nothing',
+      () async {
+        await startReady();
+        host
+          ..emit({'event': 'frame'})
+          ..emit({'event': 'ready', 'modelId': 'model.a', 'profileRev': 1});
+        await pumpEventQueue();
+        expect(controller.state, Live2DPreviewState.ready);
+        expect(controller.failure, isNull);
+      },
+    );
+
+    test('a failure after ready can be retried', () async {
+      await startReady();
+      host.emit({'event': 'error', 'message': 'WebGL context lost'});
+      await pumpEventQueue();
+      expect(controller.state, Live2DPreviewState.failed);
+
+      final again = controller.retry();
+      expect(controller.state, Live2DPreviewState.loading);
+      expect(controller.failure, isNull);
+      expect(
+        host.commands.where((command) => command['cmd'] == 'load'),
+        hasLength(2),
+      );
+      host.emit({'event': 'ready', 'modelId': 'model.a', 'profileRev': 1});
+      await again;
+      expect(controller.state, Live2DPreviewState.ready);
+    });
+
+    test('states reports each change in order and close() ends it', () async {
+      expect(controller.states.isBroadcast, isTrue);
+      final seen = controller.states.toList();
+      await startReady();
+      host.emit({'event': 'error', 'message': 'WebGL context lost'});
+      await pumpEventQueue();
+      final again = controller.retry();
+      host.emit({'event': 'ready', 'modelId': 'model.a', 'profileRev': 1});
+      await again;
+      await controller.close();
+      expect(await seen, [
+        Live2DPreviewState.loading,
+        Live2DPreviewState.ready,
+        Live2DPreviewState.failed,
+        Live2DPreviewState.loading,
+        Live2DPreviewState.ready,
+        Live2DPreviewState.disposed,
+      ]);
+    });
+
+    test(
+      'a ready that lands while the load command is in flight does not '
+      'time out later',
+      () async {
+        final controller = Live2DPreviewController(
+          host: host,
+          firstFrameTimeout: const Duration(milliseconds: 30),
+        );
+        addTearDown(controller.close);
+        host.onSend = (command) async {
+          if (command['cmd'] != 'load') return;
+          host.emit({'event': 'ready', 'modelId': 'model.a', 'profileRev': 1});
+          await pumpEventQueue();
+        };
+        await controller.start(
+          modelId: 'model.a',
+          model3Url: 'http://127.0.0.1:8000/model.model3.json',
+          textureUrls: const [],
+          profileRev: 1,
+        );
+        expect(controller.state, Live2DPreviewState.ready);
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(controller.state, Live2DPreviewState.ready);
+        expect(host.commands.map((command) => command['cmd']).toList(), [
+          'load',
+        ]);
+      },
+    );
+
+    test(
+      'a late send failure from a superseded load does not fail the newer one',
+      () async {
+        final firstSend = Completer<void>();
+        host.onSend = (command) => host.commands.length == 1
+            ? firstSend.future
+            : Future<void>.value();
+        final first = controller.start(
+          modelId: 'model.a',
+          model3Url: 'http://127.0.0.1:8000/a.model3.json',
+          textureUrls: const [],
+          profileRev: 1,
+        );
+        final superseded = expectLater(
+          first,
+          throwsA(
+            isA<Live2DPreviewException>().having(
+              (error) => error.message,
+              'message',
+              'preview superseded',
+            ),
+          ),
+        );
+        final second = controller.start(
+          modelId: 'model.b',
+          model3Url: 'http://127.0.0.1:8000/b.model3.json',
+          textureUrls: const [],
+          profileRev: 1,
+        );
+        firstSend.completeError(StateError('old webview gone'));
+        await superseded;
+        await pumpEventQueue();
+        expect(controller.state, Live2DPreviewState.loading);
+
+        host.emit({'event': 'ready', 'modelId': 'model.b', 'profileRev': 1});
+        await second;
+        expect(controller.state, Live2DPreviewState.ready);
+      },
+    );
   });
 }

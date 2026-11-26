@@ -1,12 +1,20 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
+
+import 'live2d_preview_view.dart';
 
 /// Owns temporary resources until the world panel closes or releases them.
 final class Live2DImportSession {
-  const Live2DImportSession(this.close);
+  const Live2DImportSession(this.close, {this.previewDirectory});
 
   final Future<void> Function() close;
+
+  /// Absolute path of the staged preview inside the app's `live2d-preview`
+  /// cache directory, shown until [close]; null when there is nothing to
+  /// show. Only Android has a preview host; other platforms ignore it.
+  final String? previewDirectory;
 }
 
 final class Live2DImportFailure implements Exception {
@@ -33,6 +41,13 @@ class _Live2DImportPanelState extends State<Live2DImportPanel>
 
   @override
   bool get wantKeepAlive => true;
+
+  /// The stage to show. Only Android has a preview host, so elsewhere the
+  /// panel keeps the prepared-files text and creates no platform view.
+  String? get _previewDirectory =>
+      defaultTargetPlatform == TargetPlatform.android
+      ? _session?.previewDirectory
+      : null;
 
   Future<void> _open() async {
     if (_busy || _session != null || !widget.enabled) return;
@@ -113,11 +128,25 @@ class _Live2DImportPanelState extends State<Live2DImportPanel>
             child: LinearProgressIndicator(semanticsLabel: '正在处理本机模型包'),
           ),
         if (_session != null) ...[
+          // Hidden while the files are cleaned, so the view goes first.
+          if (_previewDirectory case final directory? when !_busy) ...[
+            const SizedBox(height: 4),
+            Card(
+              key: const Key('live2d-import-preview'),
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                height: 280,
+                child: Live2DPreviewView(directory: directory),
+              ),
+            ),
+          ],
           Semantics(
             liveRegion: true,
-            child: const Text(
-              '已准备临时预览文件，未显示或启用形象。',
-              key: Key('live2d-import-prepared'),
+            child: Text(
+              _previewDirectory == null
+                  ? '已准备临时预览文件，未显示或启用形象。'
+                  : '仅本机临时预览，未启用形象。',
+              key: const Key('live2d-import-prepared'),
             ),
           ),
           TextButton(

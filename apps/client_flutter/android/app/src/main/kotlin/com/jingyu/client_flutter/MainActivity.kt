@@ -57,6 +57,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        flutterEngine.plugins.add(Live2DViewPlugin())
         pinStore = PinStore(this)
         pendingShare = readShare(intent)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "jingyu/platform")

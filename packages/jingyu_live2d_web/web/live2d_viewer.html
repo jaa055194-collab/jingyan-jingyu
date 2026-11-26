@@ -12,6 +12,9 @@
   <body>
     <canvas id="stage"></canvas>
     <script src="runtime/purismcore/purismcore.js"></script>
+    <!-- Texture budget (window.Live2DTextureBudget) must load before the
+         renderer: prepare() uses it to fit textures into phone GPU memory. -->
+    <script src="live2d_texture_budget.js"></script>
     <!-- WebGL renderer adapter must load before the protocol layer so that
          window.Live2DRenderer exists when the viewer starts drawing. -->
     <script src="live2d_renderer_webgl.js"></script>

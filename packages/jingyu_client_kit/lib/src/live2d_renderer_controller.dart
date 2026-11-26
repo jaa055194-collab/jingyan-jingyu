@@ -8,10 +8,19 @@ enum Live2DPreviewState { idle, loading, ready, failed, disposed }
 /// A failed or cancelled preview. [timedOut] distinguishes a missing first
 /// frame from an explicit viewer error.
 final class Live2DPreviewException implements Exception {
-  const Live2DPreviewException(this.message, {this.timedOut = false});
+  const Live2DPreviewException(
+    this.message, {
+    this.timedOut = false,
+    this.cause,
+  });
 
   final String message;
   final bool timedOut;
+
+  /// The error behind the failure when there is one: a host stream error, a
+  /// failed send or an invalid viewer event. Null for errors the viewer
+  /// reported itself, for timeouts and for cancellations.
+  final Object? cause;
 
   @override
   String toString() => 'Live2DPreviewException: $message';
@@ -22,6 +31,9 @@ final class Live2DPreviewException implements Exception {
 /// Commands are plain maps so the same controller can drive an Android
 /// WebView, a Windows WebView2 host or a fake in tests. Implementations must
 /// not add model bytes: model files stay behind the local asset server.
+///
+/// Errors on [events] are host failures, such as a page that failed to load
+/// or a renderer process that went away.
 abstract interface class Live2DRendererHost {
   Stream<Map<String, Object?>> get events;
   Future<void> send(Map<String, Object?> command);
@@ -33,6 +45,11 @@ abstract interface class Live2DRendererHost {
 /// A preview is ready only after the viewer reports that its renderer prepared
 /// and drew the first frame. The controller never turns a core update into a
 /// ready state by itself.
+///
+/// A ready preview still fails when the viewer reports an error (for example a
+/// lost WebGL context) or the host reports a failure. The failure is reported
+/// once, through [state], [failure] and [states], and [retry] loads the model
+/// again. Events and host errors while idle, failed or disposed are ignored.
 final class Live2DPreviewController {
   Live2DPreviewController({
     required this.host,
@@ -45,18 +62,31 @@ final class Live2DPreviewController {
   final Duration firstFrameTimeout;
   final Live2DRendererBridge _bridge;
   late final StreamSubscription<Map<String, Object?>> _subscription;
+  final StreamController<Live2DPreviewState> _states =
+      StreamController<Live2DPreviewState>.broadcast();
 
   Timer? _timer;
   Completer<void>? _pending;
   Live2DPreviewState _state = Live2DPreviewState.idle;
-  String? _error;
+  Live2DPreviewException? _failure;
   _LoadRequest? _lastRequest;
 
   Live2DPreviewState get state => _state;
-  String? get error => _error;
+
+  /// The message of [failure], or null when the preview has not failed.
+  String? get error => _failure?.message;
+
+  /// Why the preview is [Live2DPreviewState.failed]; null in other states.
+  Live2DPreviewException? get failure => _failure;
+
+  /// Each state change, in order. A broadcast stream that ends after [close]
+  /// reports [Live2DPreviewState.disposed].
+  Stream<Live2DPreviewState> get states => _states.stream;
 
   /// Loads [model3Url] and its textures and completes when the first frame is
-  /// ready. Throws [Live2DPreviewException] on a viewer error or timeout.
+  /// ready. Throws [Live2DPreviewException] on a viewer error or timeout, and
+  /// when a newer [start] or [retry] supersedes this load or [close] cancels
+  /// it.
   Future<void> start({
     required String modelId,
     required String model3Url,
@@ -92,18 +122,16 @@ final class Live2DPreviewController {
   /// repeatedly.
   Future<void> close() async {
     if (_state == Live2DPreviewState.disposed) return;
-    _timer?.cancel();
-    _timer = null;
-    await _subscription.cancel();
-
+    _cancelTimer();
     final pending = _pending;
     _pending = null;
+    _failure = null;
+    _setState(Live2DPreviewState.disposed);
+    unawaited(_states.close());
     if (pending != null && !pending.isCompleted) {
       pending.completeError(const Live2DPreviewException('preview closed'));
     }
-
-    _state = Live2DPreviewState.disposed;
-    _error = null;
+    await _subscription.cancel();
     try {
       await host.send(_bridge.disposeCommand());
     } catch (_) {
@@ -112,20 +140,29 @@ final class Live2DPreviewController {
     _bridge.dispose();
   }
 
-  Future<void> _start(_LoadRequest request) async {
-    _timer?.cancel();
-    _timer = null;
-    final pending = _pending;
-    if (pending != null && !pending.isCompleted) {
-      pending.completeError(const Live2DPreviewException('preview superseded'));
+  /// Returns the completer's own future, so callers can listen before a
+  /// superseded or failed load completes it with an error.
+  Future<void> _start(_LoadRequest request) {
+    _cancelTimer();
+    final previous = _pending;
+    if (previous != null && !previous.isCompleted) {
+      previous.completeError(
+        const Live2DPreviewException('preview superseded'),
+      );
     }
     final completer = Completer<void>();
     _pending = completer;
-    _error = null;
+    _failure = null;
+    unawaited(_load(request, completer));
+    return completer.future;
+  }
 
+  /// Runs synchronously up to the send, so callers see the loading state and
+  /// the load command as soon as [start] or [retry] returns.
+  Future<void> _load(_LoadRequest request, Completer<void> completer) async {
     try {
       _bridge.markLoading(request.modelId);
-      _state = Live2DPreviewState.loading;
+      _setState(Live2DPreviewState.loading);
       await host.send(
         _bridge.loadCommand(
           modelId: request.modelId,
@@ -135,22 +172,44 @@ final class Live2DPreviewController {
         ),
       );
     } catch (error, stackTrace) {
-      _fail('could not start the preview: $error', stackTrace: stackTrace);
-      return completer.future;
+      // A send that fails after a newer load or close took over is stale.
+      if (identical(_pending, completer)) {
+        _fail(
+          'could not start the preview: $error',
+          cause: error,
+          stackTrace: stackTrace,
+        );
+      }
+      return;
     }
-
+    // The first frame may have arrived while the command was in flight; only
+    // a load that is still waiting gets a timeout.
+    if (!identical(_pending, completer)) return;
     _timer = Timer(firstFrameTimeout, () {
-      _fail('first frame timed out', timedOut: true, sendDispose: true);
+      if (identical(_pending, completer)) {
+        _fail('first frame timed out', timedOut: true, sendDispose: true);
+      }
     });
-    return completer.future;
   }
 
   void _onEvent(Map<String, Object?> event) {
-    if (_state != Live2DPreviewState.loading) return;
+    if (_state == Live2DPreviewState.loading) {
+      _onLoadingEvent(event);
+    } else if (_state == Live2DPreviewState.ready) {
+      _onReadyEvent(event);
+    }
+    // Idle, failed or disposed: stray and late events change nothing.
+  }
+
+  void _onLoadingEvent(Map<String, Object?> event) {
     try {
       _bridge.handleEvent(event);
-    } catch (error) {
-      _fail('invalid viewer event: $error');
+    } catch (error, stackTrace) {
+      _fail(
+        'invalid viewer event: $error',
+        cause: error,
+        stackTrace: stackTrace,
+      );
       return;
     }
     switch (_bridge.state) {
@@ -163,16 +222,34 @@ final class Live2DPreviewController {
     }
   }
 
-  void _onHostError(Object error) {
-    if (_state != Live2DPreviewState.loading) return;
-    _fail('renderer channel failed: $error');
+  /// After the first frame only errors matter: frame pings and repeated ready
+  /// events change nothing.
+  void _onReadyEvent(Map<String, Object?> event) {
+    if (event['event'] != 'error') return;
+    final message = event['message'];
+    _fail(
+      message is String && message.trim().isNotEmpty
+          ? message
+          : 'viewer reported an error',
+    );
+  }
+
+  void _onHostError(Object error, StackTrace stackTrace) {
+    if (_state != Live2DPreviewState.loading &&
+        _state != Live2DPreviewState.ready) {
+      return; // Before a load, after a failure or after close.
+    }
+    _fail(
+      'renderer channel failed: $error',
+      cause: error,
+      stackTrace: stackTrace,
+    );
   }
 
   void _succeed() {
-    _timer?.cancel();
-    _timer = null;
-    _state = Live2DPreviewState.ready;
-    _error = null;
+    _cancelTimer();
+    _failure = null;
+    _setState(Live2DPreviewState.ready);
     final pending = _pending;
     _pending = null;
     if (pending != null && !pending.isCompleted) pending.complete();
@@ -182,27 +259,40 @@ final class Live2DPreviewController {
     String message, {
     bool timedOut = false,
     bool sendDispose = false,
+    Object? cause,
     StackTrace? stackTrace,
   }) {
     if (_state == Live2DPreviewState.disposed) return;
-    _timer?.cancel();
-    _timer = null;
+    _cancelTimer();
     try {
       _bridge.markError(message);
     } catch (_) {
-      // Already ready or error: keep the controller state authoritative.
+      // Not loading or ready: keep the controller state authoritative.
     }
-    _state = Live2DPreviewState.failed;
-    _error = message;
+    final failure = Live2DPreviewException(
+      message,
+      timedOut: timedOut,
+      cause: cause,
+    );
+    _failure = failure;
+    _setState(Live2DPreviewState.failed);
     final pending = _pending;
     _pending = null;
     if (pending != null && !pending.isCompleted) {
-      pending.completeError(
-        Live2DPreviewException(message, timedOut: timedOut),
-        stackTrace,
-      );
+      pending.completeError(failure, stackTrace);
     }
     if (sendDispose) unawaited(_sendDispose());
+  }
+
+  void _setState(Live2DPreviewState next) {
+    if (_state == next) return;
+    _state = next;
+    if (!_states.isClosed) _states.add(next);
+  }
+
+  void _cancelTimer() {
+    _timer?.cancel();
+    _timer = null;
   }
 
   Future<void> _sendDispose() async {

@@ -22,12 +22,43 @@ const RENDERER = fs.readFileSync(
 );
 
 function createHarness(options = {}) {
+  // `posted` (parent.postMessage) and `channelPosts` (Live2DBridge) hold every
+  // event except `boot`; `log` holds all events in the order they were posted.
   const posted = [];
   const channelPosts = [];
+  const log = [];
   const messageListeners = [];
+  const bridgeListeners = [];
+  const canvasListeners = {};
   const rafCallbacks = new Map();
   const rendererCalls = [];
   let nextRafId = 1;
+  let draws = 0;
+
+  const record = (target, message) => {
+    log.push(message);
+    if (message.event !== 'boot') target.push(message);
+  };
+
+  // One canvas for the whole run, so tests can fire WebGL context events.
+  const canvas = {
+    width: 300,
+    height: 300,
+    addEventListener(type, listener) {
+      (canvasListeners[type] = canvasListeners[type] || []).push(listener);
+    },
+  };
+  const fireCanvas = (type) => {
+    const event = {
+      type,
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+    };
+    for (const listener of canvasListeners[type] || []) listener(event);
+    return event;
+  };
 
   const core = {
     Moc: {
@@ -56,14 +87,19 @@ function createHarness(options = {}) {
   if (options.noCore) delete core.Moc;
 
   const renderer = {
-    prepare: async (canvas, model, textureUrls) => {
+    prepare: async (target, model, textureUrls) => {
       rendererCalls.push('renderer.prepare');
+      if (options.loseContextInPrepare) fireCanvas('webglcontextlost');
+      if (options.restoreContextInPrepare) fireCanvas('webglcontextrestored');
       if (options.prepareFails) throw new Error('texture upload failed');
       assert.equal(textureUrls.length, 1, 'one texture expected');
+      return options.prepareResult || { ok: true };
     },
     draw: () => {
       rendererCalls.push('renderer.draw');
+      draws += 1;
       if (options.drawFails) throw new Error('first draw failed');
+      if (draws === options.drawFailsAt) throw new Error('draw ' + draws + ' failed');
     },
     setExpression: (name) => rendererCalls.push('renderer.expression:' + name),
     setMotion: (group, index) =>
@@ -86,16 +122,23 @@ function createHarness(options = {}) {
     },
   };
   if (!options.noRenderer) window.Live2DRenderer = renderer;
-  if (options.bridgeChannel) {
+  if (options.bridgeChannel || options.bridgeListener) {
     window.Live2DBridge = {
-      postMessage: (text) => channelPosts.push(JSON.parse(text)),
+      postMessage: (text) => record(channelPosts, JSON.parse(text)),
+    };
+  }
+  if (options.bridgeListener) {
+    // Shape of an androidx.webkit WebMessageListener object: the host's
+    // replies arrive as `message` events whose data is the posted string.
+    window.Live2DBridge.addEventListener = (type, listener) => {
+      if (type === 'message') bridgeListeners.push(listener);
     };
   }
   if (!options.noCore) window.PurismCore = core;
-  window.parent = { postMessage: (message) => posted.push(message) };
+  window.parent = { postMessage: (message) => record(posted, message) };
 
   const document = {
-    getElementById: () => ({ width: 300, height: 300 }),
+    getElementById: () => canvas,
   };
 
   const fetchStub = async (url) => {
@@ -146,10 +189,17 @@ function createHarness(options = {}) {
   return {
     posted,
     channelPosts,
+    log,
     rendererCalls,
     flush,
+    fireCanvas,
     send(message) {
       window.__live2dReceive(message);
+    },
+    sendViaBridge(message) {
+      for (const listener of bridgeListeners) {
+        listener({ data: JSON.stringify(message) });
+      }
     },
     flushOneFrame() {
       const entry = rafCallbacks.entries().next();
@@ -168,6 +218,10 @@ const loadCommand = {
   textureUrls: ['http://127.0.0.1:9/texture-0.png'],
   profileRev: 1,
 };
+
+// 'ready', or 'error:<code>' for an error event.
+const summary = (messages) =>
+  messages.map((message) => message.event + (message.code ? ':' + message.code : ''));
 
 test('load reports ready only after the first draw succeeds', async () => {
   const harness = createHarness();
@@ -294,4 +348,114 @@ test('the WebGL adapter exposes its public surface without a GPU', () => {
   for (const member of ['prepare', 'draw', 'setExpression', 'setMotion', 'dispose']) {
     assert.equal(typeof surface[member], 'function', member);
   }
+});
+
+test('boot is posted once, before any other event', async () => {
+  const harness = createHarness();
+  assert.deepEqual(summary(harness.log), ['boot']);
+  harness.send(loadCommand);
+  await harness.flush();
+  assert.deepEqual(summary(harness.log), ['boot', 'ready']);
+});
+
+test('host commands arrive as message events on the Android bridge object', async () => {
+  const harness = createHarness({ bridgeListener: true });
+  harness.sendViaBridge(loadCommand);
+  await harness.flush();
+  assert.deepEqual(summary(harness.log), ['boot', 'ready']);
+  assert.equal(harness.channelPosts.length, 1, 'events use the bridge');
+  assert.equal(harness.posted.length, 0);
+});
+
+test('a renderer that reports not ok fails the load instead of claiming ready', async () => {
+  const harness = createHarness({
+    prepareResult: { ok: false, reason: 'webgl-unavailable' },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+  assert.deepEqual(summary(harness.posted), ['error:load_failed']);
+  assert.match(harness.posted[0].message, /webgl-unavailable/);
+  assert.ok(!harness.rendererCalls.includes('renderer.draw'));
+});
+
+test('bad commands and load failures carry their own codes', async () => {
+  const harness = createHarness({ prepareFails: true });
+  harness.send({ cmd: 'unknown' });
+  harness.send({ cmd: 'setParam', name: 'ParamMouthOpenY', value: 1 });
+  harness.send(loadCommand);
+  await harness.flush();
+  assert.deepEqual(summary(harness.posted), [
+    'error:bad_command',
+    'error:bad_command',
+    'error:load_failed',
+  ]);
+});
+
+test('a context loss after ready is reported once and releases the model', async () => {
+  const harness = createHarness();
+  harness.send(loadCommand);
+  await harness.flush();
+  const lost = harness.fireCanvas('webglcontextlost');
+  harness.fireCanvas('webglcontextlost');
+  assert.equal(lost.defaultPrevented, true, 'the viewer asks for the context back');
+  assert.deepEqual(summary(harness.posted), ['ready', 'error:webgl_context_lost']);
+  assert.equal(harness.rafPending(), 0);
+  assert.ok(harness.rendererCalls.includes('model.release'));
+  harness.send({ cmd: 'setParam', name: 'ParamMouthOpenY', value: 1 });
+  assert.equal(summary(harness.posted).at(-1), 'error:bad_command');
+});
+
+test('loads fail with webgl_context_lost until the context is restored', async () => {
+  const harness = createHarness();
+  harness.send(loadCommand);
+  await harness.flush();
+  harness.fireCanvas('webglcontextlost');
+  harness.send({ ...loadCommand, profileRev: 2 });
+  await harness.flush();
+  assert.deepEqual(summary(harness.posted), [
+    'ready',
+    'error:webgl_context_lost',
+    'error:webgl_context_lost',
+  ]);
+  harness.fireCanvas('webglcontextrestored');
+  harness.send({ ...loadCommand, profileRev: 3 });
+  await harness.flush();
+  assert.equal(summary(harness.posted).at(-1), 'ready');
+  assert.equal(harness.posted.at(-1).profileRev, 3);
+});
+
+test('a context loss during a load fails that load as webgl_context_lost', async () => {
+  for (const prepareFails of [false, true]) {
+    const harness = createHarness({ loseContextInPrepare: true, prepareFails });
+    harness.send(loadCommand);
+    await harness.flush();
+    assert.deepEqual(
+      summary(harness.posted),
+      ['error:webgl_context_lost'],
+      'prepareFails=' + prepareFails,
+    );
+  }
+});
+
+test('a later frame failure is reported as render_failed and stops the loop', async () => {
+  const harness = createHarness({ drawFailsAt: 2 });
+  harness.send(loadCommand);
+  await harness.flush();
+  harness.flushOneFrame();
+  harness.flushOneFrame();
+  assert.deepEqual(summary(harness.posted), ['ready', 'error:render_failed']);
+  assert.match(harness.posted[1].message, /draw 2 failed/);
+  assert.equal(harness.rafPending(), 0);
+  assert.ok(harness.rendererCalls.includes('model.release'));
+});
+
+test('a load that saw a loss fails even if the context came back meanwhile', async () => {
+  const harness = createHarness({
+    loseContextInPrepare: true,
+    restoreContextInPrepare: true,
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+  assert.deepEqual(summary(harness.posted), ['error:webgl_context_lost']);
+  assert.ok(!harness.rendererCalls.includes('renderer.draw'));
 });

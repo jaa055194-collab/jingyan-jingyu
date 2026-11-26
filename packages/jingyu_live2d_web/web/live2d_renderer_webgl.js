@@ -18,9 +18,40 @@
 //     v6 extended color+alpha blend modes and offscreen compositing are ignored.
 //   * Physics, motions, expressions, breath/eye-blink and the model3 motion
 //     pipeline are out of scope. setExpression/setMotion only record intent.
-//   * Texture color-space, premultiplied-alpha nuances, device MAX_TEXTURE_SIZE,
-//     memory pressure (the reference model uses large atlases) and sustained
-//     frame rate are untested here.
+//   * Texture color-space, premultiplied-alpha nuances and sustained frame
+//     rate are untested here. Large atlases are downscaled to fit the GPU's
+//     MAX_TEXTURE_SIZE and a memory budget (live2d_texture_budget.js), but
+//     neither limit has been measured on our devices yet.
+//
+// Third-party code: portions of this file are adapted from the PurismCore
+// v1.1.0 viewer sample (github.com/SakuraMotion/PurismCore, tag v1.1.0).
+// The camera math in updateProjection() and computeFit() follows
+// WorldToScreen() and FitView() in src/samples/viewer/graphics.c, and the
+// multiply, screen and premultiply steps of DRAW_FRAGMENT_SHADER follow
+// src/samples/viewer/shaders/draw.frag. Those portions are used under the
+// MIT licence of the sample files:
+//
+//   Copyright (c) 2026 Sakura Motion Project
+//   SPDX-License-Identifier: MIT
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a
+//   copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to
+//   permit persons to whom the Software is furnished to do so, subject to
+//   the following conditions:
+//
+//   The above copyright notice and this permission notice shall be included
+//   in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+//   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+//   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+//   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+//   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 // Defensive contract: if a PurismCore getter or array is unavailable, the
 // affected drawable is skipped and a diagnostic is logged — draw() never throws
@@ -65,6 +96,10 @@
     maskA: null,
     cache: null,
     textures: [],
+    // Texture budget result of the last prepare(); see loadTextures().
+    textureInfo: emptyTextureInfo(),
+    // Bumped by dispose() so an older prepare() still loading textures stops.
+    generation: 0,
     modelRef: null,
     lastPositions: null,
     expression: null,
@@ -257,40 +292,188 @@
 
   // ---------------------------------------------------------------------------
   // Textures.
+  //
+  // A model's textures can need more GPU memory than a phone has: four
+  // 4096x4096 atlases with mipmaps take about 341 MiB. loadTextures() fetches
+  // every texture, reads its size from the PNG header, plans one downscale for
+  // all of them (live2d_texture_budget.js), then decodes, uploads and closes
+  // them one at a time so only one decoded bitmap is alive at once.
   // ---------------------------------------------------------------------------
-  function loadTexture(url) {
-    return new Promise(function (resolve) {
+  // Used when getParameter() gives no MAX_TEXTURE_SIZE (lost context).
+  var FALLBACK_MAX_TEXTURE_SIZE = 2048;
+
+  function emptyTextureInfo() {
+    return { scale: 1, maxTextureSize: 0, bytes: 0, count: 0, budgetBytes: 0 };
+  }
+
+  function isPowerOfTwo(value) {
+    return value > 0 && (value & (value - 1)) === 0;
+  }
+
+  // Clears pending GL errors and returns the first one (0 when there is none).
+  function takeGlError(gl) {
+    var first = 0;
+    for (var i = 0; i < 8; i++) {
+      var error = gl.getError();
+      if (!error || error === gl.NO_ERROR) break;
+      if (!first) first = error;
+    }
+    return first;
+  }
+
+  function deleteTextures(gl, textures) {
+    for (var i = 0; i < textures.length; i++) {
+      if (!textures[i]) continue;
       try {
-        var gl = state.gl;
-        var image = new Image();
-        if (/^https?:/i.test(String(url))) image.crossOrigin = 'anonymous';
-        image.onload = function () {
-          try {
-            var texture = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D, texture);
-            // Keep source orientation; the vertex shader flips V for Live2D UV.
-            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-            resolve(texture);
-          } catch (uploadError) {
-            warnOnce('tex-upload', 'texture upload failed for ' + url + ': ' + uploadError);
-            resolve(null);
-          }
-        };
-        image.onerror = function () {
-          warnOnce('tex-load', 'texture load failed: ' + url);
-          resolve(null);
-        };
-        image.src = url;
-      } catch (error) {
-        warnOnce('tex-throw', 'texture setup threw for ' + url + ': ' + error);
-        resolve(null);
+        gl.deleteTexture(textures[i]);
+      } catch (deleteError) {
+        /* ignore */
       }
-    });
+    }
+  }
+
+  // Fetches one texture file and reads its size from the PNG header.
+  // Resolves {url, blob, width, height}, or null after a warning.
+  async function fetchTexture(url, budgetApi) {
+    var blob;
+    try {
+      var response = await window.fetch(url, { cache: 'no-store' });
+      if (!response || !response.ok) throw new Error('status ' + (response && response.status));
+      blob = await response.blob();
+    } catch (loadError) {
+      warnOnce('tex-load', 'texture load failed: ' + url);
+      return null;
+    }
+    try {
+      var header = await blob.slice(0, budgetApi.PNG_HEADER_BYTES).arrayBuffer();
+      var size = budgetApi.readPngSize(header);
+      return { url: url, blob: blob, width: size.width, height: size.height };
+    } catch (formatError) {
+      warnOnce('tex-format', 'texture rejected for ' + url + ': ' + formatError);
+      return null;
+    }
+  }
+
+  // Decodes one fetched texture at its planned size, uploads it and closes the
+  // bitmap. Mipmaps on WebGL2, and on WebGL1 only for power-of-two sizes.
+  // Resolves {texture, mipmaps}, or null when the texture is skipped or the
+  // renderer was disposed while decoding.
+  async function uploadTexture(gl, entry, planned, generation) {
+    // Straight alpha like the old Image upload: ImageBitmap uploads ignore
+    // UNPACK_PREMULTIPLY_ALPHA_WEBGL, and the shaders premultiply themselves.
+    var options = { premultiplyAlpha: 'none' };
+    if (planned.width !== entry.width || planned.height !== entry.height) {
+      options.resizeWidth = planned.width;
+      options.resizeHeight = planned.height;
+      options.resizeQuality = 'high';
+    }
+    var bitmap;
+    try {
+      bitmap = await window.createImageBitmap(entry.blob, options);
+    } catch (decodeError) {
+      warnOnce('tex-load', 'texture load failed: ' + entry.url);
+      return null;
+    }
+    var texture = null;
+    try {
+      if (generation !== state.generation) return null;
+      if (bitmap.width !== planned.width || bitmap.height !== planned.height) {
+        // A decoder that ignores the resize options would break the budget.
+        warnOnce(
+          'tex-size',
+          'texture ' + entry.url + ' decoded at ' + bitmap.width + 'x' + bitmap.height +
+            ', planned ' + planned.width + 'x' + planned.height
+        );
+        return null;
+      }
+      takeGlError(gl);
+      texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      // Keep source orientation; the vertex shader flips V for Live2D UV.
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+      var mipmaps =
+        state.version >= 2 || (isPowerOfTwo(planned.width) && isPowerOfTwo(planned.height));
+      if (mipmaps) gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(
+        gl.TEXTURE_2D,
+        gl.TEXTURE_MIN_FILTER,
+        mipmaps ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR
+      );
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      var glError = takeGlError(gl);
+      if (glError) throw new Error('GL error ' + glError);
+      return { texture: texture, mipmaps: mipmaps };
+    } catch (uploadError) {
+      if (texture) deleteTextures(gl, [texture]);
+      warnOnce('tex-upload', 'texture upload failed for ' + entry.url + ': ' + uploadError);
+      return null;
+    } finally {
+      try {
+        bitmap.close();
+      } catch (closeError) {
+        /* ignore */
+      }
+    }
+  }
+
+  // Loads the model textures within the GPU memory budget. Resolves
+  // {textures, info} with one slot per URL (null when that texture failed),
+  // or null when dispose() ran meanwhile; textures uploaded so far are then
+  // deleted. Throws when no plan fits (the budget is too small even for 1x1).
+  async function loadTextures(urls, budgetApi, options, generation) {
+    var gl = state.gl;
+    // 1. Fetch every file and read its size before decoding any texture.
+    var entries = [];
+    for (var i = 0; i < urls.length; i++) {
+      entries.push(await fetchTexture(urls[i], budgetApi));
+      if (generation !== state.generation) return null;
+    }
+    // 2. One scale for all textures. options can lower the GPU limit only.
+    var maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    if (!(maxTextureSize >= 1)) maxTextureSize = FALLBACK_MAX_TEXTURE_SIZE;
+    if (typeof options.maxTextureSize === 'number' && options.maxTextureSize >= 1) {
+      maxTextureSize = Math.min(maxTextureSize, Math.floor(options.maxTextureSize));
+    }
+    var sizes = [];
+    for (var s = 0; s < entries.length; s++) {
+      if (entries[s]) sizes.push({ width: entries[s].width, height: entries[s].height });
+    }
+    var plan = budgetApi.planTextureSizes(sizes, maxTextureSize, options.textureBudgetBytes);
+    // 3. Decode, upload and close one texture at a time.
+    var textures = [];
+    var mipmapped = [];
+    var flat = [];
+    var next = 0;
+    for (var t = 0; t < entries.length; t++) {
+      var entry = entries[t];
+      entries[t] = null; // drop the encoded bytes once they are decoded
+      if (!entry) {
+        textures.push(null);
+        continue;
+      }
+      var planned = plan.sizes[next++];
+      var uploaded = await uploadTexture(gl, entry, planned, generation);
+      textures.push(uploaded ? uploaded.texture : null);
+      if (generation !== state.generation) {
+        deleteTextures(gl, textures);
+        return null;
+      }
+      if (uploaded && uploaded.mipmaps) mipmapped.push(planned);
+      else if (uploaded) flat.push(planned);
+    }
+    return {
+      textures: textures,
+      info: {
+        scale: plan.scale,
+        maxTextureSize: plan.maxTextureSize,
+        bytes: budgetApi.estimateBytes(mipmapped) + budgetApi.estimateBytes(flat, false),
+        count: mipmapped.length + flat.length,
+        budgetBytes: plan.budgetBytes,
+      },
+    };
   }
 
   function textureFor(index) {
@@ -470,14 +653,26 @@
   // ---------------------------------------------------------------------------
   // Public API.
   // ---------------------------------------------------------------------------
-  async function prepare(canvas, model, textureUrls) {
+  // options (all optional): textureBudgetBytes, the GPU memory budget for the
+  // textures (default 256 MiB, see live2d_texture_budget.js), and
+  // maxTextureSize, which can only lower the GPU's MAX_TEXTURE_SIZE.
+  async function prepare(canvas, model, textureUrls, options) {
     dispose();
     state.disposed = false;
+    var generation = state.generation;
     state.canvas = canvas || null;
     state.modelRef = model || null;
     if (!canvas || typeof canvas.getContext !== 'function') {
       warnOnce('no-canvas', 'prepare() called without a usable canvas');
       return { ok: false, reason: 'no-canvas' };
+    }
+    var budgetApi = window.Live2DTextureBudget;
+    if (!budgetApi || typeof budgetApi.planTextureSizes !== 'function') {
+      warnOnce(
+        'no-texture-budget',
+        'window.Live2DTextureBudget is missing; load live2d_texture_budget.js before the renderer'
+      );
+      return { ok: false, reason: 'texture-budget-unavailable' };
     }
     try {
       var attributes = {
@@ -528,11 +723,11 @@
       state.cache = buildCache(model);
 
       var urls = Array.isArray(textureUrls) ? textureUrls : [];
-      var loaded = [];
-      for (var t = 0; t < urls.length; t++) {
-        loaded.push(await loadTexture(urls[t]));
-      }
+      var loadResult = await loadTextures(urls, budgetApi, options || {}, generation);
+      if (!loadResult) return { ok: false, reason: 'disposed' };
+      var loaded = loadResult.textures;
       state.textures = loaded;
+      state.textureInfo = loadResult.info;
 
       computeFit(model);
       state.ready = true;
@@ -545,6 +740,11 @@
         skipped: state.cache.skipped,
         textures: loaded.length,
         loadedTextures: loaded.filter(Boolean).length,
+        textureScale: loadResult.info.scale,
+        maxTextureSize: loadResult.info.maxTextureSize,
+        textureBytes: loadResult.info.bytes,
+        textureCount: loadResult.info.count,
+        textureBudgetBytes: loadResult.info.budgetBytes,
       };
       if (window.console && window.console.info) {
         window.console.info(
@@ -559,7 +759,13 @@
             ' textures=' +
             summary.loadedTextures +
             '/' +
-            summary.textures
+            summary.textures +
+            ' textureScale=' +
+            summary.textureScale +
+            ' textureBytes=' +
+            summary.textureBytes +
+            ' maxTextureSize=' +
+            summary.maxTextureSize
         );
       }
       return summary;
@@ -708,6 +914,8 @@
   function dispose() {
     state.disposed = true;
     state.ready = false;
+    // Stops a prepare() that is still loading textures (see loadTextures).
+    state.generation++;
     var gl = state.gl;
     try {
       if (gl) {
@@ -744,6 +952,7 @@
     }
     state.cache = null;
     state.textures = [];
+    state.textureInfo = emptyTextureInfo();
     state.gl = null;
     state.drawProgram = null;
     state.maskProgram = null;
@@ -770,6 +979,11 @@
         skipped: state.cache ? state.cache.skipped : 0,
         textures: state.textures.length,
         loadedTextures: state.textures.filter(Boolean).length,
+        textureScale: state.textureInfo.scale,
+        maxTextureSize: state.textureInfo.maxTextureSize,
+        textureBytes: state.textureInfo.bytes,
+        textureCount: state.textureInfo.count,
+        textureBudgetBytes: state.textureInfo.budgetBytes,
       };
     },
   };
