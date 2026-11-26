@@ -7,6 +7,6 @@
   "scripts": {
     "serve": "node scripts/serve.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "test": "node --test"
+    "test": "node --test test_node/"
   }
 }
