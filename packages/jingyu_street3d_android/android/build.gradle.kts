@@ -1,5 +1,5 @@
 // From the Flutter 3.50 plugin template (flutter create --template=plugin, BSD-3-Clause).
-// Changed: version, and androidx.webkit in place of the template's test dependency.
+// Changed: version, minSdk 26, and androidx.webkit in place of the template's test dependency.
 group = "com.jingyu.jingyu_street3d_android"
 version = "0.1.0"
 
@@ -47,7 +47,8 @@ android {
     }
 
     defaultConfig {
-        minSdk = 24
+        // The app's own minSdk; WebViewClient.onRenderProcessGone needs API 26.
+        minSdk = 26
     }
 
     testOptions {
