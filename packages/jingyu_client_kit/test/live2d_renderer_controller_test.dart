@@ -401,5 +401,71 @@ void main() {
         expect(controller.state, Live2DPreviewState.ready);
       },
     );
+
+    test(
+      'exposes the model report while ready and replaces it on retry',
+      () async {
+        final first = controller.start(
+          modelId: 'model.a',
+          model3Url: 'http://127.0.0.1:8000/model.model3.json',
+          textureUrls: const [],
+          profileRev: 1,
+        );
+        expect(controller.modelInfo, isNull);
+        host.emit({
+          'event': 'ready',
+          'modelId': 'model.a',
+          'profileRev': 1,
+          'parameters': [
+            {'id': 'ParamEyeLOpen', 'min': 0, 'max': 1, 'default': 1},
+          ],
+          'parts': ['PartEye'],
+        });
+        await first;
+        final info = controller.modelInfo!;
+        expect(info.parameter('ParamEyeLOpen')!.defaultValue, 1.0);
+        expect(info.partIds, {'PartEye'});
+        expect(controller.modelInfoError, isNull);
+
+        host.emit({'event': 'error', 'message': 'context lost'});
+        await pumpEventQueue();
+        expect(controller.state, Live2DPreviewState.failed);
+        expect(controller.modelInfo, isNull);
+
+        final second = controller.retry();
+        expect(controller.modelInfo, isNull);
+        host.emit({
+          'event': 'ready',
+          'modelId': 'model.a',
+          'profileRev': 1,
+          'parts': ['PartMouth'],
+        });
+        await second;
+        expect(controller.modelInfo!.parameters, isNull);
+        expect(controller.modelInfo!.partIds, {'PartMouth'});
+      },
+    );
+
+    test('a malformed model report keeps the preview ready', () async {
+      final ready = controller.start(
+        modelId: 'model.a',
+        model3Url: 'http://127.0.0.1:8000/model.model3.json',
+        textureUrls: const [],
+        profileRev: 1,
+      );
+      host.emit({
+        'event': 'ready',
+        'modelId': 'model.a',
+        'profileRev': 1,
+        'parameters': [
+          {'id': 'ParamAngleX', 'min': 30, 'max': -30},
+        ],
+      });
+      await ready;
+      expect(controller.state, Live2DPreviewState.ready);
+      expect(controller.error, isNull);
+      expect(controller.modelInfo, isNull);
+      expect(controller.modelInfoError, contains('minimum above its maximum'));
+    });
   });
 }

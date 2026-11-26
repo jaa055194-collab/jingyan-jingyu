@@ -72,8 +72,11 @@ function createHarness(options = {}) {
     Model: {
       fromMoc() {
         if (options.modelCreationFails) return null;
-        return {
-          parameters: {
+        // `modelParameters` replaces the default parameter set (IDs and
+        // values, no range arrays); `modelParts` adds the parts object the
+        // default model lacks.
+        const model = {
+          parameters: options.modelParameters || {
             ids: ['ParamMouthOpenY', 'ParamEyeLOpen'],
             values: [0, 1],
             count: 2,
@@ -81,6 +84,8 @@ function createHarness(options = {}) {
           update: () => rendererCalls.push('model.update'),
           release: () => rendererCalls.push('model.release'),
         };
+        if (options.modelParts) model.parts = options.modelParts;
+        return model;
       },
     },
   };
@@ -237,6 +242,122 @@ test('load reports ready only after the first draw succeeds', async () => {
   assert.deepEqual(events, ['ready']);
   assert.equal(harness.posted[0].modelId, 'model.a');
   assert.equal(harness.posted[0].profileRev, 1);
+});
+
+// A posted event as the host decodes it (JSON on the wire). Decoding also turns
+// the viewer's objects, made in the VM realm, into plain objects of this realm,
+// which strict deepEqual needs to compare them with literals.
+const wire = (value) => JSON.parse(JSON.stringify(value));
+
+test('ready lists the runtime parameter ranges and part IDs in runtime order', async () => {
+  const harness = createHarness({
+    modelParameters: {
+      count: 3,
+      ids: ['ParamAngleX', 'ParamMouthOpenY', 'ParamEyeLOpen'],
+      values: new Float32Array([0, 0, 1]),
+      minimumValues: new Float32Array([-30, 0, 0]),
+      maximumValues: new Float32Array([30, 1, 1]),
+      defaultValues: new Float32Array([0, 0, 1]),
+    },
+    modelParts: { count: 2, ids: ['PartHead', 'PartArmL'] },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+
+  assert.deepEqual(summary(harness.posted), ['ready']);
+  const ready = wire(harness.posted[0]);
+  assert.equal(ready.modelId, 'model.a');
+  assert.equal(ready.profileRev, 1);
+  assert.deepEqual(ready.parameters, [
+    { id: 'ParamAngleX', min: -30, max: 30, default: 0 },
+    { id: 'ParamMouthOpenY', min: 0, max: 1, default: 0 },
+    { id: 'ParamEyeLOpen', min: 0, max: 1, default: 1 },
+  ]);
+  assert.deepEqual(ready.parts, ['PartHead', 'PartArmL']);
+});
+
+test('ready leaves a non-finite range value out of its parameter entry', async () => {
+  const harness = createHarness({
+    modelParameters: {
+      count: 3,
+      ids: ['ParamA', 'ParamB', 'ParamC'],
+      values: [0, 0, 0],
+      minimumValues: [NaN, -1, '0'],
+      maximumValues: [1, Infinity, null],
+      // Shorter than count: ParamC has no default value at all.
+      defaultValues: [0.5, -Infinity],
+    },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+
+  assert.deepEqual(summary(harness.posted), ['ready']);
+  const parameters = harness.posted[0].parameters;
+  // Left out means no key at all, not a key holding undefined or null.
+  assert.deepEqual(Array.from(parameters, (entry) => Object.keys(entry)), [
+    ['id', 'max', 'default'],
+    ['id', 'min'],
+    ['id'],
+  ]);
+  assert.deepEqual(wire(parameters), [
+    { id: 'ParamA', max: 1, default: 0.5 },
+    { id: 'ParamB', min: -1 },
+    { id: 'ParamC' },
+  ]);
+});
+
+test('ready leaves out an ID list it cannot report whole and still arrives', async () => {
+  const names = (count) => Array.from({ length: count }, (_, index) => 'Param' + index);
+  const parts = { count: 1, ids: ['PartHead'] };
+  const unreportable = {
+    'more than 4096 IDs': { count: 4097, ids: names(4097) },
+    'a non-string ID': { count: 2, ids: ['ParamAngleX', 7] },
+    'an empty ID': { count: 2, ids: ['ParamAngleX', ''] },
+    'fewer IDs than count': { count: 3, ids: names(2) },
+    'a fractional count': { count: 1.5, ids: names(2) },
+    'a negative count': { count: -1, ids: [] },
+    'no count': { ids: names(2) },
+    'unreadable IDs': {
+      count: 1,
+      get ids() {
+        throw new Error('parameter IDs unreadable');
+      },
+    },
+  };
+  for (const [label, modelParameters] of Object.entries(unreportable)) {
+    const harness = createHarness({ modelParameters, modelParts: parts });
+    harness.send(loadCommand);
+    await harness.flush();
+    assert.deepEqual(summary(harness.posted), ['ready'], label);
+    assert.equal('parameters' in harness.posted[0], false, label);
+    assert.deepEqual(wire(harness.posted[0].parts), ['PartHead'], label);
+  }
+
+  // The limit is inclusive: 4096 IDs are still reported in full.
+  const atLimit = createHarness({ modelParameters: { count: 4096, ids: names(4096) } });
+  atLimit.send(loadCommand);
+  await atLimit.flush();
+  assert.deepEqual(summary(atLimit.posted), ['ready']);
+  assert.equal(atLimit.posted[0].parameters.length, 4096);
+
+  // A malformed parts list is dropped on its own; the parameters stay.
+  const badParts = createHarness({ modelParts: { count: 2, ids: ['PartHead', null] } });
+  badParts.send(loadCommand);
+  await badParts.flush();
+  assert.deepEqual(summary(badParts.posted), ['ready']);
+  assert.equal('parts' in badParts.posted[0], false);
+  assert.equal(badParts.posted[0].parameters.length, 2);
+});
+
+test('ready from a model without ranges or parts lists bare parameter IDs only', async () => {
+  const harness = createHarness();
+  harness.send(loadCommand);
+  await harness.flush();
+
+  assert.deepEqual(summary(harness.posted), ['ready']);
+  const ready = harness.posted[0];
+  assert.deepEqual(Object.keys(ready), ['event', 'modelId', 'profileRev', 'parameters']);
+  assert.deepEqual(wire(ready.parameters), [{ id: 'ParamMouthOpenY' }, { id: 'ParamEyeLOpen' }]);
 });
 
 test('a failed first draw reports error and never reports ready', async () => {

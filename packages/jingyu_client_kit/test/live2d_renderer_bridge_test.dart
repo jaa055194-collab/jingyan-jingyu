@@ -153,5 +153,71 @@ void main() {
       final bridge = Live2DRendererBridge();
       expect(() => bridge.parameterCommand('p', 0.1), throwsStateError);
     });
+
+    test('a ready event records the reported model info', () {
+      final bridge = Live2DRendererBridge()..markLoading('m');
+      expect(bridge.modelInfo, isNull);
+      bridge.handleEvent({
+        'event': 'ready',
+        'modelId': 'm',
+        'profileRev': 1,
+        'parameters': [
+          {'id': 'ParamMouthOpenY', 'min': 0, 'max': 1, 'default': 0},
+        ],
+        'parts': ['PartMouth'],
+      });
+      expect(bridge.state, Live2DRendererState.ready);
+      expect(bridge.modelInfo!.parameterIds, {'ParamMouthOpenY'});
+      expect(bridge.modelInfo!.partIds, {'PartMouth'});
+      expect(bridge.modelInfoError, isNull);
+    });
+
+    test('a ready event without ID lists reports them as unknown', () {
+      final bridge = Live2DRendererBridge()
+        ..markLoading('m')
+        ..handleEvent({'event': 'ready', 'modelId': 'm', 'profileRev': 1});
+      expect(bridge.modelInfo!.parameters, isNull);
+      expect(bridge.modelInfo!.parts, isNull);
+      expect(bridge.modelInfoError, isNull);
+    });
+
+    test('a malformed model report does not fail the ready event', () {
+      final bridge = Live2DRendererBridge()..markLoading('m');
+      bridge.handleEvent({
+        'event': 'ready',
+        'modelId': 'm',
+        'profileRev': 1,
+        'parts': ['PartMouth', 'PartMouth'],
+      });
+      expect(bridge.state, Live2DRendererState.ready);
+      expect(bridge.lastError, isNull);
+      expect(bridge.modelInfo, isNull);
+      expect(bridge.modelInfoError, contains('repeats'));
+    });
+
+    test('a new load, an error or dispose clears the model info', () {
+      Live2DRendererBridge reported(Object? parts) => Live2DRendererBridge()
+        ..markLoading('m')
+        ..handleEvent({
+          'event': 'ready',
+          'modelId': 'm',
+          'profileRev': 1,
+          'parts': parts,
+        });
+
+      expect((reported(['A'])..markLoading('n')).modelInfo, isNull);
+      expect((reported(['A'])..markError('boom')).modelInfo, isNull);
+      expect(
+        (reported(['A'])..handleEvent({'event': 'error', 'message': 'lost'}))
+            .modelInfo,
+        isNull,
+      );
+      expect((reported(['A'])..dispose()).modelInfo, isNull);
+
+      final rejected = reported('A');
+      expect(rejected.modelInfoError, isNotNull);
+      rejected.markLoading('m');
+      expect(rejected.modelInfoError, isNull);
+    });
   });
 }

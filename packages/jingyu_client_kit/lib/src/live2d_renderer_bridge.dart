@@ -5,6 +5,8 @@
 /// prevents illegal transitions. It never carries model bytes.
 library;
 
+import 'live2d_model_info.dart';
+
 enum Live2DRendererState { idle, loading, ready, error, disposed }
 
 class Live2DRendererBridge {
@@ -12,15 +14,45 @@ class Live2DRendererBridge {
   String? _modelId;
   int? _profileRev;
   String? _lastError;
+  Live2DModelInfo? _modelInfo;
+  String? _modelInfoError;
 
   Live2DRendererState get state => _state;
   String? get modelId => _modelId;
   int? get profileRev => _profileRev;
   String? get lastError => _lastError;
 
+  /// What the viewer's `ready` event reported about the loaded model. Null
+  /// until a `ready` event is handled, after an error or a new load, and when
+  /// the report was malformed (see [modelInfoError]). Its lists are null when
+  /// the viewer left them out.
+  Live2DModelInfo? get modelInfo => _modelInfo;
+
+  /// Why the model information in the `ready` event was rejected, or null.
+  /// A rejected report does not fail the preview; it only leaves [modelInfo]
+  /// null, so no mapping can be checked against that model.
+  String? get modelInfoError => _modelInfoError;
+
   void _requireNotDisposed() {
     if (_state == Live2DRendererState.disposed) {
       throw StateError('renderer bridge disposed');
+    }
+  }
+
+  void _clearModelInfo() {
+    _modelInfo = null;
+    _modelInfoError = null;
+  }
+
+  /// Model information never fails a load: a malformed report is recorded in
+  /// [modelInfoError] and leaves [modelInfo] null.
+  void _readModelInfo(Map<String, Object?> event) {
+    try {
+      _modelInfo = Live2DModelInfo.fromReadyEvent(event);
+      _modelInfoError = null;
+    } on FormatException catch (error) {
+      _modelInfo = null;
+      _modelInfoError = error.message;
     }
   }
 
@@ -32,6 +64,7 @@ class Live2DRendererBridge {
     _modelId = modelId;
     _profileRev = null;
     _lastError = null;
+    _clearModelInfo();
     _state = Live2DRendererState.loading;
   }
 
@@ -56,10 +89,12 @@ class Live2DRendererBridge {
       throw StateError('error is only valid after a load starts');
     }
     _lastError = message;
+    _clearModelInfo();
     _state = Live2DRendererState.error;
   }
 
   void dispose() {
+    _clearModelInfo();
     _state = Live2DRendererState.disposed;
   }
 
@@ -143,6 +178,7 @@ class Live2DRendererBridge {
         }
         _profileRev = rev;
         _lastError = null;
+        _readModelInfo(event);
         _state = Live2DRendererState.ready;
       case 'error':
         final message = event['message'];
@@ -154,6 +190,7 @@ class Live2DRendererBridge {
           throw StateError('unexpected error event');
         }
         _lastError = message;
+        _clearModelInfo();
         _state = Live2DRendererState.error;
       case 'frame':
         // Progress ping; no state change.

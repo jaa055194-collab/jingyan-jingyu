@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'live2d_model_info.dart';
 import 'live2d_renderer_bridge.dart';
 
 /// Where the preview surface currently is.
@@ -78,6 +79,20 @@ final class Live2DPreviewController {
 
   /// Why the preview is [Live2DPreviewState.failed]; null in other states.
   Live2DPreviewException? get failure => _failure;
+
+  /// What the viewer reported about the model with its first frame, such as
+  /// the runtime's parameter and part IDs. Null unless [state] is
+  /// [Live2DPreviewState.ready], and null when that report was malformed
+  /// (see [modelInfoError]).
+  Live2DModelInfo? get modelInfo =>
+      _state == Live2DPreviewState.ready ? _bridge.modelInfo : null;
+
+  /// Why the viewer's model report was rejected, or null. A rejected report
+  /// does not fail the preview; it only leaves [modelInfo] null, so no
+  /// mapping can be checked against that model. Null unless [state] is
+  /// [Live2DPreviewState.ready].
+  String? get modelInfoError =>
+      _state == Live2DPreviewState.ready ? _bridge.modelInfoError : null;
 
   /// Each state change, in order. A broadcast stream that ends after [close]
   /// reports [Live2DPreviewState.disposed].

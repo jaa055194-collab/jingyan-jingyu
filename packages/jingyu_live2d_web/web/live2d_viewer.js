@@ -9,6 +9,11 @@
 //   viewer -> Flutter: boot (once, before any other event), ready, error
 // `ready` means the renderer adapter prepared and the first draw returned
 // without throwing. A core-only update is never reported as ready.
+// `ready` carries modelId and profileRev, and also `parameters` (runtime
+// order, each {id, min, max, default}, a range value only when it is a finite
+// number) and `parts` (part ID strings) when the runtime provides them. Each
+// list is whole or absent, never cut short: a missing or malformed source, or
+// one with more than 4096 entries, leaves that field out.
 // Each `error` carries `message` and one of these `code` values:
 //   load_failed         the model could not be fetched, created or prepared
 //   render_failed       a frame update or draw threw, first frame or later
@@ -141,6 +146,69 @@
     return canvas;
   }
 
+  // ID lists for `ready`. The host checks its mapping against complete ID
+  // sets, so each list is reported whole or left out, never cut short. They
+  // are read after the first frame and any failure only drops the field, so
+  // they cannot fail a load or change when `ready` is sent.
+  var MAX_READY_IDS = 4096;
+
+  // Copies the IDs of a PurismCore {count, ids} object (Parameters, Parts), or
+  // returns null when the source is missing, its count is not an integer in
+  // [0, MAX_READY_IDS], it has fewer than count IDs, or an ID is not a
+  // non-empty string.
+  function reportableIds(source) {
+    if (!source) return null;
+    var count = source.count;
+    if (!Number.isInteger(count) || count < 0 || count > MAX_READY_IDS) return null;
+    var ids = source.ids;
+    if (!ids || typeof ids !== 'object' || !(ids.length >= count)) return null;
+    var copy = [];
+    for (var i = 0; i < count; i++) {
+      var id = ids[i];
+      if (typeof id !== 'string' || id === '') return null;
+      copy.push(id);
+    }
+    return copy;
+  }
+
+  function finiteAt(values, index) {
+    var value = values ? values[index] : undefined;
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  // Runtime-order [{id, min, max, default}]; a range value is present only
+  // when it is a finite number. Null when the list is left out.
+  function readyParameters(model) {
+    try {
+      var source = model.parameters;
+      var ids = reportableIds(source);
+      if (!ids) return null;
+      var list = [];
+      for (var i = 0; i < ids.length; i++) {
+        var entry = { id: ids[i] };
+        var min = finiteAt(source.minimumValues, i);
+        var max = finiteAt(source.maximumValues, i);
+        var def = finiteAt(source.defaultValues, i);
+        if (min !== undefined) entry.min = min;
+        if (max !== undefined) entry.max = max;
+        if (def !== undefined) entry.default = def;
+        list.push(entry);
+      }
+      return list;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Part ID strings in runtime order. Null when the list is left out.
+  function readyParts(model) {
+    try {
+      return reportableIds(model.parts);
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function load(command) {
     if (state.disposed) throw codedError('bad_command', 'viewer disposed');
     if (state.loading) throw codedError('bad_command', 'load already in progress');
@@ -201,7 +269,14 @@
       // tick() reports a failed first frame and releases the model itself;
       // never claim ready after it.
       if (!tick()) return;
-      post({ event: 'ready', modelId: state.modelId, profileRev: state.profileRev });
+      var readyEvent = { event: 'ready', modelId: state.modelId, profileRev: state.profileRev };
+      // The ID lists are optional: each helper returns null instead of
+      // throwing, and a null list is left out of the event.
+      var parameterList = readyParameters(model);
+      if (parameterList) readyEvent.parameters = parameterList;
+      var partList = readyParts(model);
+      if (partList) readyEvent.parts = partList;
+      post(readyEvent);
     } catch (error) {
       stopLoop();
       if (!adopted) {
