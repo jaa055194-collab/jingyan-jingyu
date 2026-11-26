@@ -44,6 +44,11 @@ dependencies:
     path: ../../packages/jingyu_host_kit
   jingyu_client_kit:
     path: ../../packages/jingyu_client_kit
+  # 世界 → 3D 街区: the page (assets only) and its Android WebView host.
+  jingyu_street3d_web:
+    path: ../../packages/jingyu_street3d_web
+  jingyu_street3d_android:
+    path: ../../packages/jingyu_street3d_android
 
 dev_dependencies:
   flutter_test:

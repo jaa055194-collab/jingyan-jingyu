@@ -30,7 +30,8 @@ class AppModule {
 
 /// Current shell modules. Mirrors the shell's five destinations plus settings
 /// and the own-AI consent surface. `world` is an independent module (FR-12)
-/// whose 3D renderer is not yet wired into the Flutter shell.
+/// whose 3D street is wired on Android only; avatar models and the Windows
+/// host are not wired yet.
 const List<AppModule> appModules = <AppModule>[
   AppModule(
     id: 'chat',
@@ -59,8 +60,8 @@ const List<AppModule> appModules = <AppModule>[
   AppModule(
     id: 'world',
     title: '世界与形象',
-    description: '3D 街区与 AI 形象（独立模块，渲染尚未接入 Flutter 外壳）',
-    availability: ModuleAvailability.unavailable,
+    description: '3D 街区与 AI 形象（独立模块；3D 街区只接入了 Android 端，形象模型和 Windows 端尚未接入）',
+    availability: ModuleAvailability.available,
   ),
   AppModule(
     id: 'own-ai-consent',
