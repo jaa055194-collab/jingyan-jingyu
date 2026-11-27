@@ -4,12 +4,13 @@ import '../../app/shell_view_model.dart';
 import '../diagnostics/module_test_panel.dart';
 import 'live2d_import_panel.dart';
 import 'live2d_local_import.dart';
+import 'street3d_entry.dart';
 
 /// Independent 3D world / avatar module surface (FR-12: not embedded in chat).
 ///
 /// This is the shell entry: it surfaces room/avatar setup status and entry
-/// points, and is honest that the actual Three.js/WebView 3D renderer is not
-/// wired yet (needs the feiyu-room-template assets + a Windows WebView2 host).
+/// points. The 3D street section is its own widget (Street3DEntry), which
+/// says where the street runs so far and opens it as a separate page.
 /// Per product direction each terminal uses its own locally uploaded avatar
 /// model; there is no cross-device avatar consistency requirement.
 class WorldScreen extends StatelessWidget {
@@ -18,10 +19,14 @@ class WorldScreen extends StatelessWidget {
     required this.model,
     required this.onOpenSetup,
     this.openLive2D,
+    this.onOpenStreet,
   });
   final ShellViewModel model;
   final VoidCallback onOpenSetup;
   final Future<Live2DImportSession?> Function()? openLive2D;
+
+  /// Opens the 3D street page; without it the page shows no street entry.
+  final VoidCallback? onOpenStreet;
 
   @override
   Widget build(BuildContext context) {
@@ -59,16 +64,7 @@ class WorldScreen extends StatelessWidget {
         if (model.appLockEnabled)
           const Text('应用锁已开启，暂不支持切换到系统文件选择器。'),
         const Divider(height: 32),
-        Text('3D 渲染', style: Theme.of(context).textTheme.titleMedium),
-        const Card(
-          child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Text(
-              '三维街区/房间渲染尚未接入：将按 M10 设计用 WebView + feiyu-room-template（Three.js）承载独立 3D 页面，保留“按提示词生成房间”。'
-              '当前外壳提供独立模块入口与性能探针；Windows 端 WebView2 依赖需联网获取或自研插件，真实 3D 与真机（骁龙888，目标稳定30–60fps）测试在接入后单独验收。',
-            ),
-          ),
-        ),
+        Street3DEntry(onOpen: onOpenStreet, enabled: model.authenticated),
         const SizedBox(height: 16),
         OutlinedButton.icon(
           key: const Key('world-open-perf'),

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
 
 import '../net/creative_api.dart';
@@ -9,6 +10,9 @@ import 'module_catalog.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/chat/chat_pane.dart';
 import '../features/settings/settings_screen.dart';
+import '../features/world/street3d_android_surface.dart';
+import '../features/world/street3d_screen.dart';
+import '../features/world/street3d_source.dart';
 import '../features/world/world_screen.dart';
 import '../features/contacts/contacts_screen.dart';
 import '../net/friends_api.dart';
@@ -252,8 +256,48 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
-  Widget world() =>
-      WorldScreen(model: widget.model, onOpenSetup: openWorldSetup);
+  /// The 3D street opens above the shell, so it follows the session itself:
+  /// the unlock screen covers it while the app is locked, and another
+  /// signed-in account or connection gets a new street.
+  void openStreet3D() {
+    final model = widget.model;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ListenableBuilder(
+          listenable: model,
+          builder: (_, _) {
+            if (!model.ready) {
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator()),
+              );
+            }
+            if (model.locked) return UnlockScreen(model: model);
+            final connection = model is ClientRuntime ? model.connection : null;
+            final selfId = model.connectedAccountId;
+            return Street3DScreen(
+              key: ValueKey((connection, selfId)),
+              source: connection == null || selfId == null
+                  ? null
+                  : HostStreet3DDataSource.connected(
+                      connection,
+                      selfId: selfId,
+                      ownAis: model.ownAiAccounts,
+                    ),
+              surfaceBuilder: defaultTargetPlatform == TargetPlatform.android
+                  ? Street3DAndroidSurface.build
+                  : null,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget world() => WorldScreen(
+    model: widget.model,
+    onOpenSetup: openWorldSetup,
+    onOpenStreet: openStreet3D,
+  );
 
   /// Report data stays inside the authenticated session that opened 动态.
   /// Expanding a row reuses the authorized list payload, not another request.

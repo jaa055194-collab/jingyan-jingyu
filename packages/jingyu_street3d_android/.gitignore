@@ -1,0 +1,8 @@
+# Adapted from the Flutter plugin template (flutter create --template=plugin).
+.dart_tool/
+.flutter-plugins-dependencies
+/build/
+/coverage/
+/pubspec.lock
+*.iml
+.idea/
