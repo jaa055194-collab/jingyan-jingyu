@@ -146,7 +146,25 @@ function createHarness(options = {}) {
     getElementById: () => canvas,
   };
 
+  // `fileReferences` adds keys to the model3's FileReferences. `files` maps a
+  // path below the model3 to its body: a string (served as UTF-8), a
+  // Uint8Array (served as is) or an Error (the fetch rejects with it); any
+  // other URL is a 404. Both are read at fetch time, so a test may change
+  // them between loads. With `holdFiles` such a fetch waits until the test
+  // calls releaseFiles(), so `filesInFlight` shows how many load at once.
+  const fetches = [];
+  const files = options.files || {};
+  const filesBase = 'http://127.0.0.1:9/';
+  let filesInFlight = 0;
+  let maxFilesInFlight = 0;
+  let releaseFiles = () => {};
+  const filesGate = options.holdFiles
+    ? new Promise((resolve) => {
+        releaseFiles = resolve;
+      })
+    : null;
   const fetchStub = async (url) => {
+    fetches.push(url);
     if (url.endsWith('model.model3.json')) {
       return {
         ok: true,
@@ -155,6 +173,7 @@ function createHarness(options = {}) {
             FileReferences: {
               Moc: 'model.moc3',
               Textures: ['texture-0.png'],
+              ...options.fileReferences,
             },
           };
         },
@@ -168,10 +187,27 @@ function createHarness(options = {}) {
         },
       };
     }
-    return { ok: false, status: 404 };
+    const name = url.startsWith(filesBase) ? decodeURIComponent(url.slice(filesBase.length)) : '';
+    if (!Object.prototype.hasOwnProperty.call(files, name)) return { ok: false, status: 404 };
+    filesInFlight += 1;
+    maxFilesInFlight = Math.max(maxFilesInFlight, filesInFlight);
+    try {
+      if (filesGate) await filesGate;
+    } finally {
+      filesInFlight -= 1;
+    }
+    const body = files[name];
+    if (body instanceof Error) throw body;
+    const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+    return {
+      ok: true,
+      async arrayBuffer() {
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      },
+    };
   };
 
-  const context = vm.createContext({
+  const globals = {
     window,
     document,
     console,
@@ -182,7 +218,10 @@ function createHarness(options = {}) {
     Promise,
     setTimeout,
     clearTimeout,
-  });
+  };
+  // The viewer checks expression and motion files with TextDecoder.
+  if (!options.noTextDecoder) globals.TextDecoder = TextDecoder;
+  const context = vm.createContext(globals);
   vm.runInContext(VIEWER, context, { filename: 'live2d_viewer.js' });
 
   const flush = async () => {
@@ -196,6 +235,10 @@ function createHarness(options = {}) {
     channelPosts,
     log,
     rendererCalls,
+    fetches,
+    filesInFlight: () => filesInFlight,
+    maxFilesInFlight: () => maxFilesInFlight,
+    releaseFiles: () => releaseFiles(),
     flush,
     fireCanvas,
     send(message) {
@@ -349,15 +392,308 @@ test('ready leaves out an ID list it cannot report whole and still arrives', asy
   assert.equal(badParts.posted[0].parameters.length, 2);
 });
 
-test('ready from a model without ranges or parts lists bare parameter IDs only', async () => {
+test('ready from a model without ranges, parts, expressions or motions lists bare parameter IDs and empty lists', async () => {
   const harness = createHarness();
   harness.send(loadCommand);
   await harness.flush();
 
   assert.deepEqual(summary(harness.posted), ['ready']);
   const ready = harness.posted[0];
-  assert.deepEqual(Object.keys(ready), ['event', 'modelId', 'profileRev', 'parameters']);
+  assert.deepEqual(Object.keys(ready), [
+    'event',
+    'modelId',
+    'profileRev',
+    'parameters',
+    'expressions',
+    'motions',
+  ]);
   assert.deepEqual(wire(ready.parameters), [{ id: 'ParamMouthOpenY' }, { id: 'ParamEyeLOpen' }]);
+  // A model3 without Expressions or Motions has none: whole, empty lists.
+  assert.deepEqual(wire(ready.expressions), []);
+  assert.deepEqual(wire(ready.motions), []);
+
+  // Empty ones too; a motion group without motions has nothing to address.
+  const empty = createHarness({ fileReferences: { Expressions: [], Motions: { Idle: [] } } });
+  empty.send(loadCommand);
+  await empty.flush();
+  assert.deepEqual(summary(empty.posted), ['ready']);
+  assert.deepEqual(wire(empty.posted[0].expressions), []);
+  assert.deepEqual(wire(empty.posted[0].motions), []);
+});
+
+// Any JSON object loads as an exp3 or motion3 file; its fields are read only
+// when it is applied.
+const OBJECT_FILE = '{"Version":3}';
+const fileFetches = (harness) =>
+  harness.fetches.filter((url) => /\.(exp3|motion3)\.json$/.test(url));
+
+test('ready lists the staged expressions and motion groups in model3 order', async () => {
+  const harness = createHarness({
+    fileReferences: {
+      Expressions: [
+        { Name: 'Smile', File: 'expressions/smile.exp3.json' },
+        { Name: 'Angry', File: 'expressions/angry.exp3.json' },
+        // Names may share a file.
+        { Name: 'Grin', File: 'expressions/smile.exp3.json' },
+      ],
+      Motions: {
+        Idle: [
+          { File: 'motions/idle_0.motion3.json' },
+          { File: 'motions/idle_1.motion3.json', FadeInTime: 0.5 },
+        ],
+        // Cubism allows an empty group name.
+        '': [{ File: 'motions/idle_0.motion3.json' }],
+        // A group without motions has nothing to address.
+        Empty: [],
+        TapBody: [{ File: 'motions/tap.motion3.json' }],
+      },
+    },
+    files: {
+      'expressions/smile.exp3.json': OBJECT_FILE,
+      'expressions/angry.exp3.json': OBJECT_FILE,
+      'motions/idle_0.motion3.json': OBJECT_FILE,
+      'motions/idle_1.motion3.json': OBJECT_FILE,
+      'motions/tap.motion3.json': OBJECT_FILE,
+    },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+
+  assert.deepEqual(summary(harness.posted), ['ready']);
+  const ready = wire(harness.posted[0]);
+  assert.deepEqual(ready.expressions, ['Smile', 'Angry', 'Grin']);
+  assert.deepEqual(ready.motions, [
+    { group: 'Idle', count: 2 },
+    { group: '', count: 1 },
+    { group: 'TapBody', count: 1 },
+  ]);
+  // Each distinct file is loaded once.
+  assert.equal(fileFetches(harness).length, 5);
+  assert.equal(new Set(fileFetches(harness)).size, 5);
+});
+
+test('ready leaves out an expression or a motion group whose file does not load', async () => {
+  const arrays = (depth) => '['.repeat(depth) + ']'.repeat(depth);
+  const harness = createHarness({
+    fileReferences: {
+      Expressions: [
+        { Name: 'Loads', File: 'loads.exp3.json' },
+        { Name: 'Missing', File: 'missing.exp3.json' },
+        { Name: 'Rejected', File: 'rejected.exp3.json' },
+        { Name: 'NotJson', File: 'not-json.exp3.json' },
+        { Name: 'ArrayRoot', File: 'array-root.exp3.json' },
+        { Name: 'NotUtf8', File: 'not-utf8.exp3.json' },
+        { Name: 'TooDeep', File: 'too-deep.exp3.json' },
+        { Name: 'Bom', File: 'bom.exp3.json' },
+        { Name: 'DeepestAllowed', File: 'deepest.exp3.json' },
+        { Name: 'BracketsInString', File: 'brackets.exp3.json' },
+      ],
+      Motions: {
+        Idle: [{ File: 'loads.motion3.json' }, { File: 'loads.motion3.json' }],
+        // One motion that does not load drops its whole group, so a
+        // {group, index} keeps addressing the staged model3.
+        Tap: [{ File: 'loads.motion3.json' }, { File: 'missing.motion3.json' }],
+        Shake: [{ File: 'not-json.exp3.json' }],
+        Walk: [{ File: 'loads.motion3.json' }],
+      },
+    },
+    files: {
+      'loads.exp3.json': OBJECT_FILE,
+      'rejected.exp3.json': new Error('connection reset'),
+      'not-json.exp3.json': '{"Version":',
+      'array-root.exp3.json': '[]',
+      'not-utf8.exp3.json': new Uint8Array([0x7b, 0xff, 0x7d]),
+      // The root object and 64 arrays: 65 levels, one past the staging limit.
+      'too-deep.exp3.json': '{"a":' + arrays(64) + '}',
+      'bom.exp3.json': '\ufeff' + OBJECT_FILE,
+      'deepest.exp3.json': '{"a":' + arrays(63) + '}',
+      // Brackets in a string, after an escaped quote, do not nest.
+      'brackets.exp3.json': JSON.stringify({ a: '"' + '['.repeat(70) }),
+      'loads.motion3.json': OBJECT_FILE,
+    },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+
+  assert.deepEqual(summary(harness.posted), ['ready']);
+  const ready = wire(harness.posted[0]);
+  assert.deepEqual(ready.expressions, ['Loads', 'Bom', 'DeepestAllowed', 'BracketsInString']);
+  assert.deepEqual(ready.motions, [
+    { group: 'Idle', count: 2 },
+    { group: 'Walk', count: 1 },
+  ]);
+});
+
+test('ready leaves out an expression or motion list it cannot report whole and still arrives', async () => {
+  const entries = (count, entry) => Array.from({ length: count }, (_, index) => entry(index));
+  const files = { 'a.exp3.json': OBJECT_FILE, 'a.motion3.json': OBJECT_FILE };
+  const expression = (index) => ({ Name: 'E' + index, File: 'a.exp3.json' });
+  const motion = () => ({ File: 'a.motion3.json' });
+
+  const unreportableExpressions = {
+    'not a list': expression(0),
+    'a null list': null,
+    'an entry not an object': ['a.exp3.json'],
+    'a null entry': [null],
+    'no File': [{ Name: 'Smile' }],
+    'an empty File': [{ Name: 'Smile', File: '' }],
+    'a non-string File': [{ Name: 'Smile', File: 7 }],
+    'no Name': [{ File: 'a.exp3.json' }],
+    'an empty Name': [{ Name: '', File: 'a.exp3.json' }],
+    'a non-string Name': [{ Name: 3, File: 'a.exp3.json' }],
+    'a Name over 256 units': [{ Name: 'x'.repeat(257), File: 'a.exp3.json' }],
+    'a repeated Name': [expression(1), expression(1)],
+    'more than 1024 entries': entries(1025, expression),
+  };
+  for (const [label, Expressions] of Object.entries(unreportableExpressions)) {
+    const harness = createHarness({
+      fileReferences: { Expressions, Motions: { Idle: [motion()] } },
+      files,
+    });
+    harness.send(loadCommand);
+    await harness.flush();
+    assert.deepEqual(summary(harness.posted), ['ready'], label);
+    assert.equal('expressions' in harness.posted[0], false, label);
+    assert.deepEqual(wire(harness.posted[0].motions), [{ group: 'Idle', count: 1 }], label);
+  }
+
+  const unreportableMotions = {
+    'not a map': [motion()],
+    'a null map': null,
+    'a group not a list': { Idle: motion() },
+    'an entry not an object': { Idle: ['a.motion3.json'] },
+    'no File': { Idle: [{ FadeInTime: 0.5 }] },
+    'an empty File': { Idle: [{ File: '' }] },
+    'a group name over 256 units': { ['g'.repeat(257)]: [motion()] },
+    'more than 1024 motions in a group': { Idle: entries(1025, motion) },
+    'more than 4096 motions in all': Object.fromEntries(
+      entries(5, (index) => ['G' + index, entries(820, motion)]),
+    ),
+    'more than 4096 groups': Object.fromEntries(entries(4097, (index) => ['G' + index, []])),
+  };
+  for (const [label, Motions] of Object.entries(unreportableMotions)) {
+    const harness = createHarness({
+      fileReferences: { Expressions: [expression(0)], Motions },
+      files,
+    });
+    harness.send(loadCommand);
+    await harness.flush();
+    assert.deepEqual(summary(harness.posted), ['ready'], label);
+    assert.equal('motions' in harness.posted[0], false, label);
+    assert.deepEqual(wire(harness.posted[0].expressions), ['E0'], label);
+  }
+
+  // The limits are inclusive.
+  const longName = 'x'.repeat(256);
+  const atLimits = createHarness({
+    fileReferences: {
+      Expressions: [...entries(1023, expression), { Name: longName, File: 'a.exp3.json' }],
+      Motions: {
+        [longName]: entries(1024, motion),
+        // 3072 more motions make 4096 in all; 1023 empty groups make 4096 groups.
+        ...Object.fromEntries(entries(3072, (index) => ['G' + index, [motion()]])),
+        ...Object.fromEntries(entries(1023, (index) => ['Empty' + index, []])),
+      },
+    },
+    files,
+  });
+  atLimits.send(loadCommand);
+  await atLimits.flush();
+  assert.deepEqual(summary(atLimits.posted), ['ready']);
+  const ready = wire(atLimits.posted[0]);
+  assert.equal(ready.expressions.length, 1024);
+  assert.equal(ready.expressions[1023], longName);
+  assert.equal(ready.motions.length, 3073);
+  assert.deepEqual(ready.motions[0], { group: longName, count: 1024 });
+  // Entries that share a file load it once.
+  assert.equal(fileFetches(atLimits).length, 2);
+});
+
+test('without TextDecoder ready leaves out an expression or motion list with files', async () => {
+  const harness = createHarness({
+    noTextDecoder: true,
+    fileReferences: {
+      Expressions: [{ Name: 'Smile', File: 'a.exp3.json' }],
+      Motions: { Idle: [{ File: 'a.motion3.json' }] },
+    },
+    files: { 'a.exp3.json': OBJECT_FILE, 'a.motion3.json': OBJECT_FILE },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+
+  // No file can be checked, so none is fetched and the preview still loads.
+  assert.deepEqual(summary(harness.posted), ['ready']);
+  assert.equal('expressions' in harness.posted[0], false);
+  assert.equal('motions' in harness.posted[0], false);
+  assert.deepEqual(fileFetches(harness), []);
+
+  // Lists without files need no check and stay whole.
+  const empty = createHarness({ noTextDecoder: true, fileReferences: { Motions: { Idle: [] } } });
+  empty.send(loadCommand);
+  await empty.flush();
+  assert.deepEqual(summary(empty.posted), ['ready']);
+  assert.deepEqual(wire(empty.posted[0].expressions), []);
+  assert.deepEqual(wire(empty.posted[0].motions), []);
+});
+
+test('a load keeps the shown model until its expression and motion files load', async () => {
+  // Both are read at fetch time, so the second load sees what is added below.
+  const fileReferences = {};
+  const files = {};
+  const harness = createHarness({ fileReferences, files, holdFiles: true });
+  harness.send(loadCommand);
+  await harness.flush();
+  assert.deepEqual(summary(harness.posted), ['ready']);
+
+  // Nine distinct files; e0.exp3.json is referenced twice.
+  fileReferences.Expressions = Array.from({ length: 8 }, (_, index) => {
+    files['e' + index + '.exp3.json'] = OBJECT_FILE;
+    return { Name: 'E' + index, File: 'e' + index + '.exp3.json' };
+  });
+  files['idle.motion3.json'] = OBJECT_FILE;
+  fileReferences.Motions = { Idle: [{ File: 'idle.motion3.json' }, { File: 'e0.exp3.json' }] };
+  harness.send({ ...loadCommand, modelId: 'model.b', profileRev: 2 });
+  await harness.flush();
+
+  // At most four files load at once, and the first model is still shown.
+  assert.equal(harness.filesInFlight(), 4);
+  assert.deepEqual(summary(harness.posted), ['ready']);
+  assert.equal(harness.rendererCalls.includes('model.release'), false);
+  assert.equal(harness.rendererCalls.filter((call) => call === 'renderer.prepare').length, 1);
+
+  harness.releaseFiles();
+  await harness.flush();
+  assert.deepEqual(summary(harness.posted), ['ready', 'ready']);
+  const ready = wire(harness.posted[1]);
+  assert.equal(ready.modelId, 'model.b');
+  assert.deepEqual(ready.expressions, ['E0', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E7']);
+  assert.deepEqual(ready.motions, [{ group: 'Idle', count: 2 }]);
+  assert.equal(harness.maxFilesInFlight(), 4);
+  assert.equal(fileFetches(harness).length, 9);
+  assert.equal(new Set(fileFetches(harness)).size, 9);
+  // The swap released the first model.
+  assert.equal(harness.rendererCalls.filter((call) => call === 'model.release').length, 1);
+});
+
+test('dispose while expression and motion files load ends the load without ready or error', async () => {
+  const harness = createHarness({
+    holdFiles: true,
+    fileReferences: { Expressions: [{ Name: 'Smile', File: 'a.exp3.json' }] },
+    files: { 'a.exp3.json': OBJECT_FILE },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+  assert.equal(harness.filesInFlight(), 1);
+
+  harness.send({ cmd: 'dispose' });
+  harness.releaseFiles();
+  await harness.flush();
+
+  assert.deepEqual(harness.posted, []);
+  // The new model was never shown, so the load releases it itself.
+  assert.ok(harness.rendererCalls.includes('model.release'));
+  assert.ok(harness.rendererCalls.includes('moc.release'));
+  assert.equal(harness.rendererCalls.includes('renderer.prepare'), false);
 });
 
 test('a failed first draw reports error and never reports ready', async () => {

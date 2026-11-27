@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 
 /// A completed, device-local staging session for a static Live2D preview.
@@ -37,6 +38,7 @@ final class Live2DPreviewCleanupFailure implements Exception {
 
 /// Stages [bundle] under an existing, trusted [parent] in the app's private
 /// temporary storage. The caller must keep it out of shared and backed-up storage.
+/// Only the names [stagedLive2DPreviewNames] allows are written.
 ///
 /// The stage is returned only after all writes succeed. A caller that cancels
 /// or abandons the preview should await this future and dispose of its result.
@@ -46,14 +48,10 @@ Future<Live2DPreviewStage> stageLive2DPreview(
 ) async {
   const model3Name = 'model.model3.json';
   final files = bundle.files;
-  final names = [
-    model3Name,
-    'model.moc3',
-    for (var i = 0; i < files.length - 2; i++) 'texture-$i.png',
-  ];
-  if (bundle.model3Name != model3Name ||
-      files.length < 3 ||
-      !names.every(files.containsKey)) {
+  final names = bundle.model3Name == model3Name
+      ? stagedLive2DPreviewNames(files.keys)
+      : null;
+  if (names == null) {
     throw const FormatException('Unexpected Live2D preview filenames');
   }
 
@@ -79,6 +77,42 @@ Future<Live2DPreviewStage> stageLive2DPreview(
     }
     rethrow;
   }
+}
+
+/// The staged-name allowlist, in write order: `model.model3.json`,
+/// `model.moc3`, at least one `texture-N.png`, then any
+/// `expression-N.exp3.json` and `motion-N.motion3.json`, each N counting
+/// from 0 without gaps, as [prepareLive2DPreview] names them. Null for any
+/// other set of [names], so a stage never holds another file.
+@visibleForTesting
+List<String>? stagedLive2DPreviewNames(Iterable<String> names) {
+  final given = names.toSet();
+  int count(String prefix, String suffix) {
+    var n = 0;
+    while (given.contains('$prefix$n$suffix')) {
+      n++;
+    }
+    return n;
+  }
+
+  final textures = count('texture-', '.png');
+  final expressions = count('expression-', '.exp3.json');
+  final motions = count('motion-', '.motion3.json');
+  final staged = [
+    'model.model3.json',
+    'model.moc3',
+    for (var i = 0; i < textures; i++) 'texture-$i.png',
+    for (var i = 0; i < expressions; i++) 'expression-$i.exp3.json',
+    for (var i = 0; i < motions; i++) 'motion-$i.motion3.json',
+  ];
+  // The staged names are distinct and all given, so the same count means no
+  // other name is given.
+  if (textures == 0 ||
+      staged.length != given.length ||
+      !staged.every(given.contains)) {
+    return null;
+  }
+  return staged;
 }
 
 Future<void> _removeDirectory(Directory directory) async {

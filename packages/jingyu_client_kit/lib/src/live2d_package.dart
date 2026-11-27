@@ -22,16 +22,24 @@ import 'plugin_package.dart';
 /// Checked renderer inputs only. Names are generated, never taken from the ZIP.
 /// This is not a fully decoded model or a ready-to-render signal.
 final class Live2DPreviewBundle {
-  Live2DPreviewBundle._(Map<String, Uint8List> files, this.groups)
+  Live2DPreviewBundle._(
+      Map<String, Uint8List> files, this.groups, this.warnings)
       : files = Map.unmodifiable(files);
 
   String get model3Name => 'model.model3.json';
+
+  /// `model.model3.json`, `model.moc3`, `texture-N.png` and, for the
+  /// expressions and motions kept, `expression-N.exp3.json` and
+  /// `motion-N.motion3.json`, N counting from 0 in manifest order.
   final Map<String, Uint8List> files;
 
   /// The package manifest's `Groups`, as [Live2DPackageValidation.groups]
   /// reads them, for mapping suggestions (`Live2DParamProposal`). The
   /// generated manifest leaves them out.
   final List<Live2DModelGroup> groups;
+
+  /// Non-fatal problems: expressions and motions left out of the preview.
+  final List<Live2DPackageIssue> warnings;
 }
 
 /// Prepare an isolated static preview, without extracting arbitrary ZIP entries.
@@ -53,7 +61,7 @@ Live2DPreviewBundle prepareLive2DPreview(
   if (!result.ok) {
     throw FormatException('Live2D preview rejected: ${result.issues.first.code.name}');
   }
-  return Live2DPreviewBundle._(output, result.groups);
+  return Live2DPreviewBundle._(output, result.groups, const []);
 }
 
 /// Safety and resource limits for a local Live2D package.

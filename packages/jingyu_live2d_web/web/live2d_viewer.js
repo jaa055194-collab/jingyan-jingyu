@@ -14,6 +14,14 @@
 // number) and `parts` (part ID strings) when the runtime provides them. Each
 // list is whole or absent, never cut short: a missing or malformed source, or
 // one with more than 4096 entries, leaves that field out.
+// `ready` also carries `expressions` (the Name of each staged model3
+// FileReferences.Expressions entry whose exp3 file loaded, in model3 order)
+// and `motions` ({group, count} for each FileReferences.Motions group whose
+// motion3 files all loaded). A model3 without the key reports an empty list.
+// A malformed list, or one over the caps (1024 expressions, 4096 groups, 1024
+// motions in a group, 4096 motions), leaves that field out, and so does a page
+// without TextDecoder when the list has files to check. A file that does not
+// load only shapes the lists; it never fails the load.
 // Each `error` carries `message` and one of these `code` values:
 //   load_failed         the model could not be fetched, created or prepared
 //   render_failed       a frame update or draw threw, first frame or later
@@ -209,6 +217,182 @@
     }
   }
 
+  // Expression and motion lists for `ready`, read from the staged model3:
+  // Expressions [{Name, File}] and Motions {group: [{File, ...}]}. The caps
+  // match Live2DModelInfo in jingyu_client_kit.
+  var MAX_READY_EXPRESSIONS = 1024;
+  var MAX_READY_MOTION_GROUPS = 4096;
+  var MAX_READY_GROUP_MOTIONS = 1024;
+  var MAX_READY_MOTIONS = 4096;
+  var MAX_READY_NAME_LENGTH = 256;
+  // The staging check's nesting limit (Live2DPackageLimits.maxJsonDepth).
+  var MAX_JSON_DEPTH = 64;
+  var MAX_PARALLEL_FETCHES = 4;
+
+  function isObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  // The URL of an entry's File, a non-empty string resolved against the
+  // model3, or null when the entry is malformed.
+  function entryUrl(base, entry) {
+    if (!isObject(entry) || typeof entry.File !== 'string' || entry.File === '') {
+      return null;
+    }
+    try {
+      return resolve(base, entry.File);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // [{name, urls}] in model3 order. [] without the key; null when the list is
+  // malformed (an entry not an object, a File not a non-empty string, a Name
+  // not a unique non-empty string of at most 256 units) or over the cap.
+  function expressionEntries(base, refs) {
+    if (!Object.prototype.hasOwnProperty.call(refs, 'Expressions')) return [];
+    var list = refs.Expressions;
+    if (!Array.isArray(list) || list.length > MAX_READY_EXPRESSIONS) return null;
+    var seen = Object.create(null);
+    var entries = [];
+    for (var i = 0; i < list.length; i++) {
+      var url = entryUrl(base, list[i]);
+      var name = url ? list[i].Name : null;
+      if (typeof name !== 'string' || name === '' ||
+          name.length > MAX_READY_NAME_LENGTH || seen[name]) {
+        return null;
+      }
+      seen[name] = true;
+      entries.push({ name: name, urls: [url] });
+    }
+    return entries;
+  }
+
+  // [{group, urls}] in model3 order. [] without the key; null when the map is
+  // malformed (a group name over 256 units, a group not a list, an entry not
+  // an object, a File not a non-empty string) or over the caps. A group
+  // without motions is left out, since a reported count is at least 1.
+  function motionEntries(base, refs) {
+    if (!Object.prototype.hasOwnProperty.call(refs, 'Motions')) return [];
+    var groups = refs.Motions;
+    if (!isObject(groups)) return null;
+    var names = Object.keys(groups);
+    if (names.length > MAX_READY_MOTION_GROUPS) return null;
+    var total = 0;
+    var entries = [];
+    for (var i = 0; i < names.length; i++) {
+      var list = groups[names[i]];
+      if (names[i].length > MAX_READY_NAME_LENGTH || !Array.isArray(list) ||
+          list.length > MAX_READY_GROUP_MOTIONS) {
+        return null;
+      }
+      total += list.length;
+      if (total > MAX_READY_MOTIONS) return null;
+      var urls = [];
+      for (var j = 0; j < list.length; j++) {
+        var url = entryUrl(base, list[j]);
+        if (!url) return null;
+        urls.push(url);
+      }
+      if (urls.length) entries.push({ group: names[i], urls: urls });
+    }
+    return entries;
+  }
+
+  // True when more than `limit` objects and arrays are open at once, counted
+  // outside strings like the staging check.
+  function exceedsJsonDepth(text, limit) {
+    var depth = 0;
+    var inString = false;
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charCodeAt(i);
+      if (inString) {
+        if (c === 0x5c) i++; // skip the escaped character
+        else if (c === 0x22) inString = false;
+      } else if (c === 0x22) {
+        inString = true;
+      } else if (c === 0x7b || c === 0x5b) {
+        if (++depth > limit) return true;
+      } else if ((c === 0x7d || c === 0x5d) && depth > 0) {
+        depth--;
+      }
+    }
+    return false;
+  }
+
+  // True when the file loads as a JSON object: fetched, valid UTF-8 (a
+  // leading BOM is dropped), nested at most MAX_JSON_DEPTH deep, with an
+  // object root. Its fields are read when it is applied. Never throws.
+  async function loadsJsonObject(url) {
+    try {
+      var bytes = await fetchBytes(url);
+      var text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      if (exceedsJsonDepth(text, MAX_JSON_DEPTH)) return false;
+      return isObject(JSON.parse(text));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // {expressions, motions} for `ready`, where a null list is left out. An
+  // expression is listed when its file loads and a motion group when all of
+  // its files load, so a Name or a {group, index} keeps addressing the staged
+  // model3. Each distinct file is loaded once, at most MAX_PARALLEL_FETCHES
+  // at a time. Never throws.
+  async function readyExpressionsAndMotions(base, refs) {
+    try {
+      var expressions = expressionEntries(base, refs);
+      var motions = motionEntries(base, refs);
+      // Without TextDecoder no file can be checked, so a list with files is
+      // left out rather than reported without them.
+      if (typeof TextDecoder !== 'function') {
+        if (expressions && expressions.length) expressions = null;
+        if (motions && motions.length) motions = null;
+      }
+      var loaded = Object.create(null);
+      var pending = [];
+      [expressions || [], motions || []].forEach(function (entries) {
+        entries.forEach(function (entry) {
+          entry.urls.forEach(function (url) {
+            if (!(url in loaded)) {
+              loaded[url] = false;
+              pending.push(url);
+            }
+          });
+        });
+      });
+      var next = 0;
+      var worker = async function () {
+        while (next < pending.length) {
+          var url = pending[next++];
+          loaded[url] = await loadsJsonObject(url);
+        }
+      };
+      var workers = [];
+      for (var i = 0; i < MAX_PARALLEL_FETCHES && i < pending.length; i++) {
+        workers.push(worker());
+      }
+      await Promise.all(workers);
+      var allLoaded = function (entry) {
+        return entry.urls.every(function (url) { return loaded[url]; });
+      };
+      var lists = { expressions: null, motions: null };
+      if (expressions) {
+        lists.expressions = expressions.filter(allLoaded).map(function (entry) {
+          return entry.name;
+        });
+      }
+      if (motions) {
+        lists.motions = motions.filter(allLoaded).map(function (entry) {
+          return { group: entry.group, count: entry.urls.length };
+        });
+      }
+      return lists;
+    } catch (_) {
+      return { expressions: null, motions: null };
+    }
+  }
+
   async function load(command) {
     if (state.disposed) throw codedError('bad_command', 'viewer disposed');
     if (state.loading) throw codedError('bad_command', 'load already in progress');
@@ -238,6 +422,11 @@
       if (!moc) throw new Error('Moc rejected');
       model = core.Model.fromMoc(moc);
       if (!model) throw new Error('Model creation failed, code=' + moc.getError());
+      if (state.disposed) throw new Error('viewer disposed');
+
+      // Loaded before the swap, so the shown model stays up meanwhile. Never
+      // throws; a list that cannot be reported whole comes back null.
+      var lists = await readyExpressionsAndMotions(model3Url, refs);
       if (state.disposed) throw new Error('viewer disposed');
 
       var textures = [];
@@ -276,6 +465,8 @@
       if (parameterList) readyEvent.parameters = parameterList;
       var partList = readyParts(model);
       if (partList) readyEvent.parts = partList;
+      if (lists.expressions) readyEvent.expressions = lists.expressions;
+      if (lists.motions) readyEvent.motions = lists.motions;
       post(readyEvent);
     } catch (error) {
       stopLoop();

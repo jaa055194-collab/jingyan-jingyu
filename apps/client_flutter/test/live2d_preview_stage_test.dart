@@ -155,6 +155,77 @@ void main() {
     });
   });
 
+  test('stages expression and motion files under dense names', () {
+    expect(
+      stagedLive2DPreviewNames([
+        'motion-0.motion3.json',
+        'expression-1.exp3.json',
+        'texture-0.png',
+        'model.moc3',
+        'motion-1.motion3.json',
+        'expression-0.exp3.json',
+        'texture-1.png',
+        'model.model3.json',
+      ]),
+      [
+        'model.model3.json',
+        'model.moc3',
+        'texture-0.png',
+        'texture-1.png',
+        'expression-0.exp3.json',
+        'expression-1.exp3.json',
+        'motion-0.motion3.json',
+        'motion-1.motion3.json',
+      ],
+    );
+    // Expressions and motions are optional, each on its own.
+    const base = ['model.model3.json', 'model.moc3', 'texture-0.png'];
+    expect(stagedLive2DPreviewNames(base), base);
+    for (final name in ['expression-0.exp3.json', 'motion-0.motion3.json']) {
+      expect(stagedLive2DPreviewNames([...base, name]), [...base, name]);
+    }
+    // The fixture bundle's names, in the order they are written.
+    expect(stagedLive2DPreviewNames(bundle.files.keys), [
+      'model.model3.json',
+      'model.moc3',
+      'texture-0.png',
+      'texture-1.png',
+    ]);
+  });
+
+  test('rejects any other set of preview file names', () {
+    const base = ['model.model3.json', 'model.moc3', 'texture-0.png'];
+    const rejected = {
+      'no texture': [
+        'model.model3.json',
+        'model.moc3',
+        'expression-0.exp3.json',
+      ],
+      'no MOC3': ['model.model3.json', 'texture-0.png'],
+      'no model3': ['model.moc3', 'texture-0.png'],
+      'a gap': [...base, 'expression-0.exp3.json', 'expression-2.exp3.json'],
+      'not counting from 0': [...base, 'motion-1.motion3.json'],
+      'a leading zero': [
+        ...base,
+        'expression-0.exp3.json',
+        'expression-01.exp3.json',
+      ],
+      'a negative index': [...base, 'motion--1.motion3.json'],
+      'a swapped suffix': [...base, 'expression-0.motion3.json'],
+      'a bare JSON suffix': [...base, 'motion-0.json'],
+      'an upper-case name': [...base, 'Expression-0.exp3.json'],
+      'an upper-case suffix': [...base, 'texture-1.PNG'],
+      'a subdirectory': [...base, 'motions/motion-0.motion3.json'],
+      'a parent path': [...base, '../expression-0.exp3.json'],
+      'a trailing separator': [...base, 'expression-0.exp3.json/'],
+      'an unstaged type': [...base, 'model.physics3.json'],
+      'a motion sound': [...base, 'motion-0.wav'],
+    };
+    for (final MapEntry(key: label, value: names) in rejected.entries) {
+      expect(stagedLive2DPreviewNames(names), isNull, reason: label);
+    }
+  });
+
   test(
     'disposes one of two concurrent stages without affecting the other',
     () async {

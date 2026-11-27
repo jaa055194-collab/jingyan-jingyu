@@ -11,9 +11,11 @@ import java.security.SecureRandom
  * - Viewer: `https://appassets.androidplatform.net/live2d/viewer/<file>` serves only the files
  *   in [VIEWER_FILES] from the APK assets; any other file is [Route.Forbidden].
  * - Model: `https://appassets.androidplatform.net/live2d/model/<token>/<relative path>`. The
- *   token is 128 random bits in hex, issued by `serve` for one staged directory. An unknown
- *   token, an unsafe path, or a path that canonicalizes outside the directory (`..`, absolute
- *   paths, symlink escapes) is [Route.Forbidden]; a missing file is [Route.NotFound].
+ *   token is 128 random bits in hex, issued by `serve` for one directory [servedDirectory]
+ *   accepts: a preview staging directory or a stored model directory. An unknown token, an
+ *   unsafe path, a type outside [MODEL_FILE_TYPES], or a path that canonicalizes outside the
+ *   directory (`..`, absolute paths, symlink escapes) is [Route.Forbidden]; a missing file is
+ *   [Route.NotFound].
  *
  * The domain is WebViewAssetLoader's default one, see
  * https://developer.android.com/reference/androidx/webkit/WebViewAssetLoader and
@@ -29,7 +31,7 @@ internal object Live2DViewerRoutes {
     /** Where the Gradle task puts the viewer files inside the APK assets. */
     const val ASSET_DIR = "live2d/viewer/"
 
-    /** `serve` accepts only directories strictly inside `<cacheDir>/live2d-preview`. */
+    /** Preview staging directories are strictly inside `<cacheDir>/live2d-preview`. */
     const val PREVIEW_DIR = "live2d-preview"
 
     private const val JS = "text/javascript"
@@ -66,7 +68,7 @@ internal object Live2DViewerRoutes {
         val token = suffix.substring(0, slash)
         val root = if (isToken(token)) tokens[token] else null
         val relative = suffix.substring(slash + 1)
-        if (root == null || !isSafeRelativePath(relative)) return Route.Forbidden
+        if (root == null || !isSafeRelativePath(relative) || !isModelFile(relative)) return Route.Forbidden
         val file = canonical(File(root, relative)) ?: return Route.Forbidden
         if (!isStrictDescendant(root, file)) return Route.Forbidden
         return if (file.isFile) Route.Staged(file, modelMimeType(file.name)) else Route.NotFound
@@ -83,6 +85,42 @@ internal object Live2DViewerRoutes {
         val dir = canonical(File(directory)) ?: return null
         return if (isStrictDescendant(root, dir) && dir.isDirectory) dir else null
     }
+
+    /** Store root name under noBackupFilesDir and its models dir (b2-plan "Persistent layout"). */
+    const val STORE_DIR = "live2d"
+    const val MODELS_DIR = "models"
+
+    /** Mirrors Live2DProfile.modelFileTypes and isValidModelId (jingyu_client_kit live2d_profile.dart). */
+    val MODEL_FILE_TYPES = listOf(".model3.json", ".moc3", ".png", ".exp3.json", ".motion3.json")
+    private val MODEL_ID = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+    fun isModelFile(path: String): Boolean = path.lowercase().let { p -> MODEL_FILE_TYPES.any { p.endsWith(it) } }
+
+    fun isValidModelId(id: String): Boolean =
+        MODEL_ID.matches(id) && id.lowercase().let { !it.endsWith(".pending") && !it.endsWith(".old") }
+
+    /** [noBackupDir]/live2d, created when missing; canonical, or null when it cannot be made. */
+    fun storeDirectory(noBackupDir: File?): File? {
+        val dir = File(noBackupDir ?: return null, STORE_DIR)
+        if (!dir.isDirectory) dir.mkdirs()
+        return canonical(dir)?.takeIf { it.isDirectory }
+    }
+
+    /**
+     * The canonical form of [directory] if it is an existing directory <storeRoot>/models/<id>
+     * whose <id> passes [isValidModelId] (so not the file store's `*.pending` or `*.old`), else
+     * null.
+     */
+    fun persistedModelDirectory(storeRoot: File, directory: String): File? {
+        if (directory.indexOf('\u0000') >= 0 || !File(directory).isAbsolute) return null
+        val models = canonical(File(storeRoot, MODELS_DIR)) ?: return null
+        val dir = canonical(File(directory)) ?: return null
+        return if (dir.parentFile == models && isValidModelId(dir.name) && dir.isDirectory) dir else null
+    }
+
+    /** A directory `serve` may issue a token for: a preview staging dir or a persisted model dir. */
+    fun servedDirectory(previewRoot: File, storeRoot: File?, directory: String): File? =
+        stagingDirectory(previewRoot, directory) ?: storeRoot?.let { persistedModelDirectory(it, directory) }
 
     /** Relative, `/`-separated, and free of empty, `.` and `..` segments. */
     fun isSafeRelativePath(path: String): Boolean =

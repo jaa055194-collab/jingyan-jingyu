@@ -49,8 +49,9 @@ import java.util.concurrent.ConcurrentHashMap
  *   https://developer.android.com/develop/ui/views/layout/webapps/managing-webview
  *
  * Channel protocol (fixed; the Dart host and its test fake implement the other side):
- * - Dart to native: `serve {directory}` returns the model base URL, ending in `/`, or fails
- *   with `bad_directory`. `post {message}` hands a string to the page and fails with
+ * - Dart to native: `serve {directory}` returns the model base URL, ending in `/`, for a
+ *   preview staging directory or a stored model directory (see `serve`), or fails with
+ *   `bad_directory`. `post {message}` hands a string to the page and fails with
  *   `bad_message`, `gone` or `not_ready`, checked in that order.
  * - Native to Dart: `message` (the page's string, unparsed, `boot` included), `pageError`
  *   (a string) and `renderProcessGone {didCrash}`. These wait for Dart's first call, so none
@@ -231,13 +232,23 @@ internal class Live2DPlatformView(
         scheduleFlush()
     }
 
+    /**
+     * Issues a token for exactly the directories [Live2DViewerRoutes.servedDirectory] accepts:
+     * a preview staging directory or a stored model directory. The store root is not created
+     * here; while it is missing there is no stored model to serve.
+     */
     private fun serve(directory: Any?, result: MethodChannel.Result) {
         val previewRoot = File(appContext.cacheDir, Live2DViewerRoutes.PREVIEW_DIR)
+        val storeRoot = appContext.noBackupFilesDir?.let { File(it, Live2DViewerRoutes.STORE_DIR) }
         val root = (directory as? String)?.let {
-            Live2DViewerRoutes.stagingDirectory(previewRoot, it)
+            Live2DViewerRoutes.servedDirectory(previewRoot, storeRoot, it)
         }
         if (root == null) {
-            result.error("bad_directory", "the directory is not inside the Live2D preview cache", null)
+            result.error(
+                "bad_directory",
+                "the directory is not inside the Live2D preview cache or the Live2D model store",
+                null,
+            )
             return
         }
         val token = Live2DViewerRoutes.newToken(random)

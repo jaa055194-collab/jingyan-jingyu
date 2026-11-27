@@ -69,9 +69,28 @@ class Live2DViewerRoutesTest {
     }
 
     @Test
-    fun modelReportsMissingFilesAndDirectoriesAsNotFound() {
-        assertEquals(Route.NotFound, model("$TOKEN/missing.json"))
-        assertEquals(Route.NotFound, model("$TOKEN/textures"))
+    fun modelServesExpressionAndMotionFiles() {
+        File(staged, "expression-0.exp3.json").writeText("{}")
+        File(staged, "motion-0.motion3.json").writeText("{}")
+        assertEquals(staged("expression-0.exp3.json", "application/json"), model("$TOKEN/expression-0.exp3.json"))
+        assertEquals(staged("motion-0.motion3.json", "application/json"), model("$TOKEN/motion-0.motion3.json"))
+    }
+
+    @Test
+    fun modelReportsMissingModelFilesAndDirectoriesAsNotFound() {
+        File(staged, "folder.png").mkdirs()
+        assertEquals(Route.NotFound, model("$TOKEN/missing.model3.json"))
+        assertEquals(Route.NotFound, model("$TOKEN/textures/missing.png"))
+        assertEquals(Route.NotFound, model("$TOKEN/folder.png"))
+    }
+
+    @Test
+    fun modelRejectsFilesOutsideTheModelFileTypes() {
+        File(staged, "notes.txt").writeText("x")
+        File(staged, "model.physics3.json").writeText("{}")
+        for (path in listOf("notes.txt", "model.physics3.json", "missing.json", "textures", "index.html", "viewer.js")) {
+            assertEquals(path, Route.Forbidden, model("$TOKEN/$path"))
+        }
     }
 
     @Test
@@ -98,7 +117,7 @@ class Live2DViewerRoutesTest {
 
     @Test
     fun modelRejectsSymlinksThatLeaveTheStagedDirectory() {
-        val link = File(staged, "escape.json")
+        val link = File(staged, "escape.model3.json")
         val target = File(temp.root, "secret.txt")
         val created = try {
             Files.createSymbolicLink(link.toPath(), target.toPath())
@@ -109,7 +128,7 @@ class Live2DViewerRoutesTest {
         assumeTrue("symbolic links are not available here", created)
         // Android (Linux) resolves links in canonicalFile; a Windows JVM may not.
         assumeTrue("canonicalFile does not resolve links here", link.canonicalFile == target.canonicalFile)
-        assertEquals(Route.Forbidden, model("$TOKEN/escape.json"))
+        assertEquals(Route.Forbidden, model("$TOKEN/escape.model3.json"))
     }
 
     @Test
@@ -133,6 +152,90 @@ class Live2DViewerRoutesTest {
             staged.path + "\u0000",
         )) {
             assertNull(directory, Live2DViewerRoutes.stagingDirectory(previewRoot, directory))
+        }
+    }
+
+    @Test
+    fun modelIdsFollowTheProfileRule() {
+        for (id in listOf("a", "0", "hero-1", "Hero_1.v2", "hero.pending.x", "a".repeat(128))) {
+            assertTrue(id, Live2DViewerRoutes.isValidModelId(id))
+        }
+        for (id in listOf(
+            "",
+            ".a",
+            "-a",
+            "_a",
+            "..",
+            "a b",
+            "a/b",
+            "a\\b",
+            "a\n",
+            "h\u00e9ro",
+            "a".repeat(129),
+            "hero.pending",
+            "hero.PENDING",
+            "hero.old",
+            "hero.Old",
+        )) {
+            assertFalse(id, Live2DViewerRoutes.isValidModelId(id))
+        }
+    }
+
+    @Test
+    fun storeDirectoryIsCreatedUnderTheNoBackupDirectory() {
+        val noBackup = temp.newFolder("no_backup")
+        val expected = File(noBackup, Live2DViewerRoutes.STORE_DIR).canonicalFile
+        assertEquals(expected, Live2DViewerRoutes.storeDirectory(noBackup))
+        assertTrue(expected.isDirectory)
+        assertEquals(expected, Live2DViewerRoutes.storeDirectory(noBackup))
+        assertNull(Live2DViewerRoutes.storeDirectory(null))
+        val blocked = temp.newFolder("blocked")
+        File(blocked, Live2DViewerRoutes.STORE_DIR).writeText("a file, not a directory")
+        assertNull(Live2DViewerRoutes.storeDirectory(blocked))
+    }
+
+    @Test
+    fun persistedModelDirectoryAcceptsOnlyModelDirectoriesDirectlyInTheStore() {
+        val storeRoot = temp.newFolder(Live2DViewerRoutes.STORE_DIR)
+        val models = File(storeRoot, Live2DViewerRoutes.MODELS_DIR).apply { mkdirs() }
+        val model = File(models, "hero-1").apply { mkdirs() }
+        File(model, "nested").mkdirs()
+        for (name in listOf("hero-1.pending", "hero-1.old", ".hidden")) File(models, name).mkdirs()
+        File(models, "file.model3.json").writeText("{}")
+        val canonical = model.canonicalFile
+        assertEquals(canonical, Live2DViewerRoutes.persistedModelDirectory(storeRoot, model.path))
+        assertEquals(
+            canonical,
+            Live2DViewerRoutes.persistedModelDirectory(storeRoot, File(models, "hero-1/../hero-1").path),
+        )
+        for (directory in listOf(
+            storeRoot.path,
+            models.path,
+            File(models, "hero-1.pending").path,
+            File(models, "hero-1.old").path,
+            File(models, ".hidden").path,
+            File(models, "file.model3.json").path,
+            File(model, "nested").path,
+            File(models, "missing").path,
+            staged.path,
+            "${Live2DViewerRoutes.MODELS_DIR}/hero-1",
+            "",
+            model.path + "\u0000",
+        )) {
+            assertNull(directory, Live2DViewerRoutes.persistedModelDirectory(storeRoot, directory))
+        }
+    }
+
+    @Test
+    fun servedDirectoryAcceptsAStagingOrAStoredModelDirectory() {
+        val storeRoot = temp.newFolder(Live2DViewerRoutes.STORE_DIR)
+        val model = File(storeRoot, "${Live2DViewerRoutes.MODELS_DIR}/hero-1").apply { mkdirs() }
+        assertEquals(staged.canonicalFile, Live2DViewerRoutes.servedDirectory(previewRoot, storeRoot, staged.path))
+        assertEquals(staged.canonicalFile, Live2DViewerRoutes.servedDirectory(previewRoot, null, staged.path))
+        assertEquals(model.canonicalFile, Live2DViewerRoutes.servedDirectory(previewRoot, storeRoot, model.path))
+        assertNull(Live2DViewerRoutes.servedDirectory(previewRoot, null, model.path))
+        for (directory in listOf(storeRoot.path, previewRoot.path, temp.root.path)) {
+            assertNull(directory, Live2DViewerRoutes.servedDirectory(previewRoot, storeRoot, directory))
         }
     }
 
