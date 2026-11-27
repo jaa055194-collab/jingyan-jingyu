@@ -119,6 +119,11 @@ class Live2DRendererBridge {
     };
   }
 
+  /// The `setParam` command. The viewer writes [value] to the model parameter
+  /// [name] as it is, so it is in the parameter's own units rather than
+  /// 0..1. The value must be finite. When the model reported its parameter
+  /// IDs, [name] must be one of them, and when it reported this parameter's
+  /// range, [value] must lie within it.
   Map<String, Object?> parameterCommand(String name, double value) {
     if (_state != Live2DRendererState.ready) {
       throw StateError('parameters require a ready renderer');
@@ -126,8 +131,19 @@ class Live2DRendererBridge {
     if (name.trim().isEmpty) {
       throw const FormatException('parameter name must be non-empty');
     }
-    if (value.isNaN || value.isInfinite || value < 0 || value > 1) {
-      throw const FormatException('parameter value must be within 0..1');
+    if (!value.isFinite) {
+      throw const FormatException('parameter value must be finite');
+    }
+    final info = modelInfo;
+    final ids = info?.parameterIds;
+    if (ids != null && !ids.contains(name)) {
+      throw FormatException('unknown parameter', name);
+    }
+    final parameter = info?.parameter(name);
+    final min = parameter?.min;
+    final max = parameter?.max;
+    if ((min != null && value < min) || (max != null && value > max)) {
+      throw FormatException('parameter value outside its range', value);
     }
     return {'cmd': 'setParam', 'name': name, 'value': value};
   }

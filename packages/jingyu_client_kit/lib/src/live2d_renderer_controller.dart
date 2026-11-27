@@ -133,6 +133,18 @@ final class Live2DPreviewController {
     return _start(request);
   }
 
+  /// Sets the model parameter [id] to [value], in the parameter's own units,
+  /// on the ready preview. Completes with a [StateError] unless [state] is
+  /// [Live2DPreviewState.ready], and with a [FormatException] for an ID the
+  /// model did not report or a value outside the reported range; neither
+  /// sends anything.
+  Future<void> setParameter(String id, double value) async {
+    if (_state != Live2DPreviewState.ready) {
+      throw StateError('parameters require a ready preview');
+    }
+    await host.send(_bridge.parameterCommand(id, value));
+  }
+
   /// Releases the viewer and makes this controller terminal. Safe to call
   /// repeatedly.
   Future<void> close() async {

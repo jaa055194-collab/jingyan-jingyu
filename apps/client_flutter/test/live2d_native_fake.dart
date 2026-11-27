@@ -49,12 +49,18 @@ final class FakeLive2DView {
   /// The page's first message.
   Future<void> boot() => page(const <String, Object?>{'event': 'boot'});
 
-  /// The viewer's first-frame report.
-  Future<void> ready({String modelId = 'preview', int profileRev = 1}) =>
+  /// The viewer's first-frame report. [report] adds model report fields,
+  /// such as `parameters`, `expressions` or `motions`.
+  Future<void> ready({
+    String modelId = 'preview',
+    int profileRev = 1,
+    Map<String, Object?> report = const <String, Object?>{},
+  }) =>
       page(<String, Object?>{
         'event': 'ready',
         'modelId': modelId,
         'profileRev': profileRev,
+        ...report,
       });
 
   /// A viewer error, while loading or after ready.

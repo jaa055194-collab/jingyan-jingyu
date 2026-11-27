@@ -7,6 +7,7 @@ import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 
 import '../../platform/native_platform.dart';
 import 'live2d_import_panel.dart';
+import 'live2d_kept_models.dart';
 import 'live2d_preview_stage.dart';
 
 const _maxArchiveBytes = 160 * 1024 * 1024;
@@ -53,14 +54,19 @@ Future<Live2DImportSession?> openLocalLive2DZip({
       }
       temporaryZip = file;
     }
-    stage = await _prepareAndStage(file.path, parent.path);
+    final (staged, groups) = await _prepareAndStage(file.path, parent.path);
+    stage = staged;
     if (temporaryZip != null) {
       await temporaryZip.delete();
       temporaryZip = null;
     }
+    final pickedName = selected['name'];
     return Live2DImportSession(
-      stage.dispose,
-      previewDirectory: stage.directory.path,
+      staged.dispose,
+      previewDirectory: staged.directory.path,
+      displayName: live2dDisplayName(pickedName is String ? pickedName : null),
+      groups: groups,
+      readFiles: staged.readFiles,
     );
   } on Live2DPreviewCleanupFailure catch (failure) {
     await _tryCleanup(failure.retryCleanup);
@@ -85,7 +91,12 @@ Future<Live2DImportSession?> openLocalLive2DZip({
   }
 }
 
-Future<Live2DPreviewStage> _prepareAndStage(String path, String directory) =>
+/// Prepares and stages the ZIP at [path] in a worker isolate, and returns
+/// the stage with the model3 groups that feed the mapping suggestions.
+Future<(Live2DPreviewStage, List<Live2DModelGroup>)> _prepareAndStage(
+  String path,
+  String directory,
+) =>
     Isolate.run(() async {
       final file = File(path);
       if (await file.length() > _maxArchiveBytes) {
@@ -99,7 +110,8 @@ Future<Live2DPreviewStage> _prepareAndStage(String path, String directory) =>
         bytes.add(chunk);
       }
       final bundle = prepareLive2DPreview(bytes.takeBytes());
-      return stageLive2DPreview(Directory(directory), bundle);
+      final stage = await stageLive2DPreview(Directory(directory), bundle);
+      return (stage, bundle.groups);
     });
 
 Future<void> _tryCleanup(Future<void> Function() cleanup) async {

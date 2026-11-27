@@ -4,6 +4,7 @@ import 'package:client_flutter/app/app_theme.dart';
 import 'package:client_flutter/features/world/live2d_preview_view.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'live2d_native_fake.dart';
@@ -27,6 +28,9 @@ Future<FakeLive2DPlatformViews> _pumpPreview(
   void Function(FakeLive2DView view)? onCreate,
   ThemeData? theme,
   EdgeInsets padding = EdgeInsets.zero,
+  String model3File = Live2DPreviewView.model3Name,
+  bool kept = false,
+  ValueChanged<Live2DPreviewController>? onReady,
 }) async {
   final platformViews = FakeLive2DPlatformViews()..onCreate = onCreate;
   addTearDown(platformViews.dispose);
@@ -41,6 +45,9 @@ Future<FakeLive2DPlatformViews> _pumpPreview(
             child: Live2DPreviewView(
               directory: _directory,
               firstFrameTimeout: firstFrameTimeout,
+              model3File: model3File,
+              kept: kept,
+              onReady: onReady,
             ),
           ),
         ),
@@ -288,5 +295,56 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await _settle(tester);
     expect(platformViews.disposed, contains(view.viewId));
+  });
+
+  testWidgets('hands each ready renderer to onReady once, and none that '
+      'failed', (tester) async {
+    final ready = <Live2DPreviewController>[];
+    final platformViews = await _pumpPreview(tester, onReady: ready.add);
+    final view = platformViews.last;
+    await view.boot();
+    await view.viewerError('model3 not found', code: 'load_failed');
+    await _settle(tester);
+    expect(find.byKey(_failed), findsOneWidget);
+    expect(ready, isEmpty);
+
+    await tester.tap(find.byKey(_retry));
+    await _settle(tester);
+    final second = platformViews.last;
+    await second.boot();
+    await second.ready();
+    await second.ready();
+    await _settle(tester);
+    expect(ready, hasLength(1));
+    expect(ready.single.state, Live2DPreviewState.ready);
+  });
+
+  testWidgets('a kept model loads its own model3 file and names a failed '
+      'read', (tester) async {
+    final platformViews = await _pumpPreview(
+      tester,
+      model3File: 'a b/模型.model3.json',
+      kept: true,
+      onCreate: (view) => view.serveError = PlatformException(
+        code: 'bad_directory',
+        message: 'not a model directory',
+      ),
+    );
+    final view = platformViews.last;
+    expect(find.text('无法读取本机保存的模型文件。'), findsOneWidget);
+    expect(find.text('无法读取临时预览文件。'), findsNothing);
+
+    view.serveError = null;
+    await tester.tap(find.byKey(_retry));
+    await _settle(tester);
+    await view.boot();
+    await _settle(tester);
+    expect(
+      view.posted.single,
+      containsPair(
+        'model3',
+        '${view.baseUrl}a%20b/%E6%A8%A1%E5%9E%8B.model3.json',
+      ),
+    );
   });
 }

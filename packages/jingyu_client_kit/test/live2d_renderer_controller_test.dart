@@ -47,6 +47,46 @@ void main() {
       await host.close();
     });
 
+    test('setParameter sends a checked value to the ready viewer', () async {
+      await expectLater(
+        controller.setParameter('ParamAngleX', 0),
+        throwsStateError,
+      );
+      final ready = controller.start(
+        modelId: 'model.a',
+        model3Url: 'http://127.0.0.1:8000/model.model3.json',
+        textureUrls: const <String>[],
+        profileRev: 1,
+      );
+      host.emit({
+        'event': 'ready',
+        'modelId': 'model.a',
+        'profileRev': 1,
+        'parameters': [
+          {'id': 'ParamAngleX', 'min': -30, 'max': 30, 'default': 0},
+        ],
+        'parts': <String>[],
+      });
+      await ready;
+      await controller.setParameter('ParamAngleX', -12.5);
+      expect(host.commands.last, {
+        'cmd': 'setParam',
+        'name': 'ParamAngleX',
+        'value': -12.5,
+      });
+      final sent = host.commands.length;
+      await expectLater(
+        controller.setParameter('ParamAngleX', 31),
+        throwsFormatException,
+      );
+      await expectLater(
+        controller.setParameter('ParamMissing', 0),
+        throwsFormatException,
+      );
+      expect(host.commands, hasLength(sent));
+      expect(controller.state, Live2DPreviewState.ready);
+    });
+
     test(
       'starts loading, sends the load command and waits for first frame',
       () async {

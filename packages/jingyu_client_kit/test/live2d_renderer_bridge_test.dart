@@ -69,7 +69,13 @@ void main() {
         () => bridge.parameterCommand('x', double.nan),
         throwsFormatException,
       );
-      expect(() => bridge.parameterCommand('x', 1.5), throwsFormatException);
+      expect(
+        () => bridge.parameterCommand('x', double.infinity),
+        throwsFormatException,
+      );
+      // Without a model report, any finite value in the parameter's own
+      // units is passed on.
+      expect(bridge.parameterCommand('x', -12.5)['value'], -12.5);
       expect(bridge.expressionCommand('happy')['name'], 'happy');
       expect(() => bridge.expressionCommand(' '), throwsFormatException);
       expect(bridge.motionCommand('Idle', 0)['group'], 'Idle');
@@ -152,6 +158,35 @@ void main() {
     test('setParameter refused unless ready', () {
       final bridge = Live2DRendererBridge();
       expect(() => bridge.parameterCommand('p', 0.1), throwsStateError);
+    });
+
+    test('setParameter checks the reported IDs and ranges', () {
+      final bridge = Live2DRendererBridge()..markLoading('m');
+      bridge.handleEvent({
+        'event': 'ready',
+        'modelId': 'm',
+        'profileRev': 1,
+        'parameters': [
+          {'id': 'ParamAngleX', 'min': -30, 'max': 30, 'default': 0},
+          {'id': 'ParamOpen', 'default': 0},
+        ],
+        'parts': <String>[],
+      });
+      expect(bridge.parameterCommand('ParamAngleX', -30)['value'], -30);
+      expect(bridge.parameterCommand('ParamAngleX', 12.5)['value'], 12.5);
+      expect(bridge.parameterCommand('ParamOpen', 99)['value'], 99);
+      expect(
+        () => bridge.parameterCommand('ParamAngleX', 30.5),
+        throwsFormatException,
+      );
+      expect(
+        () => bridge.parameterCommand('ParamAngleX', -31),
+        throwsFormatException,
+      );
+      expect(
+        () => bridge.parameterCommand('ParamMissing', 0),
+        throwsFormatException,
+      );
     });
 
     test('a ready event records the reported model info', () {

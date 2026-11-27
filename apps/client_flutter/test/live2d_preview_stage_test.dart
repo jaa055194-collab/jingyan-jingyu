@@ -39,6 +39,19 @@ void main() {
     bundle = prepareLive2DPreview(base64Decode(_previewZip));
   });
 
+  test('reads back only the files the stage wrote', () async {
+    final stage = await stageLive2DPreview(parent, bundle);
+    addTearDown(stage.dispose);
+    await File.fromUri(stage.directory.uri.resolve('extra.png'))
+        .writeAsBytes([1]);
+    final files = await stage.readFiles();
+    expect(files.keys, stage.names);
+    expect(stage.names, stagedLive2DPreviewNames(bundle.files.keys));
+    for (final name in stage.names) {
+      expect(files[name], bundle.files[name], reason: name);
+    }
+  });
+
   test(
     'prepares a selected ZIP in the isolate and preserves the source',
     () async {

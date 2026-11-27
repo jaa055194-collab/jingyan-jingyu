@@ -24,6 +24,9 @@ class Live2DPreviewView extends StatefulWidget {
     this.modelId = 'preview',
     this.profileRev = 1,
     this.firstFrameTimeout = const Duration(seconds: 20),
+    this.model3File = Live2DPreviewView.model3Name,
+    this.kept = false,
+    this.onReady,
   });
 
   /// The model file at the root of every preview stage.
@@ -39,6 +42,17 @@ class Live2DPreviewView extends StatefulWidget {
   /// Echoed by the viewer's ready event; must be at least 1.
   final int profileRev;
   final Duration firstFrameTimeout;
+
+  /// The model3 file, relative to [directory].
+  final String model3File;
+
+  /// Whether [directory] holds a model kept on this device rather than a
+  /// temporary preview. Only the copy for a failed read differs.
+  final bool kept;
+
+  /// Called with the controller each time a renderer becomes ready. The
+  /// controller stays usable until this view replaces or disposes it.
+  final ValueChanged<Live2DPreviewController>? onReady;
 
   @override
   State<Live2DPreviewView> createState() => _Live2DPreviewViewState();
@@ -57,12 +71,18 @@ class _Live2DPreviewViewState extends State<Live2DPreviewView> {
   String? _reason;
   String? _detail;
 
+  /// The controller last handed to [Live2DPreviewView.onReady].
+  Live2DPreviewController? _announced;
+
+  String get _readFailure => widget.kept ? '无法读取本机保存的模型文件。' : '无法读取临时预览文件。';
+
   @override
   void didUpdateWidget(Live2DPreviewView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.directory != widget.directory ||
         oldWidget.modelId != widget.modelId ||
         oldWidget.profileRev != widget.profileRev ||
+        oldWidget.model3File != widget.model3File ||
         oldWidget.firstFrameTimeout != widget.firstFrameTimeout) {
       // build always follows didUpdateWidget, so no setState here.
       _replaceView();
@@ -128,7 +148,7 @@ class _Live2DPreviewViewState extends State<Live2DPreviewView> {
       if (identical(host, _host)) {
         _show(
           _Status.failed,
-          reason: '无法读取临时预览文件。',
+          reason: _readFailure,
           detail: _text(error.message) ?? error.code,
         );
       }
@@ -137,7 +157,7 @@ class _Live2DPreviewViewState extends State<Live2DPreviewView> {
       if (identical(host, _host)) {
         _show(
           _Status.failed,
-          reason: '无法读取临时预览文件。',
+          reason: _readFailure,
           detail: _text('$error'),
         );
       }
@@ -150,7 +170,7 @@ class _Live2DPreviewViewState extends State<Live2DPreviewView> {
     controller
         .start(
           modelId: widget.modelId,
-          model3Url: '$baseUrl${Live2DPreviewView.model3Name}',
+          model3Url: '$baseUrl${Uri(path: widget.model3File).path}',
           textureUrls: const <String>[],
           profileRev: widget.profileRev,
         )
@@ -165,6 +185,10 @@ class _Live2DPreviewViewState extends State<Live2DPreviewView> {
         _show(_Status.loading);
       case Live2DPreviewState.ready:
         _show(_Status.ready);
+        if (!identical(_announced, controller)) {
+          _announced = controller;
+          widget.onReady?.call(controller);
+        }
       case Live2DPreviewState.failed:
         _showFailure(controller.failure);
       case Live2DPreviewState.idle:

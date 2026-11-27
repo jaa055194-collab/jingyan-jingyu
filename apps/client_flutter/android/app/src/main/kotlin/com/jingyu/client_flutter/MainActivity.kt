@@ -534,6 +534,13 @@ class MainActivity : FlutterActivity() {
             live2dZipWorker = Thread({
                 var file: File? = null
                 var tooLarge = false
+                // Only labels a kept model; without it the app shows a default name.
+                val name: String? = try {
+                    resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                        ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                } catch (_: Exception) {
+                    null
+                }
                 try {
                     file = Live2DZipCache.copy(directory) {
                         resolver.openInputStream(uri) ?: throw IOException()
@@ -543,7 +550,7 @@ class MainActivity : FlutterActivity() {
                 } catch (_: Exception) {
                     // The provider's exception can contain a URI or path; never forward it.
                 }
-                if (!mainHandler.post { completeLive2DZipPick(pending, file, tooLarge) }) {
+                if (!mainHandler.post { completeLive2DZipPick(pending, file, tooLarge, name) }) {
                     file?.delete()
                 }
             }, "jingyu-live2d-zip").also { it.start() }
@@ -553,7 +560,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun completeLive2DZipPick(pending: MethodChannel.Result, file: File?, tooLarge: Boolean) {
+    private fun completeLive2DZipPick(pending: MethodChannel.Result, file: File?, tooLarge: Boolean, name: String?) {
         if (live2dZipResult !== pending) {
             // onDestroy already cancelled the call; ownership never passed to Dart.
             file?.delete()
@@ -562,7 +569,7 @@ class MainActivity : FlutterActivity() {
         live2dZipResult = null
         live2dZipWorker = null
         when {
-            file != null -> pending.success(mapOf("path" to file.absolutePath, "temporary" to true))
+            file != null -> pending.success(mapOf("path" to file.absolutePath, "temporary" to true, "name" to name))
             tooLarge -> pending.error("live2d_zip_too_large", "ZIP exceeds the 160 MiB limit", null)
             else -> live2dZipPickFailed(pending)
         }

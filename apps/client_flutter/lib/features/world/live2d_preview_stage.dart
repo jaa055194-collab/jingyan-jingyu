@@ -5,11 +5,20 @@ import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 
 /// A completed, device-local staging session for a static Live2D preview.
 final class Live2DPreviewStage {
-  Live2DPreviewStage._(this.directory, this.model3File);
+  Live2DPreviewStage._(this.directory, this.model3File, this.names);
 
   final Directory directory;
   final File model3File;
+
+  /// The names this stage wrote, in [stagedLive2DPreviewNames] order.
+  final List<String> names;
   Future<void>? _disposal;
+
+  /// Reads back the files this stage wrote, and only those, keyed by name.
+  Future<Map<String, List<int>>> readFiles() async => {
+    for (final name in names)
+      name: await File.fromUri(directory.uri.resolve(name)).readAsBytes(),
+  };
 
   /// Removes only this session's directory. Failed I/O can be retried.
   Future<void> dispose() => _disposal ??= _dispose();
@@ -60,6 +69,7 @@ Future<Live2DPreviewStage> stageLive2DPreview(
   final stage = Live2DPreviewStage._(
     directory,
     File.fromUri(uri.resolve(model3Name)),
+    List.unmodifiable(names),
   );
   try {
     for (final name in names) {
