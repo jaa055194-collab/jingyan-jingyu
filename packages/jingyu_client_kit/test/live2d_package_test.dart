@@ -557,4 +557,376 @@ void main() {
       expect(manifest, isNot(contains('Groups')));
     });
   });
+
+  group('expressions and motions', () {
+    // The valid entries, a model3 that lists [expressions] and [motions], and
+    // [files] (text or bytes) under model/.
+    Uint8List package({
+      Object? expressions,
+      Object? motions,
+      Map<String, Object> files = const {},
+    }) =>
+        _zip([
+          ..._validEntries(
+            model3Text: _model3(extra: {
+              'Expressions': ?expressions,
+              'Motions': ?motions,
+            }),
+          ),
+          for (final MapEntry(key: path, value: data) in files.entries)
+            data is String
+                ? _textFile('model/$path', data)
+                : _bytesFile('model/$path', data as List<int>),
+        ]);
+
+    Object? fileRefsOf(Live2DPreviewBundle bundle) =>
+        (jsonDecode(utf8.decode(bundle.files[bundle.model3Name]!))
+            as Map<String, Object?>)['FileReferences'];
+
+    String describe(Live2DPackageIssue issue) =>
+        '${issue.code.name} ${issue.index} ${issue.path}';
+
+    int sizeOf(Live2DPreviewBundle bundle) =>
+        bundle.files.values.fold(0, (sum, file) => sum + file.length);
+
+    test('stages them under generated names that the model3 lists', () {
+      final zip = package(
+        expressions: [
+          {'Name': 'Smile', 'File': 'exp/smile.exp3.json'},
+          {'Name': '笑', 'File': 'exp/laugh.exp3.json'},
+        ],
+        motions: {
+          'Idle': [
+            {
+              'File': 'motion/idle.motion3.json',
+              'FadeInTime': 0.5,
+              'FadeOutTime': -1,
+              'Sound': 'sounds/idle.wav',
+            },
+            {'File': 'motion/breath.motion3.json', 'FadeOutTime': 1},
+          ],
+          '': [
+            {'File': 'motion/tap.motion3.json', 'Sound': 'sounds/tap.wav'},
+          ],
+        },
+        files: {
+          'exp/smile.exp3.json': '{"Type":"Live2D Expression"}',
+          'exp/laugh.exp3.json': '{}',
+          'motion/idle.motion3.json': '{"Version":3}',
+          'motion/breath.motion3.json': '{}',
+          'motion/tap.motion3.json': '{"Meta":{}}',
+        },
+      );
+      final bundle = prepareLive2DPreview(zip);
+      expect(bundle.warnings, isEmpty);
+      expect(bundle.files.keys, unorderedEquals([
+        'model.model3.json', 'model.moc3', 'texture-0.png',
+        'expression-0.exp3.json', 'expression-1.exp3.json',
+        'motion-0.motion3.json', 'motion-1.motion3.json',
+        'motion-2.motion3.json',
+      ]));
+      expect(utf8.decode(bundle.files['expression-0.exp3.json']!),
+          '{"Type":"Live2D Expression"}');
+      expect(utf8.decode(bundle.files['motion-2.motion3.json']!),
+          '{"Meta":{}}');
+      expect(fileRefsOf(bundle), {
+        'Moc': 'model.moc3',
+        'Textures': ['texture-0.png'],
+        'Expressions': [
+          {'Name': 'Smile', 'File': 'expression-0.exp3.json'},
+          {'Name': '笑', 'File': 'expression-1.exp3.json'},
+        ],
+        'Motions': {
+          'Idle': [
+            {'File': 'motion-0.motion3.json', 'FadeInTime': 0.5},
+            {'File': 'motion-1.motion3.json', 'FadeOutTime': 1},
+          ],
+          '': [
+            {'File': 'motion-2.motion3.json'},
+          ],
+        },
+      });
+      final r = validateLive2DPackage(zip);
+      expect(r.ok, isTrue, reason: r.issues.join(', '));
+      expect(r.warnings, isEmpty);
+    });
+
+    test('leaves out only an entry with a problem, with a warning', () {
+      final zip = package(
+        expressions: [
+          {'Name': 'Gone', 'File': 'exp/gone.exp3.json'},
+          {'Name': 'Smile', 'File': 'exp/smile.exp3.json'},
+          {'Name': 'Smile', 'File': 'exp/wink.exp3.json'},
+          {'Name': 'Big', 'File': 'exp/big.exp3.json'},
+          {'File': 'exp/wink.exp3.json'},
+          {'Name': 'Number', 'File': 7},
+          'Frown',
+          {'Name': 'Wink', 'File': 'exp/wink.exp3.json'},
+        ],
+        motions: {
+          'Idle': [
+            {'File': 'motion/broken.motion3.json'},
+            {'File': 'motion/idle.motion3.json'},
+            {'File': 'motion/list.motion3.json'},
+            {'File': 'motion/latin1.motion3.json'},
+            {'File': 'motion/deep.motion3.json'},
+          ],
+          'Tap': 'motion/tap.motion3.json',
+        },
+        files: {
+          'exp/smile.exp3.json': '{}',
+          'exp/wink.exp3.json': '{"Wink":1}',
+          'exp/big.exp3.json': '{"Pad":"${'x' * 40}"}',
+          'motion/broken.motion3.json': '{"Version":',
+          'motion/idle.motion3.json': '{}',
+          'motion/list.motion3.json': '[]',
+          'motion/latin1.motion3.json': [0x7b, 0xe9, 0x7d],
+          'motion/deep.motion3.json': '${'[' * 65}${']' * 65}',
+        },
+      );
+      const limits = Live2DPackageLimits(maxExpressionBytes: 32);
+      const expected = [
+        'expressionSkipped 0 model/exp/gone.exp3.json',
+        'expressionSkipped 2 model/exp/wink.exp3.json',
+        'expressionSkipped 3 model/exp/big.exp3.json',
+        'expressionSkipped 4 model/exp/wink.exp3.json',
+        'expressionSkipped 5 null',
+        'expressionSkipped 6 null',
+        'motionSkipped 0 model/motion/broken.motion3.json',
+        'motionSkipped 2 model/motion/list.motion3.json',
+        'motionSkipped 3 model/motion/latin1.motion3.json',
+        'motionSkipped 4 model/motion/deep.motion3.json',
+        'motionSkipped null null',
+      ];
+      final bundle = prepareLive2DPreview(zip, limits: limits);
+      expect(bundle.warnings.map(describe), expected);
+      final messages = [for (final w in bundle.warnings) w.message];
+      expect(messages[0], contains('missing'));
+      expect(messages[1], contains('duplicate Name "Smile"'));
+      expect(messages[2], contains('exceeds 32 bytes'));
+      expect(messages[3], contains('Name'));
+      expect(messages[6],
+          allOf(startsWith('group "Idle": '), contains('not valid JSON')));
+      expect(messages[7], contains('not a JSON object'));
+      expect(messages[8], contains('not UTF-8'));
+      expect(messages[9], contains('nesting exceeds 64'));
+      expect(messages[10], contains('"Tap"'));
+      expect(fileRefsOf(bundle), {
+        'Moc': 'model.moc3',
+        'Textures': ['texture-0.png'],
+        'Expressions': [
+          {'Name': 'Smile', 'File': 'expression-0.exp3.json'},
+          {'Name': 'Wink', 'File': 'expression-1.exp3.json'},
+        ],
+        'Motions': {
+          'Idle': [
+            {'File': 'motion-0.motion3.json'},
+          ],
+        },
+      });
+      expect(utf8.decode(bundle.files['expression-1.exp3.json']!),
+          '{"Wink":1}');
+      expect(bundle.files.keys, unorderedEquals([
+        'model.model3.json', 'model.moc3', 'texture-0.png',
+        'expression-0.exp3.json', 'expression-1.exp3.json',
+        'motion-0.motion3.json',
+      ]));
+      final r = validateLive2DPackage(zip, limits: limits);
+      expect(r.ok, isTrue, reason: r.issues.join(', '));
+      expect(r.warnings.map(describe), expected);
+    });
+
+    test('leaves out an entry whose data fails its checksum', () {
+      final zip = _zip([
+        ..._validEntries(
+          model3Text: _model3(extra: {
+            'Expressions': [
+              {'Name': 'Smile', 'File': 'exp/smile.exp3.json'},
+            ],
+          }),
+        ),
+        ArchiveFile.noCompress('model/exp/smile.exp3.json', 12,
+            Uint8List.fromList(utf8.encode('{"A":"QQQQ"}'))),
+      ]);
+      // Change one stored byte: the data is still JSON, the CRC is wrong.
+      final needle = utf8.encode('QQQQ');
+      var at = -1;
+      for (var i = 0; at < 0 && i + needle.length <= zip.length; i++) {
+        var match = true;
+        for (var j = 0; match && j < needle.length; j++) {
+          match = zip[i + j] == needle[j];
+        }
+        if (match) at = i;
+      }
+      expect(at, isNonNegative);
+      zip[at] = 0x52;
+      final r = validateLive2DPackage(zip);
+      expect(r.ok, isTrue, reason: r.issues.join(', '));
+      final bundle = prepareLive2DPreview(zip);
+      for (final warnings in [r.warnings, bundle.warnings]) {
+        expect(warnings.single.toString(),
+            'expressionSkipped[0](model/exp/smile.exp3.json): '
+            'invalid ZIP entry data');
+      }
+      expect(fileRefsOf(bundle), isNot(contains('Expressions')));
+    });
+
+    test('still rejects an unsafe expression or motion path', () {
+      for (final extra in <Map<String, Object?>>[
+        {
+          'Expressions': [
+            {'Name': 'Smile', 'File': '../smile.exp3.json'},
+          ],
+        },
+        {
+          'Motions': {
+            'Idle': [
+              {'File': 'motion/../../idle.motion3.json'},
+            ],
+          },
+        },
+      ]) {
+        final zip = _zip(_validEntries(model3Text: _model3(extra: extra)));
+        final r = validateLive2DPackage(zip);
+        expect(r.ok, isFalse);
+        expect(r.issues.single.code, Live2DPackageIssueCode.unsafeEntryPath);
+        expect(r.warnings, isEmpty);
+        expect(() => prepareLive2DPreview(zip), throwsFormatException);
+      }
+    });
+
+    test('lists no Expressions or Motions when it keeps none', () {
+      for (final zip in [
+        _zip(_validEntries()),
+        package(
+          expressions: <Object?>[],
+          motions: <String, Object?>{'Idle': <Object?>[]},
+        ),
+        package(
+          expressions: [
+            {'Name': 'Smile', 'File': 'exp/gone.exp3.json'},
+          ],
+          motions: {
+            'Idle': [
+              {'File': 'motion/gone.motion3.json'},
+            ],
+          },
+        ),
+      ]) {
+        final bundle = prepareLive2DPreview(zip);
+        expect(fileRefsOf(bundle), {
+          'Moc': 'model.moc3',
+          'Textures': ['texture-0.png'],
+        });
+        expect(bundle.files.keys, unorderedEquals(
+            ['model.model3.json', 'model.moc3', 'texture-0.png']));
+      }
+    });
+
+    test('leaves out what the preview byte cap cannot hold', () {
+      final zip = package(
+        expressions: [
+          {'Name': 'Smile', 'File': 'exp/smile.exp3.json'},
+        ],
+        motions: {
+          'Idle': [
+            {'File': 'motion/idle.motion3.json', 'FadeInTime': 1},
+          ],
+        },
+        files: {
+          'exp/smile.exp3.json': '{}',
+          'motion/idle.motion3.json': '{"Version":3}',
+        },
+      );
+      // The model3 grows with each entry kept; an exact fit keeps them all.
+      final size = sizeOf(prepareLive2DPreview(zip));
+      expect(prepareLive2DPreview(zip, maxPreviewBytes: size).warnings,
+          isEmpty);
+      final capped = prepareLive2DPreview(zip, maxPreviewBytes: size - 1);
+      expect(capped.files.keys, unorderedEquals([
+        'model.model3.json', 'model.moc3', 'texture-0.png',
+        'expression-0.exp3.json',
+      ]));
+      expect(capped.warnings.map(describe),
+          ['motionSkipped 0 model/motion/idle.motion3.json']);
+      expect(capped.warnings.single.message, contains('byte cap'));
+      // Room for the model alone leaves both out; less fails as before.
+      final base = sizeOf(prepareLive2DPreview(_zip(_validEntries())));
+      expect(prepareLive2DPreview(zip, maxPreviewBytes: base).warnings,
+          hasLength(2));
+      expect(() => prepareLive2DPreview(zip, maxPreviewBytes: base - 1),
+          throwsFormatException);
+      // Validation has no byte cap.
+      expect(validateLive2DPackage(zip).warnings, isEmpty);
+    });
+
+    test('keeps at most the capped number of entries', () {
+      List<Map<String, Object?>> motionList(int count) => [
+            for (var i = 0; i < count; i++) {'File': 'motion/m.motion3.json'},
+          ];
+      final zip = package(
+        expressions: [
+          for (var i = 0; i <= 1024; i++)
+            {'Name': 'E$i', 'File': 'exp/e.exp3.json'},
+        ],
+        motions: {
+          'Long': motionList(1025),
+          for (var g = 0; g < 4; g++) 'G$g': motionList(1000),
+        },
+        files: {'exp/e.exp3.json': '{}', 'motion/m.motion3.json': '{}'},
+      );
+      // The repetitive model3 compresses far better than real packages.
+      const limits = Live2DPackageLimits(maxCompressionRatio: 1 << 20);
+      final bundle = prepareLive2DPreview(zip, limits: limits);
+      expect(bundle.warnings.map(describe), [
+        'expressionSkipped 1024 null',
+        'motionSkipped 1024 null',
+        'motionSkipped 72 null',
+      ]);
+      expect(bundle.warnings.last.message, contains('"G3"'));
+      final refs = fileRefsOf(bundle) as Map<String, Object?>;
+      expect(refs['Expressions'], hasLength(1024));
+      final motions = refs['Motions'] as Map<String, Object?>;
+      expect(motions.keys, ['Long', 'G0', 'G1', 'G2', 'G3']);
+      expect(motions['Long'], hasLength(1024));
+      expect(motions['G3'], hasLength(72));
+      expect(bundle.files, contains('motion-4095.motion3.json'));
+      expect(bundle.files, isNot(contains('motion-4096.motion3.json')));
+      expect(validateLive2DPackage(zip, limits: limits).warnings.map(describe),
+          bundle.warnings.map(describe));
+    });
+
+    test('leaves out long names and motion groups beyond the cap', () {
+      final long = 'x' * 257;
+      final zip = package(
+        expressions: [
+          {'Name': long, 'File': 'exp/e.exp3.json'},
+          {'Name': 'x' * 256, 'File': 'exp/e.exp3.json'},
+        ],
+        motions: {
+          long: [
+            {'File': 'motion/m.motion3.json'},
+          ],
+          for (var g = 0; g < 4096; g++) 'G$g': <Object?>[],
+        },
+        files: {'exp/e.exp3.json': '{}', 'motion/m.motion3.json': '{}'},
+      );
+      const limits = Live2DPackageLimits(maxCompressionRatio: 1 << 20);
+      final bundle = prepareLive2DPreview(zip, limits: limits);
+      expect(bundle.warnings.map(describe), [
+        'expressionSkipped 0 model/exp/e.exp3.json',
+        'motionSkipped null null',
+        'motionSkipped null null',
+      ]);
+      expect(bundle.warnings[1].message, contains('longer than 256'));
+      expect(bundle.warnings[2].message, contains('1 left out'));
+      expect(fileRefsOf(bundle), {
+        'Moc': 'model.moc3',
+        'Textures': ['texture-0.png'],
+        'Expressions': [
+          {'Name': 'x' * 256, 'File': 'expression-0.exp3.json'},
+        ],
+      });
+    });
+  });
 }

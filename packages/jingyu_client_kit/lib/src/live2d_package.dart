@@ -61,7 +61,7 @@ Live2DPreviewBundle prepareLive2DPreview(
   if (!result.ok) {
     throw FormatException('Live2D preview rejected: ${result.issues.first.code.name}');
   }
-  return Live2DPreviewBundle._(output, result.groups, const []);
+  return Live2DPreviewBundle._(output, result.groups, result.warnings);
 }
 
 /// Safety and resource limits for a local Live2D package.
@@ -74,6 +74,8 @@ class Live2DPackageLimits {
     this.maxModel3Bytes = 4 * 1024 * 1024,
     this.maxJsonDepth = 64,
     this.maxTotalPixels = 200000000,
+    this.maxExpressionBytes = 1024 * 1024,
+    this.maxMotionBytes = 8 * 1024 * 1024,
   });
 
   final int maxEntries;
@@ -87,6 +89,14 @@ class Live2DPackageLimits {
   /// 155M pixels; the default permits it but callers on constrained devices
   /// should lower this (and/or downsample) after measuring GPU limits.
   final int maxTotalPixels;
+
+  /// Largest `*.exp3.json` file an expression may use. A larger one leaves
+  /// only that expression out, with a warning.
+  final int maxExpressionBytes;
+
+  /// Largest `*.motion3.json` file a motion may use. A larger one leaves only
+  /// that motion out, with a warning.
+  final int maxMotionBytes;
 }
 
 enum Live2DPackageIssueCode {
@@ -113,18 +123,34 @@ enum Live2DPackageIssueCode {
   badTextureMagic,
   textureBudgetExceeded,
   integrityMismatch,
+
+  /// Warning: an expression left out. The message says why.
+  expressionSkipped,
+
+  /// Warning: a motion, a motion group or the rest of the motions left out.
+  /// The message says why and names the group, if there is one.
+  motionSkipped,
 }
 
 class Live2DPackageIssue {
-  const Live2DPackageIssue(this.code, this.message, {this.path});
+  const Live2DPackageIssue(this.code, this.message, {this.path, this.index});
 
   final Live2DPackageIssueCode code;
   final String message;
   final String? path;
 
+  /// For an expression or motion warning, the entry's index in
+  /// `FileReferences.Expressions` or in its motion group; null when the
+  /// warning is about a whole list or group.
+  final int? index;
+
   @override
-  String toString() =>
-      path == null ? '${code.name}: $message' : '${code.name}($path): $message';
+  String toString() {
+    final at = index == null ? '' : '[$index]';
+    return path == null
+        ? '${code.name}$at: $message'
+        : '${code.name}$at($path): $message';
+  }
 }
 
 /// A `Groups` entry of a model3 manifest.
@@ -156,6 +182,7 @@ class Live2DPackageValidation {
     required this.sha256Hex,
     required this.issues,
     this.groups = const [],
+    this.warnings = const [],
   });
 
   final bool ok;
@@ -177,6 +204,11 @@ class Live2DPackageValidation {
   /// list, or that holds more than [Live2DModelInfo.maxEntries] entries or IDs
   /// in total, gives no groups.
   final List<Live2DModelGroup> groups;
+
+  /// Expressions and motions left out for a problem of that entry alone, in
+  /// manifest order, or empty unless [ok]. They never fail validation. A
+  /// preview leaves out at least these, and more if its byte cap needs it.
+  final List<Live2DPackageIssue> warnings;
 
   bool get hasIssues => issues.isNotEmpty;
 
@@ -479,6 +511,19 @@ Live2DPackageValidation validateLive2DPackage(
   String? expectedSha256Hex,
 }) => _validateLive2DPackage(bytes, limits: limits, expectedSha256Hex: expectedSha256Hex);
 
+// Caps on the expressions and motions a package keeps, matching what
+// Live2DModelInfo accepts back from the viewer. Entries beyond a cap are left
+// out with a warning.
+const _maxExpressions = Live2DModelInfo.maxExpressions;
+const _maxMotionsPerGroup = Live2DModelInfo.maxMotionsPerGroup;
+const _maxMotions = 4096;
+const _maxMotionGroups = Live2DModelInfo.maxEntries;
+const _maxNameLength = Live2DModelInfo.maxIdLength;
+
+// A motion's FadeInTime or FadeOutTime, kept only as a finite number >= 0.
+num? _fadeTime(Object? value) =>
+    value is num && value.isFinite && value >= 0 ? value : null;
+
 Live2DPackageValidation _validateLive2DPackage(
   Uint8List bytes, {
   required Live2DPackageLimits limits,
@@ -657,7 +702,8 @@ Live2DPackageValidation _validateLive2DPackage(
     return fail(model3Path: model3Path);
   }
 
-  List<int>? verify(ArchiveFile file, String path) {
+  // A read that is not fatal leaves reporting the failure to the caller.
+  List<int>? verify(ArchiveFile file, String path, {bool fatal = true}) {
     try {
       final header = headers[path];
       final zipFile = header?.file;
@@ -673,8 +719,10 @@ Live2DPackageValidation _validateLive2DPackage(
       }
       return _readVerifiedEntry(file, forPreview: preview != null);
     } catch (_) {
-      issues.add(Live2DPackageIssue(Live2DPackageIssueCode.notZip,
-          'invalid ZIP entry data', path: path));
+      if (fatal) {
+        issues.add(Live2DPackageIssue(Live2DPackageIssueCode.notZip,
+            'invalid ZIP entry data', path: path));
+      }
       return null;
     }
   }
@@ -725,7 +773,8 @@ Live2DPackageValidation _validateLive2DPackage(
   final base = model3Path.substring(0, model3Path.lastIndexOf('/') + 1);
   final referenced = <String>[];
 
-  String? requireReference(Object? value, String label, String suffix) {
+  String? requireReference(Object? value, String label, String suffix,
+      {bool mustExist = true}) {
     if (value is! String || value.trim().isEmpty) {
       issues.add(
         Live2DPackageIssue(
@@ -759,7 +808,7 @@ Live2DPackageValidation _validateLive2DPackage(
       return null;
     }
     final resolved = '$base$value';
-    referenced.add(resolved);
+    if (mustExist) referenced.add(resolved);
     return resolved;
   }
 
@@ -779,11 +828,15 @@ Live2DPackageValidation _validateLive2DPackage(
     final value = fileRefs[entry.key];
     if (value != null) requireReference(value, entry.key, entry.value);
   }
+  // For an expression or motion, only an unsafe or wrongly suffixed File path
+  // fails the package. Anything else wrong with one entry leaves just that
+  // entry out, with a warning, once everything required has passed.
   final expressions = fileRefs['Expressions'];
   if (expressions is List) {
     for (final item in expressions) {
-      if (item is Map<String, Object?>) {
-        requireReference(item['File'], 'Expression', '.exp3.json');
+      if (item is Map<String, Object?> && item['File'] is String) {
+        requireReference(item['File'], 'Expression', '.exp3.json',
+            mustExist: false);
       }
     }
   }
@@ -792,8 +845,9 @@ Live2DPackageValidation _validateLive2DPackage(
     for (final group in motions.values) {
       if (group is List) {
         for (final item in group) {
-          if (item is Map<String, Object?>) {
-            requireReference(item['File'], 'Motion', '.motion3.json');
+          if (item is Map<String, Object?> && item['File'] is String) {
+            requireReference(item['File'], 'Motion', '.motion3.json',
+                mustExist: false);
           }
         }
       }
@@ -891,14 +945,213 @@ Live2DPackageValidation _validateLive2DPackage(
   }
 
   final ok = issues.isEmpty;
-  if (preview != null && ok) {
-    retain('model.model3.json', utf8.encode(jsonEncode({
-      'Version': 3,
-      'FileReferences': {
-        'Moc': 'model.moc3',
-        'Textures': [for (final path in texturePaths) previewNames[path]!],
-      },
-    })));
+  final warnings = <Live2DPackageIssue>[];
+  if (ok) {
+    // Keep each usable expression and motion under a generated name. A problem
+    // confined to one entry leaves only that entry out, with a warning.
+    int jsonBytes(Object? value) => utf8.encode(jsonEncode(value)).length;
+    void warn(Live2DPackageIssueCode code, String why,
+            {String? path, int? index}) =>
+        warnings.add(Live2DPackageIssue(code, why, path: path, index: index));
+
+    final refs = <String, Object?>{
+      'Moc': 'model.moc3',
+      'Textures': [
+        if (preview != null)
+          for (final path in texturePaths) previewNames[path]!,
+      ],
+    };
+    final generated = {'Version': 3, 'FileReferences': refs};
+    // The generated model3's size so far: exact, so that no expression or
+    // motion can push it over the preview byte cap.
+    var generatedBytes = preview == null ? 0 : jsonBytes(generated);
+    const noRoom = 'no room left under the preview byte cap';
+
+    // Why the file cannot be used, or its bytes: none when only validating.
+    Object readJson(ArchiveFile file, String path) {
+      final data = verify(file, path, fatal: false);
+      if (data == null) return 'invalid ZIP entry data';
+      final String text;
+      try {
+        text = utf8.decode(data);
+      } on FormatException {
+        return 'file is not UTF-8';
+      }
+      if (_exceedsJsonDepth(text, limits.maxJsonDepth)) {
+        return 'JSON nesting exceeds ${limits.maxJsonDepth}';
+      }
+      try {
+        if (jsonDecode(text) is! Map<String, Object?>) {
+          return 'file is not a JSON object';
+        }
+      } on FormatException catch (error) {
+        return 'file is not valid JSON: ${error.message}';
+      }
+      return preview == null ? const <int>[] : data;
+    }
+
+    // Each file is read at most once, and in a preview only after the byte
+    // cap has room for it. Once staged, its staged copy stands in for it.
+    final reads = <String, Object>{};
+
+    // Stages the file at [path] as [name] for an entry that adds [extra]
+    // bytes to the generated model3. Returns why it cannot, or null.
+    String? stage(String path, String name, int maxBytes, int extra) {
+      final file = entries[path];
+      if (file == null) return 'file is missing from the package';
+      if (file.size > maxBytes) return 'file exceeds $maxBytes bytes';
+      if (preview != null &&
+          file.size + extra > maxPreviewBytes - previewBytes - generatedBytes) {
+        return noRoom;
+      }
+      final data = reads.putIfAbsent(path, () => readJson(file, path));
+      if (data is String) return data;
+      if (preview != null) {
+        retain(name, data as List<int>);
+        reads[path] = preview[name]!;
+        generatedBytes += extra;
+      }
+      return null;
+    }
+
+    const expressionSkipped = Live2DPackageIssueCode.expressionSkipped;
+    final keptExpressions = <Map<String, Object?>>[];
+    if (expressions is List) {
+      final names = <String>{};
+      for (var i = 0; i < expressions.length; i++) {
+        void skip(String why, [String? path]) =>
+            warn(expressionSkipped, why, path: path, index: i);
+        if (i == _maxExpressions) {
+          skip('at most $_maxExpressions expressions are kept: '
+              '${expressions.length - i} left out');
+          break;
+        }
+        final item = expressions[i];
+        if (item is! Map<String, Object?>) {
+          skip('entry is not an object');
+          continue;
+        }
+        final file = item['File'];
+        if (file is! String) {
+          skip('File is not a string');
+          continue;
+        }
+        final path = '$base$file';
+        final name = item['Name'];
+        if (name is! String || name.isEmpty) {
+          skip('Name is not a non-empty string', path);
+          continue;
+        }
+        if (name.length > _maxNameLength) {
+          skip('Name is longer than $_maxNameLength characters', path);
+          continue;
+        }
+        if (names.contains(name)) {
+          skip('duplicate Name ${jsonEncode(name)}', path);
+          continue;
+        }
+        final staged = 'expression-${keptExpressions.length}.exp3.json';
+        final entry = <String, Object?>{'Name': name, 'File': staged};
+        // Its model3 bytes: the entry, then a comma or the list itself.
+        final extra = jsonBytes(entry) +
+            (keptExpressions.isEmpty ? jsonBytes('Expressions') + 4 : 1);
+        final why = stage(path, staged, limits.maxExpressionBytes, extra);
+        // The first entry with a usable file claims its Name. One left out
+        // only for the byte cap claims it too, so that a preview keeps no
+        // expression that validation leaves out.
+        if (why == null || why == noRoom) names.add(name);
+        if (why != null) {
+          skip(why, path);
+          continue;
+        }
+        keptExpressions.add(entry);
+      }
+    } else if (expressions != null) {
+      warn(expressionSkipped, 'FileReferences.Expressions is not a list');
+    }
+
+    const motionSkipped = Live2DPackageIssueCode.motionSkipped;
+    final keptMotions = <String, List<Map<String, Object?>>>{};
+    var keptMotionCount = 0;
+    if (motions is Map<String, Object?>) {
+      var groupCount = 0;
+      var motionCount = 0;
+      groups:
+      for (final MapEntry(key: group, value: list) in motions.entries) {
+        if (groupCount == _maxMotionGroups) {
+          warn(motionSkipped,
+              'at most $_maxMotionGroups motion groups are kept: '
+              '${motions.length - groupCount} left out');
+          break;
+        }
+        groupCount++;
+        if (group.length > _maxNameLength) {
+          warn(motionSkipped,
+              'motion group ${groupCount - 1} has a name longer than '
+              '$_maxNameLength characters');
+          continue;
+        }
+        final label = 'group ${jsonEncode(group)}';
+        if (list is! List) {
+          warn(motionSkipped, '$label is not a list');
+          continue;
+        }
+        for (var j = 0; j < list.length; j++) {
+          void skip(String why, [String? path]) =>
+              warn(motionSkipped, '$label: $why', path: path, index: j);
+          if (j == _maxMotionsPerGroup) {
+            skip('at most $_maxMotionsPerGroup motions of a group are kept: '
+                '${list.length - j} left out');
+            break;
+          }
+          if (motionCount == _maxMotions) {
+            skip('at most $_maxMotions motions are kept: the rest are left out');
+            break groups;
+          }
+          motionCount++;
+          final item = list[j];
+          if (item is! Map<String, Object?>) {
+            skip('entry is not an object');
+            continue;
+          }
+          final file = item['File'];
+          if (file is! String) {
+            skip('File is not a string');
+            continue;
+          }
+          final path = '$base$file';
+          final staged = 'motion-$keptMotionCount.motion3.json';
+          final entry = <String, Object?>{
+            'File': staged,
+            'FadeInTime': ?_fadeTime(item['FadeInTime']),
+            'FadeOutTime': ?_fadeTime(item['FadeOutTime']),
+          };
+          // Its model3 bytes: the entry, then a comma or its group's list,
+          // which needs a comma or the Motions object itself.
+          final extra = jsonBytes(entry) +
+              (keptMotions.containsKey(group)
+                  ? 1
+                  : jsonBytes(group) +
+                      3 +
+                      (keptMotions.isEmpty ? jsonBytes('Motions') + 4 : 1));
+          final why = stage(path, staged, limits.maxMotionBytes, extra);
+          if (why != null) {
+            skip(why, path);
+            continue;
+          }
+          (keptMotions[group] ??= []).add(entry);
+          keptMotionCount++;
+        }
+      }
+    } else if (motions != null) {
+      warn(motionSkipped, 'FileReferences.Motions is not an object');
+    }
+
+    if (preview != null) {
+      if (keptExpressions.isNotEmpty) refs['Expressions'] = keptExpressions;
+      if (keptMotions.isNotEmpty) refs['Motions'] = keptMotions;
+      retain('model.model3.json', utf8.encode(jsonEncode(generated)));
+    }
   }
   return Live2DPackageValidation._(
     ok: ok,
@@ -909,5 +1162,6 @@ Live2DPackageValidation _validateLive2DPackage(
     sha256Hex: sha256Hex,
     issues: List<Live2DPackageIssue>.unmodifiable(issues),
     groups: ok ? _readGroups(root['Groups']) : const [],
+    warnings: List<Live2DPackageIssue>.unmodifiable(warnings),
   );
 }
