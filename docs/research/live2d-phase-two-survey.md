@@ -1,6 +1,6 @@
 # Live2D 二期调研：开源实现与公开资料汇总（Android）
 
-> 调研日期 2026-11-25（Asia/Shanghai），部分条目于 2026-11-26 复核（见 6.3 与第 7 节）；仓库基线 HEAD `913a1072b1df`。本文只整理调研笔记中有据可查的事实（笔记与源码副本不入库）；第 5 节中 5.3、5.4 是本 PR 已实现的部分（增量 A 与增量 B 的第一步 B1），其余是计划。
+> 调研日期 2026-11-25（Asia/Shanghai），部分条目于 2026-11-26 复核（见 6.3 与第 7 节）；仓库基线 HEAD `913a1072b1df`。本文只整理调研笔记中有据可查的事实（笔记与源码副本不入库）；第 5 节中 5.3、5.4、5.5 是本 PR 已实现的部分（增量 A 与增量 B 的 B1、B2），其余是计划。
 > 外部事实均给出仓库 URL、版本 / 标签或提交（短 SHA）、许可（SPDX id；非 SPDX 许可写原名）；未另注明时，截至日期为 2026-11-25。
 > 标注：**自报** = 项目自己公布、未独立复现；**未核实** = 笔记未能证实；**矛盾** = 来源说法不一致；**推论** = 由笔记事实推出、尚未验证；**建议** = 本文提出的我方设计，不是上游事实。
 
@@ -18,7 +18,8 @@
 - **落地顺序**：
   - 增量 A 与本文在同一 PR 实现（5.3），包括运行时打包、Android 承载、纹理预算和就绪后的故障处理。
   - 增量 B 的第一步 B1 也在本 PR 实现（5.4）：查看器回报模型的参数与 part ID，client kit 据此与 model3 `Groups` 建议口型与眨眼参数，不保存、不启用。
-  - 后续计划（5.2）：B 的其余部分（映射向导、持久化与启用），C 行为层，D 热切换与 VRM 回退，E 真机验证与性能测量。
+  - 增量 B 的第二步 B2 也在本 PR 实现（5.5，仅 Android）：把预览过的模型保留到本机，用映射向导设置口型、眨眼、表情与动作，保存并启用；启用的形象暂不在聊天或世界场景中显示。
+  - 后续计划（5.2）：C 行为层（含表情与动作的播放），D 热切换与 VRM 回退，E 真机验证与性能测量。
 - **未决**（第 6 节）：
   - 实现来源与专利的法律评估；
   - 真机性能数据；
@@ -295,7 +296,7 @@
 
 ## 5. 适配到本应用的方案
 
-> 5.1 是仓库基线 HEAD `913a1072b1df` 的现状；5.3 是本 PR 实现的增量 A，5.4 是增量 B 的第一步 B1；5.2 中其余的增量 B–E 是计划，尚未实现。
+> 5.1 是仓库基线 HEAD `913a1072b1df` 的现状；5.3 是本 PR 实现的增量 A，5.4、5.5 是增量 B 的 B1、B2；5.2 中的增量 C–E 是计划，尚未实现。
 
 ### 5.1 现有模块
 
@@ -317,7 +318,7 @@
 | 纹理上限（3.4）与 Mochi2D 的手机预算 256 MiB（2.3） | 全部纹理共用一个缩放比例，同时满足 `MAX_TEXTURE_SIZE` 与 256 MiB 预算（按含 mipmap 的 4/3 估算）；逐张解码、缩放、上传后立即释放。只借鉴 Mochi2D 的预算数值，不复制其代码；数值是估计，实机测量后再调整 | 增量 A（本 PR，5.3） |
 | 渲染进程可能被系统杀掉（3.3），WebGL 上下文可能被强制丢失（3.4） | 预览就绪后，渲染进程退出、上下文丢失、绘制失败都转为失败状态，用户可重试；正式启用为形象后改为回退默认 VRM（增量 D） | 增量 A（本 PR，5.3） |
 | 行为层与每帧分层（4.1–4.9） | 在查看器内按 4.1 的顺序实现；motion3 / exp3 / pose3 / physics3 求值优先改编 renpy 中 MIT 许可的代码（改编前人工确认不是 Cubism Framework 的逐行翻译，见 4.0）；眨眼、呼吸、视线、口型改编 airi、my-neuro、N.E.K.O、pixi-live2d-display、Kokoro-Engine。改编文件保留原版权与许可声明，README 列出来源 | 增量 C（建议） |
-| 参数映射与持久化（4.11） | 查看器加载模型后回报参数 / part ID，供 `Live2DParamMap` 校验；向导按 4.11 打分，逐项校验通过才启用对应行为；模型改存到应用私有的持久目录，保存与启用各需用户确认 | 增量 B：回报 ID 与口型 / 眨眼建议已实现（B1，5.4）；向导、持久化与启用是计划（建议） |
+| 参数映射与持久化（4.11） | 查看器加载模型后回报参数 / part ID，供 `Live2DParamMap` 校验；向导按 4.11 打分，逐项校验通过才启用对应行为；模型改存到应用私有的持久目录，保存与启用各需用户确认 | 增量 B：回报 ID 与口型 / 眨眼建议（B1，5.4），本机保存、向导与启用（B2，5.5，仅 Android）已实现；B2 按 D1-B 整体核对，任一映射目标缺失即不启用；4.11 的打分与 `cdi3.json` 显示名未做 |
 | 热切换（4.10） | 整页只保留一个 WebGL 上下文并复用；预算容得下两份时可回滚（my-neuro 式），否则先卸载旧模型（airi 式）；任何失败都回退默认 VRM | 增量 D（建议） |
 | 验证（3.5、M10 性能目标） | 本地 AVD 关闭了 GPU，WebGL 结果须在开启 GPU 的模拟器或真机上复核；帧率与显存按 M10 目标在真机实测，测前文档只写估计 | 增量 E |
 
@@ -350,10 +351,10 @@
 
 ### 5.4 增量 B 第一步（B1）：模型信息与映射建议
 
-> 以下内容已在本 PR 实现；没有界面，不构建、不保存、也不启用映射。验证范围见本节末尾，均未在真机上运行。
+> 以下内容已在本 PR 实现；B1 本身没有界面，不构建、不保存、也不启用映射（这些见 5.5）。验证范围见本节末尾，均未在真机上运行。
 
 - **查看器回报模型信息**（`live2d_viewer.js`）：首帧成功后，`ready` 事件附带运行时枚举的 `parameters`（运行时顺序，每项 `{id, min, max, default}`，取值只在是有限数时给出）与 `parts`（part ID）。每个列表要么完整，要么省略：来源缺失、格式不对或超过 4096 项时省略该字段。列表在首帧之后读取，读取出错只省略字段，不会让加载失败，也不改变 `ready` 的时机。
-- **client kit 解析**（`Live2DModelInfo`）：`Live2DRendererBridge` 收到 `ready` 时解析，`Live2DPreviewController.modelInfo` 只在就绪状态下有值。字段格式不对时（不是列表、超过 4096 项、ID 为空或超过 256 个字符、ID 重复、取值不是有限数、最小值大于最大值）只记录 `modelInfoError`：预览照常就绪，但没有 ID 集合，映射也就无法启用。5.1 所说的缺口由此补上：`Live2DParamMap` 启用前要求的完整 ID 集合现在来自运行时（启用流程尚未接入）。
+- **client kit 解析**（`Live2DModelInfo`）：`Live2DRendererBridge` 收到 `ready` 时解析，`Live2DPreviewController.modelInfo` 只在就绪状态下有值。字段格式不对时（不是列表、超过 4096 项、ID 为空或超过 256 个字符、ID 重复、取值不是有限数、最小值大于最大值）只记录 `modelInfoError`：预览照常就绪，但没有 ID 集合，映射也就无法启用。5.1 所说的缺口由此补上：`Live2DParamMap` 启用前要求的完整 ID 集合现在来自运行时（启用流程见 5.5）。
 - **读取 model3 `Groups`**（`validateLive2DPackage`）：预检通过时，把清单的 `Groups` 按文件顺序读进 `Live2DPackageValidation.groups`，再随 `Live2DPreviewBundle` 交给预览；生成的清单不写出它们。`Groups` 只供建议，不会让预检失败：不是对象、或 `Name` 为空或超过 256 个字符的条目跳过，不合格的 ID 也跳过；`Groups` 不是列表，或条目总数、ID 总数超过 4096 时，整体不读。不保留 `Target`：Cubism Framework 查找 `EyeBlink` / `LipSync` 组时只比较 `Name`、取第一个同名组，不读取 `Target`（CubismWebFramework @ `d4da0aa07e47` 的 `cubismmodelsettingjson.ts` L408-517）。
 - **映射建议**（`Live2DParamProposal.forModel`）：为 `Live2DParamMap` 的 `mouthOpen`、`blinkLeft`、`blinkRight` 三个槽给出建议，候选只来自运行时回报的参数 ID，按原样精确匹配。证据由强到弱：
   1. 第一个名为 `LipSync` / `EyeBlink` 的组，查找方式与 Cubism Framework 相同；只算运行时回报过的 ID，组里没有这样的 ID 时忽略该组。
@@ -363,12 +364,54 @@
   - 组优先于组外的标准 ID。口型取 `LipSync` 组里的标准 ID（含 Cubism 2 写法），没有就取组里第一个 ID。
   - `EyeBlink` 组不标明哪个 ID 属于哪只眼：组里某个 ID 是该眼的标准 ID（含 Cubism 2 写法），或者去掉另一只眼的标准 ID 后只剩一个 ID 时，才给该眼建议；否则不给，由用户选。
   - 没有可用的组时回退标准 ID；LipSync 组为空时回退 `ParamMouthOpenY` 也是上游的通行做法（4.11）。
-  - 4.11 中的 `.vtube.json`、`cdi3.json` 显示名与取值范围启发式留给映射向导（增量 B 的下一步）；表情与动作不在建议之列。
+  - 4.11 中的 `.vtube.json`、`cdi3.json` 显示名与取值范围启发式未做，5.5 的映射向导只用这里的建议作预选；表情与动作不在建议之列。
 - **验证范围**：
   - 查看器：`node --test` 跑 `test/viewer_behavior.test.cjs` 24 项（含 `ready` 附带的列表）、`test/texture_budget.test.cjs` 16 项。
   - client kit：`live2d_model_info_test` 9 项、`live2d_renderer_bridge_test` 16 项、`live2d_renderer_controller_test` 19 项、`live2d_package_test` 37 项、`live2d_param_proposal_test` 14 项；全套 375 项通过，`flutter analyze` 无问题。
   - 应用：Live2D 相关的 4 个测试文件 35 项通过，`flutter analyze` 无问题。
   - 没有用真实模型在设备上核对回报的 ID 与建议。
+
+### 5.5 增量 B 第二步（B2）：本机保存、映射向导与启用
+
+> 以下内容已在本 PR 实现，仅限 Android。负责人 2026-11-26 同意 D1-B：口型与左右眨眼必填；表情、动作可以为空，但须用户确认「此模型没有」。表情键按默认方案 D2-A，用 VRM 1.0 情绪预设加 `neutral`。验证范围见本节末尾，均未在真机上运行。
+
+- **暂存表情与动作**（`live2d_package.dart`、`live2d_preview_stage.dart`）：
+  - model3 `FileReferences.Expressions` 与 `Motions` 引用的 exp3 / motion3 文件按固定名 `expression-N.exp3.json`、`motion-N.motion3.json` 暂存，重建的 model3 只引用暂存成功的条目。
+  - 只涉及一个条目的问题只去掉该条目，并记入 `Live2DPackageValidation.warnings`（含代码、条目序号与文件名）。这类问题包括：缺文件、表情超过 1 MiB 或动作超过 8 MiB、JSON 无效或嵌套超过 64 层、校验和不符，以及 `Name` 或组名为空、超过 256 个字符或重复、超出数量上限。去空的动作组整组去掉。MOC3、纹理与 model3 的问题仍然致命。
+  - 开源查看器也这样做：逐个加载表情与动作，失败的只告警并跳过，模型照常显示（pixi-live2d-display @ `31317b37d5e2`，MIT，`src/cubism-common/ExpressionManager.ts` L75-106、`MotionManager.ts` L159-195；只参考行为，未复制代码）。
+- **查看器回报**（`live2d_viewer.js`）：
+  - `ready` 另附 `expressions`（加载成功的表情 `Name`，按 model3 顺序）与 `motions`（每组的 `{group, count}`）。model3 没有对应键时为空列表；格式不对或超过上限时整项省略，不影响预览。
+  - 映射按 `Name` 指定表情，按组名加序号指定动作，不用文件路径。
+- **本机存储**（client kit `Live2DFileStore`）：
+  - 根目录是 Android 的 `noBackupFilesDir/live2d`，经 Live2D 自有的方法通道 `jingyu/live2d_store` 获取。不放 `cacheDir`，因为系统空间不足时会清理它。也不放 `filesDir`：API 31 起，部分厂商设备上 `allowBackup="false"` 挡不住设备间传输（文档结论，未实测）。
+  - 布局：`models/<id>/` 存模型文件，`profiles/<id>.json` 存映射，`models.json` 列出模型与当前启用的模型。
+  - 写入：模型目录先写成 `<id>.pending` 再改名，JSON 先写 `.pending` 再改名，`models.json` 是提交点；打开时清理或回滚中断的操作。
+  - 删除模型时连带删除其映射。删除或替换启用中的模型，或重新保存其映射，都会清除启用。
+  - `setActive` 在存储内用 `validateTargets` 对照预览回报逐项核对；有缺项时全部列出，启用状态不变。
+- **Android 路由**（`Live2DViewerRoutes`）：`serve` 除临时预览目录外，只接受 `noBackupFilesDir/live2d/models/<id>` 下 ID 合法、不以 `.pending` / `.old` 结尾的目录。文件只提供 `.model3.json`、`.moc3`、`.png`、`.exp3.json`、`.motion3.json`；规范化后越界的路径仍然返回 403。
+- **界面**（`apps/client_flutter/lib/features/world`）：
+  - 临时预览就绪后出现「保留此模型」。它只读回暂存时写出的文件，存为新模型（显示名取 ZIP 文件名去掉扩展名），删除临时文件，再从本机目录打开预览；同一时间只显示一个预览。
+  - 「本机保存的模型」列出每个模型及其状态（未设置映射 / 已保存映射 / 已启用），可设置映射、启用或停用、删除（先确认）。
+  - 映射向导分三步：口型与眨眼（必填）、表情、动作。
+    - 候选只来自该预览的回报。B1 的建议只作预选；保存过的选择只在预览仍回报时预选。
+    - 参数滑条按回报的范围，经 `Live2DPreviewController.setParameter` 在预览里试动，松开后恢复默认值。
+    - 表情与动作每个语义键一行。回报列表为空时才出现「此模型没有表情 / 动作」；模型未回报该列表时说明原因，不能保存。
+    - 「确认并保存」是唯一的写入，`profileRev` 每次加一。
+  - 「启用此形象」与列表里的「启用」都等该模型本机副本的预览就绪，再用它的回报核对；未通过时逐条列出缺项，模型保持未启用。
+  - 文案说明启用的形象暂不在聊天或世界场景中显示。
+- **桥接**：查看器按原值写入参数，`setParam` 的 0..1 限制因此改为按参数自身的单位检查。值须为有限数；模型回报了参数 ID 与范围时，ID 须在其中、值须在范围内，否则不发送。
+- **验证范围**：
+  - 查看器：`node --test` 跑 viewer_behavior 30 项、texture_budget 16 项。
+  - client kit：全套 463 项（file_store 10、store 9、profile 93、model_info 35、package 45、bridge 19、controller 20），`dart analyze --fatal-infos` 无问题。
+  - 应用：`flutter analyze` 无问题；Live2D 相关测试文件逐个运行通过（kept_models 11、mapping_wizard 9、preview_view 11、preview_stage 13、import_panel 6、store_directory 9）。
+  - Android：`Live2DViewerRoutesTest` 14 项，其中 13 项通过，符号链接逃逸一项在 Windows 上跳过；`flutter build apk --debug` 通过。
+  - 没有在真机上运行。
+- **未做**：
+  - 在聊天与世界场景中显示启用的形象。
+  - 表情与动作的播放和试看（增量 C）。
+  - 启动时重新核对。
+  - 替换或重新导入模型、改名。
+  - 热切换与 VRM 回退（增量 D）。
 
 ## 6. 风险与未决问题
 

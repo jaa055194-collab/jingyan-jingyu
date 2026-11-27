@@ -18,23 +18,24 @@ apps/host/lib/src/world/
 
 - 3D 页面是独立模块，不嵌进聊天页面（FR-12）：Android 用 WebView，Windows 用 WebView2，加载 feiyu-room-template 的 Three.js 房间。
 - 内置插件 `jingyu.room.generator` 由 client kit 的 `FeiyuRoomGenerator` 实现 `RoomGenerator`，按 `02-assets.md` §2 做"按提示词/对话建屋"：五个风格预设 + `RoomBrief`→`RoomLayout`，只产出布局数据，不下载或执行代码；`briefFromConversation` 把对话文本映射为 brief。
-- 本地 profile 元数据校验位于 `packages/jingyu_client_kit/lib/src/live2d_profile.dart`，只在设备本地校验配置，不检查数据库或参数名是否真实存在。
+- 本地 profile 元数据校验位于 `packages/jingyu_client_kit/lib/src/live2d_profile.dart`，只在设备本地校验配置本身；映射目标是否存在于模型，由启用时的 `validateTargets` 对照预览回报的 `Live2DModelInfo` 检查。
 - `validateLive2DPackage` 是本地字节预检，不是解包器。它拒绝常见不安全的 ZIP 路径与可执行扩展名；检查识别到的 model3 引用是否使用规范相对路径及对应后缀（例如 `avatar.physics3.json`，不接受 `./` 路径别名）。清单、MOC3 和纹理的选定条目按声明长度限制解压输出，并检查 ZIP 校验和；PNG 检查首块 IHDR 与累计像素数。预检不覆盖完整 ZIP/DEFLATE 语法、所有可选载荷或图片解码，也不能作为安全落盘或渲染的依据。
-- 静态预览准备与暂存接口：从通过检查的 ZIP 仅选取 MOC3 与引用的 PNG，以固定文件名重建清单，写入设备私有临时目录。暂存失败时清理本次文件，清理失败可重试。
+- 静态预览准备与暂存接口：从通过检查的 ZIP 仅选取 MOC3、引用的 PNG 与 model3 列出的表情（exp3）、动作（motion3）文件，以固定文件名（如 `expression-N.exp3.json`、`motion-N.motion3.json`）重建清单，写入设备私有临时目录。只涉及一个表情或动作的问题（缺文件、文件过大、JSON 无效或嵌套过深、校验和不符、`Name` 或组名为空、过长或重复、超出数量上限）只把该条目从重建的清单中去掉并给出非致命警告；MOC3、纹理或 model3 本身的问题仍使整包被拒。暂存失败时清理本次文件，清理失败可重试。
 - 渲染桥接与首帧状态机：client kit 的 `Live2DRendererBridge` 定义 Flutter↔WebView 的 `load`/`setParam`/`setExpression`/`setMotion`/`dispose` 与 `ready`/`error` 协议；`Live2DPreviewController` 把桥接接到平台 WebView 宿主，负责 loading→ready/error、首帧超时、重试与释放。只有查看器报告“渲染器已 prepare 且首帧 draw 未抛错”才算 ready；核心 `update()` 不算已绘制。就绪后查看器报告绘制失败或 WebGL 上下文丢失，或宿主通道出错（例如 Android 渲染进程退出）时，同样转为失败状态，可以重试；正式启用为形象后的 VRM 回退尚未实现。
 - WebView 查看器资源：`packages/jingyu_live2d_web` 提供 `live2d_viewer.html/js`（与实际桥接一致的协议层）、`live2d_renderer_webgl.js`（WebGL2/WebGL 绘制适配器；单层 stencil 掩码近似、部分混合，物理/动作/表情/眨眼不驱动）与 `tool/fetch_purismcore.ps1`（固定版本与 SHA-256 拉取 MIT 运行时，不入库）。`live2d_texture_budget.js` 按设备的 `MAX_TEXTURE_SIZE` 与 256 MiB 预算统一缩小全部纹理（预算取自 Mochi2D 的手机默认值，未实测）。Node 行为测试覆盖首帧成功才 ready、首帧失败/缺适配器/缺 core 只报 error、重复 load 拒绝、dispose 释放、`boot` 事件与错误 `code`、就绪后的上下文丢失与绘制失败，以及纹理预算；Dart 资产测试覆盖无远程模型 URL、运行时不入库。
 - 客户端的“世界与形象”页已接入本机选包入口：Android 用系统文档选择器、Windows 用系统打开对话框选取 `.zip`，随后在后台 isolate 里按 160 MiB 上限流式读取、预检并暂存；暂存完成后，Android 在面板内显示临时预览卡片并注明“仅本机临时预览，未启用形象”，其他平台只声明“已准备临时预览文件”；均可手工清理。Android 会把所选内容流式复制进应用私有缓存（同样 160 MiB 上限，超出即拒绝并删除半成品），Windows 只读取用户自己的文件、不复制。应用锁开启时该入口禁用，避免切走系统选择器触发上锁后结果被丢弃。
 - Android 预览承载（二期增量 A）：`MainActivity` 注册原生平台视图 `jingyu/live2d_view`（`Live2DViewPlugin`、`Live2DPlatformView`），视图内是系统 WebView。`WebViewAssetLoader` 在 `https://appassets.androidplatform.net` 下只提供白名单内的查看器文件（构建时由 Gradle 复制进安装包）和 `serve` 登记过的暂存目录：目录必须在 `cacheDir/live2d-preview` 之内，按 128 位随机令牌访问，越界路径与其他请求一律 403，不开文件访问。页面与 Flutter 经 `WebViewCompat.addWebMessageListener`（只认查看器源）和每个视图一条 `MethodChannel('jingyu/live2d_view/<id>')` 往返；渲染进程退出时销毁该 WebView，预览转为失败，重试时新建视图。Flutter 侧为 `AndroidLive2DRendererHost` 与 `Live2DPreviewView`。构建前未运行 `tool/fetch_purismcore.ps1` 时构建只告警、安装包不含运行时，预览会报错。方案依据见 `docs/research/live2d-phase-two-survey.md` 第 3、5 节。
-- 参数映射建议（二期增量 B 第一步）：查看器的 `ready` 事件附带运行时枚举的参数与 part ID，client kit 解析为 `Live2DModelInfo`（格式不对时预览照常就绪，但不给 ID 集合）；预检把 model3 `Groups` 读进 `Live2DPackageValidation.groups`；`Live2DParamProposal` 只用运行时回报的 ID 建议口型与眨眼参数。没有界面，不保存、不启用映射。依据见调研文档 4.11 与 5.4。
-- 上述链路的验证边界：Flutter 侧单测与控件测试覆盖取消、重复点击占用、准备失败与清理路径；原生选择器仅做过 Windows 原生通道契约与 Android Kotlin 编译/流式拷贝检查，**未在真机或真实桌面会话上人工点选**。它不证明 PNG 可完整解码、模型可绘制或设备能承受纹理开销；持久化、热切换和 VRM 回退尚未接入。Windows 客户端不再开发，不接 WebView2 宿主。
+- 参数映射建议（二期增量 B 第一步）：查看器的 `ready` 事件附带运行时枚举的参数与 part ID，client kit 解析为 `Live2DModelInfo`（格式不对时预览照常就绪，但不给 ID 集合）；预检把 model3 `Groups` 读进 `Live2DPackageValidation.groups`；`Live2DParamProposal` 只用运行时回报的 ID 建议口型与眨眼参数。建议只作映射向导的预选。依据见调研文档 4.11 与 5.4。
+- 本机保存、映射与启用（二期增量 B 第二步，仅 Android）：临时预览就绪后，「保留此模型」把暂存时写出的文件（不是 ZIP 原始条目）存进 `noBackupFilesDir/live2d/models/<modelId>/`，删除临时文件，再从保存目录打开预览；同一时间只显示一个预览。client kit 的 `Live2DFileStore` 负责落盘：模型目录先写成 `<modelId>.pending` 再改名，JSON 先写 `.pending` 再改名，`models.json` 是提交点，打开时清理或回滚中断的操作。「本机保存的模型」列出每个模型及其状态（未设置映射 / 已保存映射 / 已启用），可设置映射、启用或停用、删除（先确认，连带删除映射）。映射向导分三步：口型与左右眨眼（必填）、表情、动作；候选只来自该预览回报的参数、表情 `Name` 与动作组和序号，不从文件名推断，B1 的建议只作预选；参数行的滑条在预览里按参数范围试动，松开后恢复默认值；只有回报的列表为空时才能确认「此模型没有表情/动作」，模型未回报该列表时不能保存。「确认并保存」是唯一的写入；「启用此形象」用该模型本机副本的预览回报逐项核对映射目标，缺项逐条列出且不启用。启用的形象暂不在聊天或世界场景中显示；表情与动作只回报、不播放，向导中也不能试看。依据见调研文档 5.5。
+- 上述链路的验证边界：Flutter 侧单测与控件测试覆盖取消、重复点击占用、准备失败与清理路径；原生选择器仅做过 Windows 原生通道契约与 Android Kotlin 编译/流式拷贝检查，**未在真机或真实桌面会话上人工点选**。它不证明 PNG 可完整解码、模型可绘制或设备能承受纹理开销；Android 上的本机保存、映射与启用已接入（见上条，未在真机上验证），热切换和 VRM 回退尚未接入。Windows 客户端不再开发，不接 WebView2 宿主。
 - Live2D 选择/导入由每位用户在自己的设备执行；不使用 `hostOnly` 插件门控。各设备独立保存模型文件与 profile，**不做跨端同步、不广播单一 model_id/profile_rev**；同一账号的手机与电脑可各自使用不同模型（如手机 B、电脑 C）。设备缺少本地模型或有效映射时回退 VRM，不下载他端模型。
 
 ## 规则
 
 1. 每个设备独立选取用户自行取得的 Live2D 模型；默认目录/模型包不由应用提供。VRM 保持默认 fallback。形象选择按设备隔离，不做双端一致；同账号各设备互不影响。
 2. profile 只保存相对 model3 manifest 路径、稳定 model_id、profile_rev 与语义 param_map，不保存模型字节、绝对路径、URL、API key 或 Cubism/Core 文件；模型字节不得进入服务端附件、同步、导出或共享备份。
-3. 模型包与档案分别做预检；应用接入前仍须实现受限解包和资源隔离，不能把预检结果当作安全落盘许可。缺口型、左右眨眼、表情或动作映射禁止启用，不许猜参数；档案检查不证明映射目标存在于模型。
-4. 热切换须离屏预载 → 句边界/口型≈0 的一帧原子替换 → 新模型首帧成功后销毁旧实例；不中断音频；失败回滚。当前仅有 profile metadata、查看器协议与首帧状态机；热切换尚未实现。
+3. 模型包与档案分别做预检；本机只保存暂存时按固定文件名重建、写出的文件，不能把预检结果当作直接落盘 ZIP 条目的许可。缺口型或左右眨眼映射禁止启用，不许猜参数；表情、动作映射可以为空，但只能在用户确认「此模型没有表情/动作」之后（D1-B，负责人 2026-11-26 同意）。档案检查不证明映射目标存在于模型：启用前须用该模型本机副本的预览回报逐项核对，缺项逐条列出并拒绝启用。
+4. 热切换须离屏预载 → 句边界/口型≈0 的一帧原子替换 → 新模型首帧成功后销毁旧实例；不中断音频；失败回滚。当前有 profile、查看器协议、首帧状态机与 Android 上的本机保存和启用；热切换尚未实现。
 5. 拜访：好友可进小院；室内需邀请；单户访客 ≤4；被拉黑方无法拜访（口径 C-5）。
 6. 宿主离线时位置冻结，恢复后继续，不补造路上经历（FR-36）。
 7. 性能：同屏 ≤8 人，中端安卓室内目标 30fps，空闲降帧（NFR-04）。形象/Live2D 渲染以骁龙 888 稳定 30–60fps 为目标；暂无真机时先实现，整体完成后再实测，不把估算当实测。

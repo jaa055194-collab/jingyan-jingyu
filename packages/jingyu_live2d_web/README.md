@@ -6,7 +6,7 @@
 
 - `web/live2d_viewer.html` / `web/live2d_viewer.js`：WebView 页面与 Flutter↔JS 消息协议层。协议与 `jingyu_client_kit` 的 `Live2DRendererBridge` 对齐：
   - Flutter→viewer：`load`（model3 URL、纹理 URL、modelId、profileRev）、`setParam`、`setExpression`、`setMotion`、`dispose`。
-  - viewer→Flutter：`boot`（脚本加载后先发一次，早于其他事件）、`ready`（modelId、profileRev）、`error`（`code` 与 `message`；`code` 取 `load_failed`、`render_failed`、`webgl_context_lost` 或 `bad_command`）。运行时提供时，`ready` 还附带 `parameters`（按运行时顺序列出参数 ID 及其 `min`/`max`/`default` 范围，非有限值不列出）与 `parts`（部件 ID），供应用核对映射；任一列表来源缺失、格式异常或超过 4096 项时整项省略、不截断。
+  - viewer→Flutter：`boot`（脚本加载后先发一次，早于其他事件）、`ready`（modelId、profileRev）、`error`（`code` 与 `message`；`code` 取 `load_failed`、`render_failed`、`webgl_context_lost` 或 `bad_command`）。运行时提供时，`ready` 还附带 `parameters`（按运行时顺序列出参数 ID 及其 `min`/`max`/`default` 范围，非有限值不列出）与 `parts`（部件 ID），供应用核对映射；任一列表来源缺失、格式异常或超过 4096 项时整项省略、不截断。`ready` 也附带 `expressions`（已暂存且 exp3 加载成功的表情 `Name`，按 model3 顺序）与 `motions`（动作文件全部加载成功的各动作组的 `{group, count}`）；model3 没有对应键时为空列表，格式异常或超过上限（1024 个表情、4096 个组、每组 1024 个、共 4096 个动作）时整项省略。表情与动作目前只回报、不播放。
   - 页面用 PurismCore 建立 Moc/Model 并逐帧 `update()`；像素绘制委托给 `window.Live2DRenderer` 适配器。缺少适配器或首帧绘制失败时只发 `error`，不发 `ready`；核心 `update()` 不算已绘制。
   - 就绪后某帧更新或绘制抛错（`render_failed`）、画布丢失 WebGL 上下文（`webgl_context_lost`）时同样发 `error`，并释放模型、停止帧循环。上下文恢复前，之后的 `load` 都以 `webgl_context_lost` 失败；`dispose` 之后不再加载。
   - 传输：页面→Flutter 依次尝试 `Live2DBridge.postMessage`（Android 的 WebMessageListener 或 webview_flutter 的 JavaScript channel）、flutter_inappwebview 的 `live2d` handler、`parent.postMessage`；Flutter→页面经 `Live2DBridge` 的 `message` 事件（Android 回复代理，页面发出第一条消息后才可用）、`window` 的 `message` 事件或 `window.__live2dReceive`。
