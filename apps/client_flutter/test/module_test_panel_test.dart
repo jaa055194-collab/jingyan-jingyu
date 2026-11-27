@@ -41,8 +41,10 @@ void main() {
     expect(chat, isNotNull);
     expect(chat!.availability, ModuleAvailability.available);
     expect(world, isNotNull);
-    expect(world!.availability, ModuleAvailability.unavailable);
-    expect(world.availabilityLabel, '未接入');
+    // The 3D street works on Android; the description names what is missing.
+    expect(world!.availability, ModuleAvailability.available);
+    expect(world.availabilityLabel, '已实现');
+    expect(world.description, contains('只接入了 Android 端'));
     expect(findModule('unknown-module'), isNull);
     expect(appModules.map((m) => m.id).toSet().length, appModules.length);
   });
@@ -97,11 +99,12 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(home: Scaffold(body: ModuleTestPanel())),
     );
-    // Available module: honest scope note (three modules are available).
-    expect(find.textContaining('不代表模型可用或已授权'), findsNWidgets(3));
-    // Placeholder and unavailable modules get their own one-line explanation.
+    // Available modules: honest scope note (four modules are available).
+    expect(find.textContaining('不代表模型可用或已授权'), findsNWidgets(4));
+    // Placeholder modules get their own one-line explanation; none is
+    // unavailable now that the world module's 3D street is wired.
     expect(find.textContaining('占位：入口存在'), findsNWidgets(3));
-    expect(find.textContaining('未接入：渲染/能力尚未接入外壳'), findsOneWidget);
+    expect(find.textContaining('未接入：渲染/能力尚未接入外壳'), findsNothing);
     for (final module in appModules) {
       expect(
         find.byKey(Key('module-availability-${module.id}')),
