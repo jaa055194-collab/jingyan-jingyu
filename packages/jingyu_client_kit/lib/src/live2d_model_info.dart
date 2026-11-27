@@ -28,6 +28,18 @@ final class Live2DParameterInfo {
   final double? defaultValue;
 }
 
+/// One model3 `FileReferences.Motions` group as the runtime reports it.
+final class Live2DMotionGroupInfo {
+  const Live2DMotionGroupInfo._({required this.group, required this.count});
+
+  /// The group name exactly as in model3; Cubism allows an empty one.
+  final String group;
+
+  /// How many of the group's motions were staged and loaded. A mapping may
+  /// use index 0 up to, not including, this count.
+  final int count;
+}
+
 /// The model information carried by one viewer `ready` event.
 ///
 /// The viewer sends each list whole or leaves it out, never cut short. A null
@@ -37,6 +49,8 @@ final class Live2DModelInfo {
   Live2DModelInfo._({
     required List<Live2DParameterInfo>? parameters,
     required List<String>? parts,
+    required List<String>? expressions,
+    required List<Live2DMotionGroupInfo>? motions,
   }) : parameters = parameters == null ? null : List.unmodifiable(parameters),
        parameterIds = parameters == null
            ? null
@@ -47,13 +61,46 @@ final class Live2DModelInfo {
                for (final parameter in parameters) parameter.id: parameter,
              }),
        parts = parts == null ? null : List.unmodifiable(parts),
-       partIds = parts == null ? null : Set.unmodifiable(parts);
+       partIds = parts == null ? null : Set.unmodifiable(parts),
+       expressions = expressions == null
+           ? null
+           : List.unmodifiable(expressions),
+       expressionNames = expressions == null
+           ? null
+           : Set.unmodifiable(expressions),
+       motions = motions == null ? null : List.unmodifiable(motions),
+       _motionCounts = motions == null
+           ? null
+           : Map.unmodifiable({
+               for (final motion in motions) motion.group: motion.count,
+             });
 
   /// Most entries one list may hold; the viewer leaves out a longer one.
   static const int maxEntries = 4096;
 
   /// Longest ID accepted, in UTF-16 code units.
   static const int maxIdLength = 256;
+
+  /// Most expressions the `expressions` list may hold.
+  static const int maxExpressions = 1024;
+
+  /// Highest motion count one `motions` group may report.
+  static const int maxMotionsPerGroup = 1024;
+
+  /// Expression names in model3 order, or null when they were not reported.
+  final List<String>? expressions;
+
+  /// The names in [expressions] as a set, or null when they were not reported.
+  final Set<String>? expressionNames;
+
+  /// Motion groups in model3 order, or null when they were not reported.
+  final List<Live2DMotionGroupInfo>? motions;
+
+  final Map<String, int>? _motionCounts;
+
+  /// How many motions the group named exactly [group] reported, or null when
+  /// there is no such group or the motions were not reported.
+  int? motionCount(String group) => _motionCounts?[group];
 
   /// Parameters in runtime order, or null when they were not reported.
   final List<Live2DParameterInfo>? parameters;
@@ -73,18 +120,24 @@ final class Live2DModelInfo {
   /// parameters were not reported.
   Live2DParameterInfo? parameter(String id) => _parametersById?[id];
 
-  /// Reads the `parameters` and `parts` fields of a viewer `ready` event.
+  /// Reads the `parameters`, `parts`, `expressions` and `motions` fields of a
+  /// viewer `ready` event.
   ///
   /// An absent or null field leaves that list null. Throws [FormatException]
   /// when a field that is present is malformed: not a list, more than
   /// [maxEntries] entries, an ID that is not a non-empty string of at most
   /// [maxIdLength] characters, a repeated ID, a range value that is not a
-  /// finite number, or a minimum above the maximum. Other fields, including
-  /// unknown keys inside a parameter entry, are not read.
+  /// finite number, or a minimum above the maximum. `expressions` holds at
+  /// most [maxExpressions] names. Each `motions` entry needs a `group` string
+  /// of at most [maxIdLength] characters, which may be empty but must not
+  /// repeat, and an integer `count` from 1 to [maxMotionsPerGroup]. Other
+  /// fields, including unknown keys inside an entry, are not read.
   factory Live2DModelInfo.fromReadyEvent(Map<String, Object?> event) {
     return Live2DModelInfo._(
       parameters: _readParameters(event['parameters']),
       parts: _readParts(event['parts']),
+      expressions: _readExpressions(event['expressions']),
+      motions: _readMotions(event['motions']),
     );
   }
 
@@ -124,6 +177,52 @@ final class Live2DModelInfo {
       for (var i = 0; i < entries.length; i++)
         _readId(entries[i], 'parts[$i]', seen),
     ];
+  }
+
+  static List<String>? _readExpressions(Object? raw) {
+    if (raw == null) return null;
+    final entries = _readList(raw, 'expressions');
+    if (entries.length > maxExpressions) {
+      throw FormatException(
+        'expressions has more than $maxExpressions entries',
+      );
+    }
+    final seen = <String>{};
+    return [
+      for (var i = 0; i < entries.length; i++)
+        _readId(entries[i], 'expressions[$i]', seen),
+    ];
+  }
+
+  static List<Live2DMotionGroupInfo>? _readMotions(Object? raw) {
+    if (raw == null) return null;
+    final entries = _readList(raw, 'motions');
+    final seen = <String>{};
+    final result = <Live2DMotionGroupInfo>[];
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+      if (entry is! Map<String, Object?>) {
+        throw FormatException('motions[$i] must be an object');
+      }
+      final group = entry['group'];
+      if (group is! String || group.length > maxIdLength) {
+        throw FormatException(
+          'motions[$i].group must be a string of at most $maxIdLength '
+          'characters',
+        );
+      }
+      if (!seen.add(group)) {
+        throw FormatException('motions[$i].group repeats an earlier group');
+      }
+      final count = entry['count'];
+      if (count is! int || count < 1 || count > maxMotionsPerGroup) {
+        throw FormatException(
+          'motions[$i].count must be an integer from 1 to $maxMotionsPerGroup',
+        );
+      }
+      result.add(Live2DMotionGroupInfo._(group: group, count: count));
+    }
+    return result;
   }
 
   static List<Object?> _readList(Object raw, String field) {

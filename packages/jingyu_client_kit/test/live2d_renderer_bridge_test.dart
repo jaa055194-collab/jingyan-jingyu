@@ -178,6 +178,25 @@ void main() {
         ..handleEvent({'event': 'ready', 'modelId': 'm', 'profileRev': 1});
       expect(bridge.modelInfo!.parameters, isNull);
       expect(bridge.modelInfo!.parts, isNull);
+      expect(bridge.modelInfo!.expressions, isNull);
+      expect(bridge.modelInfo!.motions, isNull);
+      expect(bridge.modelInfoError, isNull);
+    });
+
+    test('a ready event records reported expressions and motions', () {
+      final bridge = Live2DRendererBridge()..markLoading('m');
+      bridge.handleEvent({
+        'event': 'ready',
+        'modelId': 'm',
+        'profileRev': 1,
+        'expressions': ['F01'],
+        'motions': [
+          {'group': 'Idle', 'count': 2},
+        ],
+      });
+      expect(bridge.state, Live2DRendererState.ready);
+      expect(bridge.modelInfo!.expressionNames, {'F01'});
+      expect(bridge.modelInfo!.motionCount('Idle'), 2);
       expect(bridge.modelInfoError, isNull);
     });
 
@@ -193,6 +212,33 @@ void main() {
       expect(bridge.lastError, isNull);
       expect(bridge.modelInfo, isNull);
       expect(bridge.modelInfoError, contains('repeats'));
+    });
+
+    test('a bad expression or motion list keeps the preview ready', () {
+      final bad = <String, Map<String, Object?>>{
+        'expressions must be a list': {'expressions': 'F01'},
+        'motions[0].count must be an integer': {
+          'motions': [
+            {'group': 'Idle', 'count': 0},
+          ],
+        },
+      };
+      for (final entry in bad.entries) {
+        final bridge = Live2DRendererBridge()..markLoading('m');
+        bridge.handleEvent({
+          'event': 'ready',
+          'modelId': 'm',
+          'profileRev': 1,
+          'parameters': [
+            {'id': 'ParamMouthOpenY'},
+          ],
+          ...entry.value,
+        });
+        expect(bridge.state, Live2DRendererState.ready);
+        expect(bridge.lastError, isNull);
+        expect(bridge.modelInfo, isNull);
+        expect(bridge.modelInfoError, contains(entry.key));
+      }
     });
 
     test('a new load, an error or dispose clears the model info', () {

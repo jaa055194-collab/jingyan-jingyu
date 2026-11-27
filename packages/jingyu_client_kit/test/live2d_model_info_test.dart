@@ -192,7 +192,7 @@ void main() {
       expect(() => info.partIds!.remove('A'), throwsUnsupportedError);
     });
 
-    test('supplies the runtime ID set that Live2DParamMap checks', () {
+    test('supplies the runtime inventory that Live2DParamMap checks', () {
       final info = Live2DModelInfo.fromReadyEvent(
         readyEvent({
           'parameters': [
@@ -200,31 +200,293 @@ void main() {
             {'id': 'ParamEyeLOpen'},
             {'id': 'ParamEyeROpen'},
           ],
+          'expressions': ['Smile'],
+          'motions': [
+            {'group': 'Idle', 'count': 1},
+          ],
         }),
       );
       Live2DParamMap mapWithRightEye(String target) => Live2DParamMap.fromJson({
         'mouthOpen': 'ParamMouthOpenY',
         'blinkLeft': 'ParamEyeLOpen',
         'blinkRight': target,
+        'noExpressions': false,
+        'noMotions': false,
         'expressions': {'happy': 'Smile'},
-        'motions': {'idle': 'Idle'},
+        'motions': {
+          'idle': {'group': 'Idle', 'index': 0},
+        },
       });
-      void check(Live2DParamMap map) => map.validateTargets(
-        parameters: info.parameterIds!,
-        expressions: const {'Smile'},
-        motions: const {'Idle'},
-      );
 
-      check(mapWithRightEye('ParamEyeROpen'));
+      mapWithRightEye('ParamEyeROpen').validateTargets(info);
       expect(
-        () => check(mapWithRightEye('ParamEyeRopen')),
+        () => mapWithRightEye('ParamEyeRopen').validateTargets(info),
         throwsA(
-          isA<FormatException>().having(
-            (error) => error.message,
-            'message',
-            contains('blinkRight'),
-          ),
+          isA<Live2DTargetException>()
+              .having(
+                (error) => [for (final miss in error.misses) miss.field],
+                'miss fields',
+                ['blinkRight'],
+              )
+              .having(
+                (error) => error.message,
+                'message',
+                contains('blinkRight'),
+              ),
         ),
+      );
+    });
+  });
+
+  group('Live2DModelInfo expressions and motions', () {
+    Live2DModelInfo read(Map<String, Object?> fields) =>
+        Live2DModelInfo.fromReadyEvent(readyEvent(fields));
+
+    test('reads expression names and motion groups in model3 order', () {
+      final info = read({
+        'expressions': ['F02', 'F01', 'f01'],
+        'motions': [
+          {'group': 'TapBody', 'count': 3},
+          {'group': '', 'count': 1},
+          {'group': 'Idle', 'count': 2, 'file': 'not read'},
+        ],
+      });
+      expect(info.expressions, ['F02', 'F01', 'f01']);
+      expect(info.expressionNames, {'F02', 'F01', 'f01'});
+      expect(
+        [for (final motion in info.motions!) (motion.group, motion.count)],
+        [('TapBody', 3), ('', 1), ('Idle', 2)],
+      );
+      expect(info.motionCount('TapBody'), 3);
+      expect(info.motionCount(''), 1);
+      expect(info.motionCount('Idle'), 2);
+      expect(info.motionCount('idle'), isNull);
+      expect(info.motionCount('Missing'), isNull);
+    });
+
+    test('reads expressions and motions from a JSON-decoded event', () {
+      final event = jsonDecode(
+        '{"event": "ready", "modelId": "m", "profileRev": 1, '
+        '"expressions": ["F01"], "motions": [{"group": "Idle", "count": 2}]}',
+      );
+      final info = Live2DModelInfo.fromReadyEvent(
+        event as Map<String, Object?>,
+      );
+      expect(info.expressions, ['F01']);
+      expect(info.motionCount('Idle'), 2);
+    });
+
+    test('leaves expressions and motions null when the viewer omits them', () {
+      for (final fields in <Map<String, Object?>>[
+        {},
+        {'expressions': null, 'motions': null},
+      ]) {
+        final info = read(fields);
+        expect(info.expressions, isNull);
+        expect(info.expressionNames, isNull);
+        expect(info.motions, isNull);
+        expect(info.motionCount('Idle'), isNull);
+      }
+    });
+
+    test('keeps reported empty lists apart from missing ones', () {
+      final info = read({'expressions': <Object?>[], 'motions': <Object?>[]});
+      expect(info.expressions, isEmpty);
+      expect(info.expressionNames, isEmpty);
+      expect(info.motions, isEmpty);
+      expect(info.motionCount('Idle'), isNull);
+    });
+
+    test('accepts expressions and motion groups at their size limits', () {
+      final group = 'x' * Live2DModelInfo.maxIdLength;
+      final info = read({
+        'expressions': [
+          for (var i = 0; i < Live2DModelInfo.maxExpressions; i++) 'E$i',
+        ],
+        'motions': [
+          for (var i = 1; i < Live2DModelInfo.maxEntries; i++)
+            {'group': 'G$i', 'count': 1},
+          {'group': group, 'count': Live2DModelInfo.maxMotionsPerGroup},
+        ],
+      });
+      expect(info.expressions, hasLength(Live2DModelInfo.maxExpressions));
+      expect(info.motions, hasLength(Live2DModelInfo.maxEntries));
+      expect(info.motionCount(group), Live2DModelInfo.maxMotionsPerGroup);
+    });
+
+    test('returns read-only expressions and motions', () {
+      final info = read({
+        'expressions': ['F01'],
+        'motions': [
+          {'group': 'Idle', 'count': 1},
+        ],
+      });
+      expect(() => info.expressions!.add('F02'), throwsUnsupportedError);
+      expect(() => info.expressionNames!.remove('F01'), throwsUnsupportedError);
+      expect(() => info.motions!.clear(), throwsUnsupportedError);
+    });
+
+    // Each bad shape also names the parser branch that must reject it. Like a
+    // bad parameters list, it fails the whole event.
+    final long = 'x' * (Live2DModelInfo.maxIdLength + 1);
+    for (final (reason, fields, message)
+        in <(String, Map<String, Object?>, String)>[
+          (
+            'expressions that are not a list',
+            {'expressions': 'F01'},
+            'expressions must be a list',
+          ),
+          (
+            'a non-string expression name',
+            {
+              'expressions': [1],
+            },
+            'expressions[0] must be a non-empty string',
+          ),
+          (
+            'an empty expression name',
+            {
+              'expressions': ['F01', ''],
+            },
+            'expressions[1] must be a non-empty string',
+          ),
+          (
+            'an over-long expression name',
+            {
+              'expressions': [long],
+            },
+            'expressions[0] must be a non-empty string',
+          ),
+          (
+            'a repeated expression name',
+            {
+              'expressions': ['F01', 'F01'],
+            },
+            'expressions[1] repeats an earlier ID',
+          ),
+          (
+            'more than maxExpressions expressions',
+            {
+              'expressions': [
+                for (var i = 0; i <= Live2DModelInfo.maxExpressions; i++) 'E$i',
+              ],
+            },
+            'expressions has more than ${Live2DModelInfo.maxExpressions} entries',
+          ),
+          (
+            'motions that are not a list',
+            {
+              'motions': {'group': 'Idle', 'count': 1},
+            },
+            'motions must be a list',
+          ),
+          (
+            'a motion group that is not an object',
+            {
+              'motions': ['Idle'],
+            },
+            'motions[0] must be an object',
+          ),
+          (
+            'a motion group without a name',
+            {
+              'motions': [
+                {'count': 1},
+              ],
+            },
+            'motions[0].group must be a string',
+          ),
+          (
+            'a non-string group name',
+            {
+              'motions': [
+                {'group': 1, 'count': 1},
+              ],
+            },
+            'motions[0].group must be a string',
+          ),
+          (
+            'an over-long group name',
+            {
+              'motions': [
+                {'group': long, 'count': 1},
+              ],
+            },
+            'motions[0].group must be a string',
+          ),
+          (
+            'a repeated group name',
+            {
+              'motions': [
+                {'group': '', 'count': 1},
+                {'group': '', 'count': 2},
+              ],
+            },
+            'motions[1].group repeats an earlier group',
+          ),
+          (
+            'a motion group without a count',
+            {
+              'motions': [
+                {'group': 'Idle'},
+              ],
+            },
+            'motions[0].count must be an integer',
+          ),
+          for (final count in <Object?>[
+            0,
+            -1,
+            1.5,
+            '1',
+            Live2DModelInfo.maxMotionsPerGroup + 1,
+          ])
+            (
+              'motion count $count (${count.runtimeType})',
+              {
+                'motions': [
+                  {'group': 'Idle', 'count': count},
+                ],
+              },
+              'motions[0].count must be an integer',
+            ),
+          (
+            'more than maxEntries motion groups',
+            {
+              'motions': [
+                for (var i = 0; i <= Live2DModelInfo.maxEntries; i++)
+                  {'group': 'G$i', 'count': 1},
+              ],
+            },
+            'motions has more than ${Live2DModelInfo.maxEntries} entries',
+          ),
+        ]) {
+      test('rejects $reason', () {
+        expect(
+          () => read(fields),
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              contains(message),
+            ),
+          ),
+        );
+      });
+    }
+
+    test('rejects the event when one list is bad and the others are good', () {
+      expect(
+        () => read({
+          'parameters': [
+            {'id': 'ParamAngleX'},
+          ],
+          'parts': ['PartArm'],
+          'expressions': ['F01'],
+          'motions': [
+            {'group': 'Idle', 'count': 0},
+          ],
+        }),
+        throwsFormatException,
       );
     });
   });
