@@ -408,10 +408,25 @@
   - 没有在真机上运行。
 - **未做**：
   - 在聊天与世界场景中显示启用的形象。
-  - 表情与动作的播放和试看（增量 C）。
+  - 在向导中试看表情与动作、测试眨眼与说话（增量 C 第三步）。
   - 启动时重新核对。
   - 替换或重新导入模型、改名。
   - 热切换与 VRM 回退（增量 D）。
+
+### 5.6 增量 C：行为层（动作、表情、物理、姿态）
+
+> 本节描述本 PR 已实现的 C1（动作/表情/眨眼/呼吸/口型）、C2（physics3/pose3）与 C3（向导试看/测试眨眼/测试说话）。真机视觉与帧率仍未验证。
+
+- **帧顺序**（`live2d_viewer.js`）：恢复上一帧动作后的参数与 part 不透明度 → 无动作时随机播放 Idle 组 → 动作队列（优先级 NONE/IDLE/NORMAL/FORCE、淡入淡出、交叉淡化）→ 保存参数 → 表情队列（Add/Multiply/Overwrite）→ 行为层 → `setParam` 覆盖值 → physics → pose → `model.update()`。`dt` 上限 100 ms，动画时钟自己累加，页面暂停不会让动作跳帧。
+- **动作与表情模块**（`web/live2d_motion.js`）：按 Live2D/CubismSpecs @ `e2de04dd4514` 的 motion3/exp3 公开格式自行实现 Segment、受限/非受限 Bezier、淡入淡出、循环与替换；Cubism Framework 只作行为参考，未复制代码。
+- **行为模块**（`web/live2d_behavior.js`）：眨眼时序与缓动、带随机扫视的视线、呼吸、口型包络与 smoothstep 释放。改编自 pixi-live2d-display @ `31317b37d5e2`（MIT，FocusController）、airi @ `68b35a7b4e7f`（MIT，眨眼/扫视/呼吸/释放）与 Kokoro-Engine @ `0272b2f00901`（MIT，口型 EMA）；文件头保留版权与 MIT 全文，登记见 `THIRD_PARTY_NOTICES.md`。眨眼与口型参数只取运行时回报的模型参数，不猜 ID。
+- **物理模块**（`web/live2d_physics.js`）：physics3 输入归一化与 Reflect、粒子链、固定步长 `Fps` 与帧间插值、输出权重；加载后 `stabilize()` 让粒子从静止开始。改编自 Mocari @ `29a4792f93b7`（MIT，`src/core/physics.rs`），角度方向包裹循环取 psd2live @ `f6d27de4baeb`（MIT，仅 `runtime/src/physics.rs` L44-53）。
+- **姿态模块**（`web/live2d_pose.js`）：pose3 每组单部件可见、`FadeInTime` 默认 0.5 s、背面不透明度上限 0.15、只降不升、链接部件；只写 part 不透明度，由 Core 传播到 drawable。改编自 Mocari @ `29a4792f93b7`（MIT，`src/json/pose3.rs`）。
+- **暂存与路由**：physics3/pose3 按 `physics.physics3.json`、`pose.pose3.json` 定名暂存；单个文件过大（1 MiB）、JSON 无效或嵌套过深只去掉该效果并给警告，模型照常加载。重建的 model3 保留 `Physics` / `Pose` 引用；Android 模型路由与 profile 白名单加入 `.physics3.json`、`.pose3.json`。
+- **协议**：新增 `clearParam`、`setExpression`、`setMotion`、`behavior`、`blink`、`speak`；`setParam` 的值保持到 `clearParam` 或下次加载。`ready` 的表情/动作列表现在同时用于播放。
+- **向导试看（C3）**：表情页与动作页在已选中一行时出现「试看」，经 `setExpression` / `playMotion` 只驱动预览、不写入映射；口型与眨眼页有「测试眨眼」（`blink`）与「测试说话」（`speak` 一段合成 9 级口型包络，40 ms 一级）。试看失败只显示一行「预览暂时无法试看。」，不改变选择或保存状态。
+- **数值来源风险**：Mocari 与 psd2live 都按 Cubism 运行时的数值/常量实现；算法与数字本身不受版权保护，本节只从这两个 MIT 项目取表达，未取 Framework 文本。残余风险是数值一致性与专利问题仍需法务评估（6.1）。
+- **验证范围**：`node --test` 跑 viewer_behavior 35、motion 10、behavior 23、physics 14、pose 14、texture_budget 16（共 112）；client kit `live2d_package_test` 51、应用 `live2d_preview_stage_test` 13 与 `live2d_mapping_wizard_test` 18、`dart analyze --fatal-infos` 与 `flutter analyze` 无问题。未在真机上核对视觉与帧率。
 
 ## 6. 风险与未决问题
 

@@ -28,9 +28,10 @@ final class Live2DPreviewBundle {
 
   String get model3Name => 'model.model3.json';
 
-  /// `model.model3.json`, `model.moc3`, `texture-N.png` and, for the
-  /// expressions and motions kept, `expression-N.exp3.json` and
-  /// `motion-N.motion3.json`, N counting from 0 in manifest order.
+  /// `model.model3.json`, `model.moc3`, `texture-N.png`, `physics.physics3.json`
+  /// and `pose.pose3.json` when kept, and, for the expressions and motions
+  /// kept, `expression-N.exp3.json` and `motion-N.motion3.json`, N counting
+  /// from 0 in manifest order.
   final Map<String, Uint8List> files;
 
   /// The package manifest's `Groups`, as [Live2DPackageValidation.groups]
@@ -41,7 +42,8 @@ final class Live2DPreviewBundle {
   /// when the package has neither.
   final List<Live2DModelGroup> groups;
 
-  /// Non-fatal problems: expressions and motions left out of the preview.
+  /// Non-fatal problems: expressions, motions, physics or pose left out of the
+  /// preview.
   final List<Live2DPackageIssue> warnings;
 }
 
@@ -79,6 +81,8 @@ class Live2DPackageLimits {
     this.maxTotalPixels = 200000000,
     this.maxExpressionBytes = 1024 * 1024,
     this.maxMotionBytes = 8 * 1024 * 1024,
+    this.maxPhysicsBytes = 1024 * 1024,
+    this.maxPoseBytes = 1024 * 1024,
   });
 
   final int maxEntries;
@@ -100,6 +104,14 @@ class Live2DPackageLimits {
   /// Largest `*.motion3.json` file a motion may use. A larger one leaves only
   /// that motion out, with a warning.
   final int maxMotionBytes;
+
+  /// Largest `*.physics3.json` file the model may use. A larger one leaves the
+  /// physics out, with a warning.
+  final int maxPhysicsBytes;
+
+  /// Largest `*.pose3.json` file the model may use. A larger one leaves the
+  /// pose out, with a warning.
+  final int maxPoseBytes;
 }
 
 enum Live2DPackageIssueCode {
@@ -133,6 +145,12 @@ enum Live2DPackageIssueCode {
   /// Warning: a motion, a motion group or the rest of the motions left out.
   /// The message says why and names the group, if there is one.
   motionSkipped,
+
+  /// Warning: the model's physics3 left out. The message says why.
+  physicsSkipped,
+
+  /// Warning: the model's pose3 left out. The message says why.
+  poseSkipped,
 }
 
 class Live2DPackageIssue {
@@ -827,9 +845,14 @@ Live2DPackageValidation _validateLive2DPackage(
     'Pose': '.pose3.json',
     'DisplayInfo': '.cdi3.json',
   };
+  // The resolved paths of the optional single-file references, for staging.
+  final optionalResolved = <String, String>{};
   for (final entry in optionalSuffixes.entries) {
     final value = fileRefs[entry.key];
-    if (value != null) requireReference(value, entry.key, entry.value);
+    if (value != null) {
+      final resolved = requireReference(value, entry.key, entry.value);
+      if (resolved != null) optionalResolved[entry.key] = resolved;
+    }
   }
   // For an expression or motion, only an unsafe or wrongly suffixed File path
   // fails the package. Anything else wrong with one entry leaves just that
@@ -1029,6 +1052,27 @@ Live2DPackageValidation _validateLive2DPackage(
       }
       return null;
     }
+
+    // The optional single-file references (physics and pose) are staged under
+    // fixed names. A problem with one leaves just it out, with a warning.
+    const physicsSkipped = Live2DPackageIssueCode.physicsSkipped;
+    const poseSkipped = Live2DPackageIssueCode.poseSkipped;
+    void stageOptional(String key, String staged, int maxBytes,
+        Live2DPackageIssueCode code) {
+      final path = optionalResolved[key];
+      if (path == null) return;
+      final extra = jsonBytes(key) + jsonBytes(staged) + 2;
+      final why = stage(path, staged, maxBytes, extra);
+      if (why != null) {
+        warn(code, why, path: path);
+      } else {
+        refs[key] = staged;
+      }
+    }
+
+    stageOptional('Physics', 'physics.physics3.json',
+        limits.maxPhysicsBytes, physicsSkipped);
+    stageOptional('Pose', 'pose.pose3.json', limits.maxPoseBytes, poseSkipped);
 
     const expressionSkipped = Live2DPackageIssueCode.expressionSkipped;
     final keptExpressions = <Map<String, Object?>>[];

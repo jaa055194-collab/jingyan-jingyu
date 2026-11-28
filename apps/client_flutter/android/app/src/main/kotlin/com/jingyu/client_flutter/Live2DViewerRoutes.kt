@@ -44,6 +44,8 @@ internal object Live2DViewerRoutes {
         "live2d_texture_budget.js" to JS,
         "live2d_motion.js" to JS,
         "live2d_behavior.js" to JS,
+        "live2d_physics.js" to JS,
+        "live2d_pose.js" to JS,
         "runtime/purismcore/purismcore.js" to JS,
     )
 
@@ -93,7 +95,10 @@ internal object Live2DViewerRoutes {
     const val MODELS_DIR = "models"
 
     /** Mirrors Live2DProfile.modelFileTypes and isValidModelId (jingyu_client_kit live2d_profile.dart). */
-    val MODEL_FILE_TYPES = listOf(".model3.json", ".moc3", ".png", ".exp3.json", ".motion3.json")
+    val MODEL_FILE_TYPES = listOf(
+        ".model3.json", ".moc3", ".png", ".exp3.json", ".motion3.json",
+        ".physics3.json", ".pose3.json",
+    )
     private val MODEL_ID = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
     fun isModelFile(path: String): Boolean = path.lowercase().let { p -> MODEL_FILE_TYPES.any { p.endsWith(it) } }

@@ -650,6 +650,11 @@ class _Live2DImportPanelState extends State<Live2DImportPanel>
             groups: _groups[id] ?? const <Live2DModelGroup>[],
             setParameter: controller.setParameter,
             clearParameter: controller.clearParameter,
+            setExpression: controller.setExpression,
+            clearExpression: controller.clearExpression,
+            playMotion: controller.playMotion,
+            blink: controller.blink,
+            speak: controller.speak,
             onClose: () => setState(() => _wizard = false),
             onChanged: () => setState(() {}),
           )

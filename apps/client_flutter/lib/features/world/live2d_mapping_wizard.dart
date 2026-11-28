@@ -98,6 +98,11 @@ class Live2DMappingWizard extends StatefulWidget {
     this.groups = const <Live2DModelGroup>[],
     required this.setParameter,
     required this.clearParameter,
+    required this.setExpression,
+    required this.clearExpression,
+    required this.playMotion,
+    required this.blink,
+    required this.speak,
     required this.onClose,
     required this.onChanged,
   });
@@ -121,6 +126,22 @@ class Live2DMappingWizard extends StatefulWidget {
   /// Hands a parameter back to the preview, so its own motions, blinking and
   /// lip sync move it again.
   final Future<void> Function(String id) clearParameter;
+
+  /// Plays a listed expression on the preview, for trying one out.
+  final Future<void> Function(String name) setExpression;
+
+  /// Clears the expression being tried out.
+  final Future<void> Function() clearExpression;
+
+  /// Plays motion [index] of [group] on the preview, for trying one out.
+  final Future<void> Function(String group, int index) playMotion;
+
+  /// Makes the preview blink once, for checking the mapped blink parameters.
+  final Future<void> Function() blink;
+
+  /// Plays a short synthetic mouth envelope, for checking the mapped mouth
+  /// parameter without a speech engine.
+  final Future<void> Function(List<double> levels, int stepMs) speak;
 
   /// Leaves the wizard. Choices that were not saved are discarded.
   final VoidCallback onClose;
@@ -147,6 +168,10 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
   String? _trialSlot;
   double _trialValue = 0;
   String? _driveError;
+  String? _previewError;
+  static const _testSpeechLevels = <double>[
+    0, 0.4, 0.9, 0.6, 1, 0.5, 0.8, 0.2, 0,
+  ];
   final Map<String, double> _queued = {};
   final Set<String> _releasing = {};
   final Set<String> _driving = {};
@@ -278,6 +303,22 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
     }
   }
 
+  /// Runs a preview-only action, such as trying a motion; a failure shows one
+/// line and leaves the mapping alone.
+  void _tryPreview(Future<void> Function() action) {
+    if (_busy) return;
+    unawaited(() async {
+      try {
+        await action();
+        if (mounted && _previewError != null) {
+          setState(() => _previewError = null);
+        }
+      } catch (_) {
+        if (mounted) setState(() => _previewError = '预览暂时无法试看。');
+      }
+    }());
+  }
+
   Map<String, Object?> _profileJson() {
     final store = widget.store;
     return <String, Object?>{
@@ -403,8 +444,30 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
     return [
       const Text('拖动滑块可在预览中试动，松开后交还模型自身的动作。'),
       for (final slot in _slots) _parameterRow(slot, parameters),
+      Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          OutlinedButton(
+            key: const Key('live2d-wizard-test-blink'),
+            onPressed: _busy ? null : () => _tryPreview(widget.blink),
+            child: const Text('测试眨眼'),
+          ),
+          OutlinedButton(
+            key: const Key('live2d-wizard-test-speak'),
+            onPressed: _busy
+                ? null
+                : () => _tryPreview(
+                      () => widget.speak(_testSpeechLevels, 40),
+                    ),
+            child: const Text('测试说话'),
+          ),
+        ],
+      ),
       if (_driveError case final error?)
         Text(error, key: const Key('live2d-wizard-drive-error')),
+      if (_previewError case final error?)
+        Text(error, key: const Key('live2d-wizard-preview-error')),
       Align(
         alignment: AlignmentDirectional.centerStart,
         child: TextButton(
@@ -501,7 +564,7 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
       ];
     }
     return [
-      const Text('表情与动作暂不能在预览中试看。'),
+      const Text('选择后可试看一次；试看不会保存。'),
       if (names.isEmpty)
         CheckboxListTile(
           key: const Key('live2d-wizard-no-expressions'),
@@ -530,7 +593,16 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
                 _expressions[key] = names[i];
               }
             }),
+            previewKey: Key('live2d-wizard-expression-' '$key' '-preview'),
+            onPreview: switch (_expressions[key]) {
+              final name? => () => _tryPreview(
+                    () => widget.setExpression(name),
+                  ),
+              null => null,
+            },
           ),
+        if (_previewError case final error?)
+          Text(error, key: const Key('live2d-wizard-preview-error')),
       ],
     ];
   }
@@ -550,7 +622,7 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
       for (final (group, index) in motions) live2dMotionLabel(group, index),
     ];
     return [
-      const Text('表情与动作暂不能在预览中试看。'),
+      const Text('选择后可试看一次；试看不会保存。'),
       if (motions.isEmpty)
         CheckboxListTile(
           key: const Key('live2d-wizard-no-motions'),
@@ -579,7 +651,16 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
                 _motions[key] = motions[i];
               }
             }),
+            previewKey: Key('live2d-wizard-motion-$key-preview'),
+            onPreview: switch (_motions[key]) {
+              final motion? => () => _tryPreview(
+                    () => widget.playMotion(motion.$1, motion.$2),
+                  ),
+              null => null,
+            },
           ),
+        if (_previewError case final error?)
+          Text(error, key: const Key('live2d-wizard-preview-error')),
       ],
     ];
   }
@@ -589,8 +670,10 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
     String label,
     List<String> options,
     int selected,
-    ValueChanged<int> onChanged,
-  ) {
+    ValueChanged<int> onChanged, {
+    Key? previewKey,
+    VoidCallback? onPreview,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Column(
@@ -615,6 +698,15 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
                     if (i != null) onChanged(i);
                   },
           ),
+          if (onPreview != null && selected >= 0)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton(
+                key: previewKey,
+                onPressed: _busy ? null : onPreview,
+                child: const Text('试看'),
+              ),
+            ),
         ],
       ),
     );

@@ -152,6 +152,7 @@ void main() {
         'model.moc3',
         'texture-0.png',
         'texture-1.png',
+        'physics.physics3.json',
       ]),
     );
     for (final file in entries.cast<File>()) {
@@ -165,10 +166,11 @@ void main() {
     expect(manifest['FileReferences'], {
       'Moc': 'model.moc3',
       'Textures': ['texture-0.png', 'texture-1.png'],
+      'Physics': 'physics.physics3.json',
     });
   });
 
-  test('stages expression and motion files under dense names', () {
+  test('stages physics, pose, expression and motion files under fixed names', () {
     expect(
       stagedLive2DPreviewNames([
         'motion-0.motion3.json',
@@ -179,22 +181,31 @@ void main() {
         'expression-0.exp3.json',
         'texture-1.png',
         'model.model3.json',
+        'pose.pose3.json',
+        'physics.physics3.json',
       ]),
       [
         'model.model3.json',
         'model.moc3',
         'texture-0.png',
         'texture-1.png',
+        'physics.physics3.json',
+        'pose.pose3.json',
         'expression-0.exp3.json',
         'expression-1.exp3.json',
         'motion-0.motion3.json',
         'motion-1.motion3.json',
       ],
     );
-    // Expressions and motions are optional, each on its own.
+    // Physics, pose, expressions and motions are optional, each on its own.
     const base = ['model.model3.json', 'model.moc3', 'texture-0.png'];
     expect(stagedLive2DPreviewNames(base), base);
-    for (final name in ['expression-0.exp3.json', 'motion-0.motion3.json']) {
+    for (final name in [
+      'physics.physics3.json',
+      'pose.pose3.json',
+      'expression-0.exp3.json',
+      'motion-0.motion3.json',
+    ]) {
       expect(stagedLive2DPreviewNames([...base, name]), [...base, name]);
     }
     // The fixture bundle's names, in the order they are written.
@@ -203,6 +214,7 @@ void main() {
       'model.moc3',
       'texture-0.png',
       'texture-1.png',
+      'physics.physics3.json',
     ]);
   });
 
@@ -231,7 +243,7 @@ void main() {
       'a subdirectory': [...base, 'motions/motion-0.motion3.json'],
       'a parent path': [...base, '../expression-0.exp3.json'],
       'a trailing separator': [...base, 'expression-0.exp3.json/'],
-      'an unstaged type': [...base, 'model.physics3.json'],
+      'an unstaged type': [...base, 'model.cdi3.json'],
       'a motion sound': [...base, 'motion-0.wav'],
     };
     for (final MapEntry(key: label, value: names) in rejected.entries) {

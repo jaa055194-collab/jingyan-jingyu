@@ -69,11 +69,15 @@ class Live2DViewerRoutesTest {
     }
 
     @Test
-    fun modelServesExpressionAndMotionFiles() {
+    fun modelServesExpressionMotionPhysicsAndPoseFiles() {
         File(staged, "expression-0.exp3.json").writeText("{}")
         File(staged, "motion-0.motion3.json").writeText("{}")
+        File(staged, "physics.physics3.json").writeText("{}")
+        File(staged, "pose.pose3.json").writeText("{}")
         assertEquals(staged("expression-0.exp3.json", "application/json"), model("$TOKEN/expression-0.exp3.json"))
         assertEquals(staged("motion-0.motion3.json", "application/json"), model("$TOKEN/motion-0.motion3.json"))
+        assertEquals(staged("physics.physics3.json", "application/json"), model("$TOKEN/physics.physics3.json"))
+        assertEquals(staged("pose.pose3.json", "application/json"), model("$TOKEN/pose.pose3.json"))
     }
 
     @Test
@@ -87,8 +91,8 @@ class Live2DViewerRoutesTest {
     @Test
     fun modelRejectsFilesOutsideTheModelFileTypes() {
         File(staged, "notes.txt").writeText("x")
-        File(staged, "model.physics3.json").writeText("{}")
-        for (path in listOf("notes.txt", "model.physics3.json", "missing.json", "textures", "index.html", "viewer.js")) {
+        File(staged, "model.cdi3.json").writeText("{}")
+        for (path in listOf("notes.txt", "model.cdi3.json", "missing.json", "textures", "index.html", "viewer.js")) {
             assertEquals(path, Route.Forbidden, model("$TOKEN/$path"))
         }
     }

@@ -92,11 +92,23 @@
 - 许可证：MIT（Copyright (c) 2026 chyinan）。上游：<https://github.com/chyinan/Kokoro-Engine>
 - 改编位置：`packages/jingyu_live2d_web/web/live2d_behavior.js` 的帧率无关口型 EMA 因子。文件头保留原版权与 MIT 全文。
 
-### motion3 / exp3 公开格式
+### Mocari（physics3 与 pose3 求值）
 
-- 来源：Live2D/CubismSpecs `e2de04dd4514`，`FileFormats/motion3.json.md` 与 `FileFormats/exp3.json.md`（公开格式说明；上游没有 LICENSE 文件）。
+- 来源：`Eatgrapes/Mocari@29a4792f93b7075049cee080ba11a3c834efd01c`，`src/core/physics.rs`（物理粒子链、归一化、固定步长与输出）与 `src/json/pose3.rs`（姿态组淡入与链接部件）。
+- 许可证：MIT（Copyright (c) 2026 Eatgrapes）。上游：<https://github.com/Eatgrapes/Mocari>
+- 改编位置：`packages/jingyu_live2d_web/web/live2d_physics.js` 与 `web/live2d_pose.js`（ES5 重写）。文件头列出逐段行号并保留原版权与 MIT 全文。未使用 Mocari 的示例模型（Live2D Free Material License）。
+
+### psd2live（仅 physics.rs 的角度方向包裹循环）
+
+- 来源：`tsunehimatoi/psd2live@f6d27de4baebe2f25144e1cc2422dc50a34b5e01`，仅 `runtime/src/physics.rs` L44-53。
+- 许可证：运行时目录为 MIT（Copyright (c) 2026 PSD2Live contributors）；仓库根目录为 GPL-3.0，未使用其任何其他文件。上游：<https://github.com/tsunehimatoi/psd2live>
+- 改编位置：`packages/jingyu_live2d_web/web/live2d_physics.js` 的 `directionToRadian` 包裹循环。文件头保留其版权与 MIT 全文。
+
+### motion3 / exp3 / physics3 / pose3 公开格式
+
+- 来源：Live2D/CubismSpecs `e2de04dd4514`，`FileFormats/motion3.json.md`、`FileFormats/exp3.json.md`、`FileFormats/physics3.json.md` 与 `FileFormats/pose3.json.md`（公开格式说明；上游没有 LICENSE 文件）。
 - 上游：<https://github.com/Live2D/CubismSpecs>
-- 用途：`packages/jingyu_live2d_web/web/live2d_motion.js` 按公开格式说明自行实现解析与求值，没有复制其文本或 Cubism Framework/Samples 的代码；Cubism Framework 只用作行为参考，未随包分发。
+- 用途：`packages/jingyu_live2d_web/web` 的 motion、expression、physics 与 pose 模块按公开格式说明实现解析与求值，没有复制其文本或 Cubism Framework/Samples 的代码；Cubism Framework 只用作行为参考，未随包分发。
 
 ### Flutter 平台视图测试替身
 

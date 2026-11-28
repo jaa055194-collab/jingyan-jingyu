@@ -43,6 +43,10 @@ final class _Wizard {
   Future<void>? reply;
   int closed = 0;
   int changed = 0;
+  final List<String> expressions = [];
+  final List<(String, int)> motions = [];
+  int blinks = 0;
+  final List<(List<double>, int)> spoken = [];
 
   Future<void> send(String id, double? value) async {
     sent.add((id, value));
@@ -72,6 +76,13 @@ Future<_Wizard> _pump(
               infoError: infoError,
               setParameter: wizard.send,
               clearParameter: (id) => wizard.send(id, null),
+              setExpression: (name) async => wizard.expressions.add(name),
+              clearExpression: () async {},
+              playMotion: (group, index) async =>
+                  wizard.motions.add((group, index)),
+              blink: () async => wizard.blinks++,
+              speak: (levels, stepMs) async =>
+                  wizard.spoken.add((List.of(levels), stepMs)),
               onClose: () => wizard.closed++,
               onChanged: () => wizard.changed++,
             ),
@@ -328,6 +339,38 @@ void main() {
     await tester.tap(_key('live2d-wizard-save'));
     await tester.pumpAndSettle();
     expect(wizard.store.calls, ['saveProfile(m1, rev 2)']);
+  });
+
+  testWidgets('test blink and test speech drive the preview only', (
+    tester,
+  ) async {
+    final wizard = await _pump(tester, _info());
+    await tester.tap(_key('live2d-wizard-test-blink'));
+    await tester.pump();
+    expect(wizard.blinks, 1);
+    await tester.tap(_key('live2d-wizard-test-speak'));
+    await tester.pump();
+    expect(wizard.spoken, hasLength(1));
+    expect(wizard.spoken.single.$2, 40);
+    expect(wizard.spoken.single.$1, isNotEmpty);
+    expect(wizard.store.calls, isEmpty);
+  });
+
+  testWidgets('tries a selected expression and motion without saving', (
+    tester,
+  ) async {
+    final wizard = await _pump(tester, _info());
+    await _next(tester);
+    await _choose(tester, 'live2d-wizard-expression-happy', 'Smile');
+    await tester.tap(_key('live2d-wizard-expression-happy-preview'));
+    await tester.pump();
+    expect(wizard.expressions, ['Smile']);
+    await _next(tester);
+    await _choose(tester, 'live2d-wizard-motion-neutral', 'Idle 第 2 个');
+    await tester.tap(_key('live2d-wizard-motion-neutral-preview'));
+    await tester.pump();
+    expect(wizard.motions, [('Idle', 1)]);
+    expect(wizard.store.calls, isEmpty);
   });
 
   test('enabling needs a model report from the preview', () async {

@@ -1021,4 +1021,88 @@ void main() {
       });
     });
   });
+
+  group('physics and pose staging', () {
+    Uint8List package({required Map<String, String> files}) =>
+        _zip([
+          ..._validEntries(
+            model3Text: _model3(extra: const {
+              'Physics': 'phys/avatar.physics3.json',
+              'Pose': 'pose/avatar.pose3.json',
+            }),
+          ),
+          for (final MapEntry(key: path, value: text) in files.entries)
+            _textFile('model/$path', text),
+        ]);
+
+    Object? fileRefsOf(Live2DPreviewBundle bundle) =>
+        (jsonDecode(utf8.decode(bundle.files[bundle.model3Name]!))
+            as Map<String, Object?>)['FileReferences'];
+
+    String describe(Live2DPackageIssue issue) =>
+        '${issue.code.name} ${issue.index} ${issue.path}';
+
+    test('stages them under fixed names that the model3 lists', () {
+      final zip = package(files: {
+        'phys/avatar.physics3.json': '{"Version":3,"Meta":{}}',
+        'pose/avatar.pose3.json': '{"Type":"Live2D Pose"}',
+      });
+      final bundle = prepareLive2DPreview(zip);
+      expect(bundle.warnings, isEmpty);
+      expect(utf8.decode(bundle.files['physics.physics3.json']!),
+          '{"Version":3,"Meta":{}}');
+      expect(utf8.decode(bundle.files['pose.pose3.json']!),
+          '{"Type":"Live2D Pose"}');
+      expect(fileRefsOf(bundle), {
+        'Moc': 'model.moc3',
+        'Textures': ['texture-0.png'],
+        'Physics': 'physics.physics3.json',
+        'Pose': 'pose.pose3.json',
+      });
+    });
+
+    test('leaves out a bad file with a warning and keeps the model usable', () {
+      final deep = '{"a":${List.filled(64, '[').join()}${List.filled(64, ']').join()}}';
+      final bundle = prepareLive2DPreview(package(files: {
+        'phys/avatar.physics3.json': '[]',
+        'pose/avatar.pose3.json': deep,
+      }));
+      expect(bundle.warnings.map(describe), [
+        'physicsSkipped null model/phys/avatar.physics3.json',
+        'poseSkipped null model/pose/avatar.pose3.json',
+      ]);
+      expect(bundle.warnings.first.message, contains('not a JSON object'));
+      expect(bundle.warnings.last.message, contains('nesting'));
+      expect(bundle.files, isNot(contains('physics.physics3.json')));
+      expect(bundle.files, isNot(contains('pose.pose3.json')));
+      expect(fileRefsOf(bundle), {
+        'Moc': 'model.moc3',
+        'Textures': ['texture-0.png'],
+      });
+    });
+
+    test('applies the physics and pose byte caps without failing the package',
+        () {
+      final zip = package(files: {
+        'phys/avatar.physics3.json': '{"Version":3}',
+        'pose/avatar.pose3.json': '{"Version":3}',
+      });
+      const limits =
+          Live2DPackageLimits(maxPhysicsBytes: 8, maxPoseBytes: 8);
+      final bundle = prepareLive2DPreview(zip, limits: limits);
+      expect(bundle.warnings.map(describe), [
+        'physicsSkipped null model/phys/avatar.physics3.json',
+        'poseSkipped null model/pose/avatar.pose3.json',
+      ]);
+      expect(bundle.warnings.first.message, contains('exceeds 8 bytes'));
+      expect(fileRefsOf(bundle), {
+        'Moc': 'model.moc3',
+        'Textures': ['texture-0.png'],
+      });
+      // Validation sees the same warnings, which are not fatal.
+      final result = validateLive2DPackage(zip, limits: limits);
+      expect(result.ok, isTrue);
+      expect(result.warnings.map(describe), bundle.warnings.map(describe));
+    });
+  });
 }

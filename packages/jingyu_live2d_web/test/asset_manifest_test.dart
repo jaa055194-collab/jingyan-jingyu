@@ -33,6 +33,8 @@ void main() {
       final budget = html.indexOf('live2d_texture_budget.js');
       final motion = html.indexOf('live2d_motion.js');
       final behavior = html.indexOf('live2d_behavior.js');
+      final physics = html.indexOf('live2d_physics.js');
+      final pose = html.indexOf('live2d_pose.js');
       final renderer = html.indexOf('live2d_renderer_webgl.js');
       final viewer = html.indexOf('live2d_viewer.js');
       expect(runtime, isNonNegative);
@@ -42,7 +44,9 @@ void main() {
       expect(viewer, greaterThan(renderer));
       expect(motion, greaterThan(budget));
       expect(behavior, greaterThan(motion));
-      expect(viewer, greaterThan(behavior));
+      expect(physics, greaterThan(behavior));
+      expect(pose, greaterThan(physics));
+      expect(viewer, greaterThan(pose));
     });
 
     test('viewer scripts carry no remote model URLs', () {
@@ -52,6 +56,8 @@ void main() {
         'web/live2d_texture_budget.js',
         'web/live2d_motion.js',
         'web/live2d_behavior.js',
+        'web/live2d_physics.js',
+        'web/live2d_pose.js',
       ]) {
         final source = _read(path).toLowerCase();
         expect(source, isNot(contains('http://')), reason: path);

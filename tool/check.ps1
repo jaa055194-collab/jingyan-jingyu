@@ -43,10 +43,10 @@ $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
   $failed += 'node (viewer behaviour and texture budget tests)'
 } else {
-  Write-Host '=== packages/jingyu_live2d_web (viewer, motion, behaviour, texture budget) ==='
+  Write-Host '=== packages/jingyu_live2d_web (viewer, motion, behaviour, physics, pose, texture budget) ==='
   Push-Location (Join-Path $root 'packages/jingyu_live2d_web')
   try {
-    & $node.Source --test test/viewer_behavior.test.cjs test/motion.test.cjs test/behavior.test.cjs test/texture_budget.test.cjs
+    & $node.Source --test test/viewer_behavior.test.cjs test/motion.test.cjs test/behavior.test.cjs test/physics.test.cjs test/pose.test.cjs test/texture_budget.test.cjs
     if ($LASTEXITCODE -ne 0) { $failed += 'jingyu_live2d_web (node tests)' }
   } finally {
     Pop-Location

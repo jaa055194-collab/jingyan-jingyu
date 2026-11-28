@@ -436,6 +436,8 @@ class Live2DProfile {
     '.png',
     '.exp3.json',
     '.motion3.json',
+    '.physics3.json',
+    '.pose3.json',
   ];
 
   /// Whether [path] is a safe relative path to a file of one of the

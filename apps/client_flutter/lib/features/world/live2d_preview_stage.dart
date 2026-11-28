@@ -90,7 +90,8 @@ Future<Live2DPreviewStage> stageLive2DPreview(
 }
 
 /// The staged-name allowlist, in write order: `model.model3.json`,
-/// `model.moc3`, at least one `texture-N.png`, then any
+/// `model.moc3`, at least one `texture-N.png`, then optionally
+/// `physics.physics3.json`, `pose.pose3.json`, any
 /// `expression-N.exp3.json` and `motion-N.motion3.json`, each N counting
 /// from 0 without gaps, as [prepareLive2DPreview] names them. Null for any
 /// other set of [names], so a stage never holds another file.
@@ -112,6 +113,8 @@ List<String>? stagedLive2DPreviewNames(Iterable<String> names) {
     'model.model3.json',
     'model.moc3',
     for (var i = 0; i < textures; i++) 'texture-$i.png',
+    if (given.contains('physics.physics3.json')) 'physics.physics3.json',
+    if (given.contains('pose.pose3.json')) 'pose.pose3.json',
     for (var i = 0; i < expressions; i++) 'expression-$i.exp3.json',
     for (var i = 0; i < motions; i++) 'motion-$i.motion3.json',
   ];

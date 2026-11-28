@@ -21,7 +21,12 @@ const RENDERER = fs.readFileSync(
   'utf8',
 );
 // The animation modules the viewer needs, loaded before it like the page does.
-const ANIMATION = ['live2d_motion.js', 'live2d_behavior.js'].map((name) => ({
+const ANIMATION = [
+  'live2d_motion.js',
+  'live2d_behavior.js',
+  'live2d_physics.js',
+  'live2d_pose.js',
+].map((name) => ({
   name,
   source: fs.readFileSync(path.join(__dirname, '..', 'web', name), 'utf8'),
 }));
@@ -963,6 +968,73 @@ test('an idle motion plays in the frame pipeline', async () => {
   harness.flushOneFrame(150);
   assert.ok(harness.model().parameters.values[0] > 0.05);
   assert.ok(harness.rendererCalls.includes('model.update'));
+});
+
+test('staged physics and pose run in the frame pipeline', async () => {
+  const physics = {
+    Version: 3,
+    Meta: { PhysicsSettingCount: 1 },
+    PhysicsSettings: [{
+      Id: 'S',
+      Input: [{
+        Source: { Target: 'Parameter', Id: 'PA' },
+        Weight: 100,
+        Type: 'Angle',
+        Reflect: true,
+      }],
+      Output: [{
+        Destination: { Target: 'Parameter', Id: 'PX' },
+        VertexIndex: 1,
+        Scale: 1,
+        Weight: 100,
+        Type: 'X',
+        Reflect: false,
+      }],
+      Vertices: [
+        { Position: { X: 0, Y: 0 }, Mobility: 1, Delay: 0, Acceleration: 1, Radius: 1 },
+        { Position: { X: 0, Y: 0 }, Mobility: 1, Delay: 0, Acceleration: 1, Radius: 1 },
+      ],
+      Normalization: {
+        Position: { Minimum: -1, Default: 0, Maximum: 1 },
+        Angle: { Minimum: -30, Default: 0, Maximum: 30 },
+      },
+    }],
+  };
+  const pose = {
+    Type: 'Live2D Pose',
+    FadeInTime: 0,
+    Groups: [[{ Id: 'PartA' }, { Id: 'PartB' }]],
+  };
+  const parts = { count: 2, ids: ['PartA', 'PartB'], opacities: new Float32Array([1, 1]) };
+  const harness = createHarness({
+    modelParameters: {
+      count: 2,
+      ids: ['PA', 'PX'],
+      values: [15, 0],
+      minimumValues: [-30, -1],
+      maximumValues: [30, 1],
+      defaultValues: [0, 0],
+    },
+    modelParts: parts,
+    fileReferences: {
+      Physics: 'physics.physics3.json',
+      Pose: 'pose.pose3.json',
+    },
+    files: {
+      'physics.physics3.json': JSON.stringify(physics),
+      'pose.pose3.json': JSON.stringify(pose),
+    },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+  assert.deepEqual(summary(harness.posted), ['ready']);
+  assert.ok(harness.fetches.some((url) => url.endsWith('physics.physics3.json')));
+  assert.ok(harness.fetches.some((url) => url.endsWith('pose.pose3.json')));
+  assert.equal(parts.opacities[0], 1);
+  assert.equal(parts.opacities[1], 0);
+  harness.flushOneFrame(16);
+  harness.flushOneFrame(160);
+  assert.deepEqual(summary(harness.posted), ['ready']);
 });
 
 test('setParam is held across frames and clearParam releases it', async () => {

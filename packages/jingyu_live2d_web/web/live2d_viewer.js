@@ -465,6 +465,27 @@
     }
   }
 
+  // The model3's physics3 and pose3 files, parsed for evaluation. Either is
+// null when the model3 does not reference it, it does not load, or the
+// evaluator rejects it; such a model still loads, without that effect.
+  async function loadEffects(base, refs) {
+    var effects = { physics: null, pose: null };
+    await Promise.all(['Physics', 'Pose'].map(async function (key) {
+      if (typeof refs[key] !== 'string' || refs[key] === '') return;
+      try {
+        var json = await loadJsonObject(resolve(base, refs[key]));
+        if (!json) return;
+        var parsed = key === 'Physics'
+          ? window.Live2DPhysics.parse(json)
+          : window.Live2DPose.parse(json);
+        if (parsed) effects[key.toLowerCase()] = parsed;
+      } catch (_) {
+        // A broken effect only drops that effect.
+      }
+    }));
+    return effects;
+  }
+
   // At most this many blink or mouth parameters, like the host's mapping.
   var MAX_BEHAVIOR_IDS = 64;
 
@@ -518,20 +539,53 @@
   // values setParam holds. frame(dtMs) runs one frame's steps on the core's
   // parameter values and part opacities; the other methods are the commands.
   // Throws when the model's parameters cannot be read.
-  function createAnimation(model, play, model3) {
+  function createAnimation(model, play, model3, effects) {
     var motionApi = window.Live2DMotion;
     var Priority = motionApi.Priority;
     var params = model.parameters;
     if (!params || !Number.isInteger(params.count) || !params.values) {
       throw new Error('model parameters unreadable');
     }
-    var count = params.count;
+    var baseCount = params.count;
     var values = params.values;
-    var paramIndex = indexIds(params);
+    var baseIndex = indexIds(params);
+    var paramIndex = Object.create(null);
+    for (var key in baseIndex) paramIndex[key] = baseIndex[key];
     var parts = model.parts && model.parts.opacities ? model.parts : null;
     var opacities = parts ? parts.opacities : new Float32Array(0);
     var partIndex = parts ? indexIds(parts) : Object.create(null);
     var behavior = window.Live2DBehavior.create(params);
+    var physics = null;
+    var pose = null;
+    if (effects && effects.physics) {
+      try {
+        physics = window.Live2DPhysics.create(effects.physics, params.ids,
+          params.minimumValues, params.maximumValues, params.defaultValues);
+      } catch (_) {
+        physics = null;
+      }
+    }
+    if (effects && effects.pose) {
+      try {
+        pose = window.Live2DPose.create(effects.pose, parts ? parts.ids : [],
+          params.ids);
+      } catch (_) {
+        pose = null;
+      }
+    }
+    // Part-id parameters the moc does not have live after the model's own:
+    // motions and setParam can drive them, and pose reads them back.
+    var extraIds = pose ? Object.keys(pose.extraParams) : [];
+    var count = baseCount + extraIds.length;
+    var extraIndex = Object.create(null);
+    var workValues = new Float32Array(count);
+    for (var i = 0; i < baseCount; i++) workValues[i] = values[i];
+    for (i = 0; i < extraIds.length; i++) {
+      var at = baseCount + i;
+      extraIndex[extraIds[i]] = at;
+      paramIndex[extraIds[i]] = at;
+      workValues[at] = pose.extraParams[extraIds[i]];
+    }
     var saved = new Float32Array(count);
     var driven = new Uint8Array(count);
     var held = Object.create(null); // parameter index -> value from setParam
@@ -557,8 +611,8 @@
       blinkIndices = blink.map(parameterIndex);
       mouthIndices = mouth.map(parameterIndex);
     }
-    useBehaviorIds(groupIds(model3, 'EyeBlink', paramIndex),
-      groupIds(model3, 'LipSync', paramIndex));
+    useBehaviorIds(groupIds(model3, 'EyeBlink', baseIndex),
+      groupIds(model3, 'LipSync', baseIndex));
 
     var idleMotions = null;
     Object.keys(play.motions).some(function (group) {
@@ -567,7 +621,13 @@
       return true;
     });
 
-    for (var i = 0; i < count; i++) saved[i] = values[i];
+    if (pose) pose.reset(workValues, opacities);
+    if (physics) physics.stabilize(workValues);
+    for (i = 0; i < extraIds.length; i++) {
+      workValues[baseCount + i] = pose ? pose.extraParams[extraIds[i]] : workValues[baseCount + i];
+    }
+    for (i = 0; i < count; i++) saved[i] = workValues[i];
+    for (i = 0; i < baseCount; i++) values[i] = workValues[i];
     // Part opacities as loaded, restored before each frame's motions like
     // the parameter values, so a curve blends from the same base each frame.
     var savedOpacities = new Float32Array(opacities.length);
@@ -581,21 +641,32 @@
     return {
       frame: function (dtMs) {
         now += dtMs / 1000;
+        var dtS = dtMs / 1000;
         var k;
-        for (k = 0; k < count; k++) values[k] = saved[k];
+        for (k = 0; k < count; k++) workValues[k] = saved[k];
         for (k = 0; k < opacities.length; k++) opacities[k] = savedOpacities[k];
         if (idleMotions && queue.isFinished()) {
           var pick = Math.floor(Math.random() * idleMotions.length);
           queue.start(idleMotions[pick], now, Priority.IDLE);
         }
         driven.fill(0);
-        queue.update(values, opacities, now, driven);
-        for (k = 0; k < count; k++) saved[k] = values[k];
-        for (k = 0; k < opacities.length; k++) savedOpacities[k] = opacities[k];
-        expressions.update(values, now, parameterIndex);
+        queue.update(workValues, opacities, now, driven);
+        for (k = 0; k < count; k++) saved[k] = workValues[k];
+        expressions.update(workValues, now, parameterIndex);
         var idle = queue.currentPriority() <= Priority.IDLE;
-        behavior.update(values, dtMs, { idle: idle, driven: idle ? null : driven });
-        for (var key in held) values[key] = held[key];
+        behavior.update(workValues, dtMs, { idle: idle, driven: idle ? null : driven });
+        for (var key in held) workValues[key] = held[key];
+        if (physics) physics.evaluate(workValues, dtS);
+        if (pose) {
+          for (k = 0; k < extraIds.length; k++) {
+            pose.extraParams[extraIds[k]] = workValues[baseCount + k];
+          }
+          pose.evaluate(workValues, opacities, dtS);
+        }
+        for (k = 0; k < baseCount; k++) values[k] = workValues[k];
+        // Pose changes part opacities each frame, so the next frame restores
+        // the ones it left rather than the motion-only snapshot.
+        for (k = 0; k < opacities.length; k++) savedOpacities[k] = opacities[k];
       },
       setParam: function (name, value) {
         var index = parameterIndex(name);
@@ -632,8 +703,8 @@
         queue.start(list[index], now, Priority.FORCE);
       },
       setBehavior: function (blink, mouth) {
-        useBehaviorIds(behaviorIds(blink, 'blink', paramIndex),
-          behaviorIds(mouth, 'mouth', paramIndex));
+        useBehaviorIds(behaviorIds(blink, 'blink', baseIndex),
+          behaviorIds(mouth, 'mouth', baseIndex));
       },
       blink: function () {
         behavior.blinkNow();
@@ -662,7 +733,8 @@
         typeof window.Live2DRenderer.draw !== 'function') {
       throw new Error('renderer adapter missing');
     }
-    if (!window.Live2DMotion || !window.Live2DBehavior) {
+    if (!window.Live2DMotion || !window.Live2DBehavior ||
+        !window.Live2DPhysics || !window.Live2DPose) {
       throw new Error('animation modules missing');
     }
 
@@ -689,7 +761,12 @@
 
       // Loaded before the swap, so the shown model stays up meanwhile. Never
       // throws; a list that cannot be reported whole comes back null.
-      var lists = await readyExpressionsAndMotions(model3Url, refs, window.Live2DMotion);
+      var ready = await Promise.all([
+        readyExpressionsAndMotions(model3Url, refs, window.Live2DMotion),
+        loadEffects(model3Url, refs),
+      ]);
+      var lists = ready[0];
+      var effects = ready[1];
       if (state.disposed) throw new Error('viewer disposed');
 
       var textures = [];
@@ -710,7 +787,7 @@
       state.profileRev = command.profileRev;
       // A model whose parameters cannot be read is shown without animation.
       try {
-        state.anim = createAnimation(model, lists.play, json);
+        state.anim = createAnimation(model, lists.play, json, effects);
       } catch (_) {
         state.anim = null;
       }
