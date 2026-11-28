@@ -596,11 +596,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
               cards.first
             else
               JyStackDeck(
-                children: cards,
                 summary: '${cards.length} 条好友申请',
                 expanded: _requestsExpanded,
                 onExpandedChanged: (open) =>
                     setState(() => _requestsExpanded = open),
+                children: cards,
               ),
           ],
         ),

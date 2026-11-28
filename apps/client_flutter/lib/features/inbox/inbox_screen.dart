@@ -348,13 +348,13 @@ class _InboxScreenState extends State<InboxScreen> {
           cards.length == 1
               ? cards.first
               : JyStackDeck(
-                  children: cards,
                   summary: kind == 'friendRequest'
                       ? '${cards.length} 条好友邀请'
                       : '${cards.length} 条同类通知',
                   expanded: _expandedKinds[kind] ?? false,
                   onExpandedChanged: (open) =>
                       setState(() => _expandedKinds[kind] = open),
+                  children: cards,
                 ),
         );
         children.add(const SizedBox(height: JySpace.md));
