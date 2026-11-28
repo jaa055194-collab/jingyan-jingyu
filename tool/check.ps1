@@ -16,6 +16,7 @@ $packages = @(
   'packages/jingyu_protocol',
   'packages/jingyu_host_kit',
   'packages/jingyu_client_kit',
+  'packages/jingyu_live2d_web',
   'apps/host'
 )
 
@@ -31,6 +32,22 @@ foreach ($p in $packages) {
     if ($LASTEXITCODE -ne 0) { $failed += "$p (analyze)"; continue }
     & $dart test
     if ($LASTEXITCODE -ne 0) { $failed += "$p (test)" }
+  } finally {
+    Pop-Location
+  }
+}
+
+# The viewer's protocol behaviour, hot-switch scenes and texture budget need a
+# JavaScript runtime; the GitHub windows-latest image provides Node.js.
+$node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $node) {
+  $failed += 'node (viewer protocol, hot switch and texture budget tests)'
+} else {
+  Write-Host '=== packages/jingyu_live2d_web (viewer, motion, behaviour, physics, pose, texture budget, hot scene, switcher) ==='
+  Push-Location (Join-Path $root 'packages/jingyu_live2d_web')
+  try {
+    & $node.Source --test test/viewer_behavior.test.cjs test/motion.test.cjs test/behavior.test.cjs test/physics.test.cjs test/pose.test.cjs test/texture_budget.test.cjs test/hot_scene.test.cjs test/switcher.test.cjs
+    if ($LASTEXITCODE -ne 0) { $failed += 'jingyu_live2d_web (node tests)' }
   } finally {
     Pop-Location
   }

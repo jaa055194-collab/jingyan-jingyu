@@ -9,6 +9,8 @@ import 'shell_view_model.dart';
 import 'module_catalog.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/chat/chat_pane.dart';
+import '../features/world/live2d_avatar_card.dart';
+import '../features/world/live2d_kept_models.dart';
 import '../features/settings/settings_screen.dart';
 import '../features/world/street3d_android_surface.dart';
 import '../features/world/street3d_screen.dart';
@@ -110,6 +112,7 @@ class _ShellHomeState extends State<_ShellHome> {
   bool settings = false;
   bool mobileChat = false;
   int _chatOpenRevision = 0;
+  int _avatarRevision = 0;
   static const labels = ['聊天', '联系人', '动态', '收件箱', '世界'];
   static const icons = [
     Icons.chat_bubble_outline,
@@ -293,10 +296,31 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
+  /// The chat-page Live2D avatar card, only where the Live2D view is hosted.
+  /// [active] is false while the chat page is offstage, so the resident
+  /// session pauses its frame loop without releasing the model.
+  Widget? _chatAvatar({required bool active}) =>
+      defaultTargetPlatform == TargetPlatform.android
+      ? Live2DAvatarCard(
+          openStore: openDeviceLive2DStore,
+          supported: true,
+          active: active,
+          revision: _avatarRevision,
+        )
+      : null;
+
+  /// The World page enabled another model (or changed its mapping). The
+  /// resident chat card reloads it while hidden, so returning needs no reload.
+  void _onAvatarEnabled() {
+    if (!mounted) return;
+    setState(() => _avatarRevision++);
+  }
+
   Widget world() => WorldScreen(
     model: widget.model,
     onOpenSetup: openWorldSetup,
     onOpenStreet: openStreet3D,
+    onAvatarEnabled: _onAvatarEnabled,
   );
 
   /// Report data stays inside the authenticated session that opened 动态.
@@ -454,7 +478,46 @@ class _ShellHomeState extends State<_ShellHome> {
       final model = widget.model;
       final activity = model.foregroundMessageActivity;
       final showChat = destination == 0 && mobileChat && !settings;
-      final content = settings
+      final chatActive = destination == 0 && !settings;
+      // The card stays mounted while another tab is shown, so switching tabs
+      // does not reload the model; active=false pauses its frame loop.
+      final chatVisible = chatActive && (wide || mobileChat);
+      final chatRoot = wide
+          ? Row(
+              children: [
+                SizedBox(
+                  width: 280,
+                  child: ConversationList(model: model, onSelected: select),
+                ),
+                const VerticalDivider(width: 1),
+                Expanded(
+                  child: ChatPane(
+                    model: model,
+                    openRevision: _chatOpenRevision,
+                    avatar: _chatAvatar(active: chatVisible),
+                  ),
+                ),
+              ],
+            )
+          : Stack(
+              fit: StackFit.expand,
+              children: [
+                Offstage(
+                  offstage: mobileChat,
+                  child: ConversationList(model: model, onSelected: select),
+                ),
+                Offstage(
+                  offstage: !mobileChat,
+                  child: ChatPane(
+                    model: model,
+                    openRevision: _chatOpenRevision,
+                    avatar: _chatAvatar(active: chatVisible),
+                    onBack: () => setState(() => mobileChat = false),
+                  ),
+                ),
+              ],
+            );
+      final otherContent = settings
           ? SettingsScreen(
               model: model,
               onBack: () => setState(() {
@@ -474,29 +537,14 @@ class _ShellHomeState extends State<_ShellHome> {
           ? inbox()
           : destination != 0
           ? empty()
-          : wide
-          ? Row(
-              children: [
-                SizedBox(
-                  width: 280,
-                  child: ConversationList(model: model, onSelected: select),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: ChatPane(
-                    model: model,
-                    openRevision: _chatOpenRevision,
-                  ),
-                ),
-              ],
-            )
-          : showChat
-          ? ChatPane(
-              model: model,
-              openRevision: _chatOpenRevision,
-              onBack: () => setState(() => mobileChat = false),
-            )
-          : ConversationList(model: model, onSelected: select);
+          : null;
+      final content = Stack(
+        fit: StackFit.expand,
+        children: [
+          Offstage(offstage: !chatActive, child: chatRoot),
+          if (!chatActive && otherContent != null) otherContent,
+        ],
+      );
       return Scaffold(
         appBar: AppBar(
           title: Text(settings ? '鲸言鲸语' : labels[destination]),

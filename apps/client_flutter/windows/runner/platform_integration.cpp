@@ -3,6 +3,7 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <propkey.h>
 #include <propvarutil.h>
 #include <wtsapi32.h>
@@ -44,6 +45,66 @@ std::wstring Executable() {
   return path;
 }
 void Check(HRESULT hr, const char* message) { if (FAILED(hr)) throw std::runtime_error(message); }
+struct TaskMemDeleter {
+  void operator()(wchar_t* value) const noexcept { CoTaskMemFree(value); }
+};
+std::wstring AppDataPath() {
+  PWSTR local = nullptr;
+  const HRESULT status = SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &local);
+  const std::unique_ptr<wchar_t, TaskMemDeleter> folder(local);
+  Check(status, "Cannot find app data");
+  return std::wstring(folder.get()) + L"\\JingyuClient";
+}
+void EnsurePreviewDirectory(const std::wstring& path) {
+  if (CreateDirectoryW(path.c_str(), nullptr)) return;
+  if (GetLastError() == ERROR_ALREADY_EXISTS) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) &&
+        !(attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return;
+  }
+  throw std::runtime_error("Cannot prepare Live2D preview directory");
+}
+std::string Live2DPreviewDirectory() {
+  const auto app_data = AppDataPath();
+  EnsurePreviewDirectory(app_data);
+  const auto preview = app_data + L"\\live2d-preview";
+  EnsurePreviewDirectory(preview);
+  return Utf8(preview);
+}
+flutter::EncodableValue PickLive2DZip(HWND owner) {
+  // The runner's UI thread is already initialized as a COM STA.
+  winrt::com_ptr<IFileOpenDialog> dialog;
+  Check(CoCreateInstance(__uuidof(FileOpenDialog), nullptr, CLSCTX_INPROC_SERVER,
+                         IID_PPV_ARGS(dialog.put())), "Cannot create ZIP picker");
+  FILEOPENDIALOGOPTIONS options = 0;
+  Check(dialog->GetOptions(&options), "Cannot configure ZIP picker");
+  options &= ~(FOS_ALLOWMULTISELECT | FOS_PICKFOLDERS | FOS_ALLNONSTORAGEITEMS);
+  options |= FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST |
+             FOS_NOCHANGEDIR | FOS_DONTADDTORECENT;
+  Check(dialog->SetOptions(options), "Cannot configure ZIP picker");
+  constexpr COMDLG_FILTERSPEC filters[] = {{L"ZIP archives", L"*.zip"}};
+  Check(dialog->SetFileTypes(1, filters), "Cannot set ZIP picker filter");
+  const HRESULT status = dialog->Show(owner);
+  if (status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return flutter::EncodableValue();
+  Check(status, "Cannot open ZIP picker");
+
+  winrt::com_ptr<IShellItem> item;
+  Check(dialog->GetResult(item.put()), "Cannot get ZIP selection");
+  PWSTR selected = nullptr;
+  const HRESULT path_status = item->GetDisplayName(SIGDN_FILESYSPATH, &selected);
+  const std::unique_ptr<wchar_t, TaskMemDeleter> path_memory(selected);
+  Check(path_status, "Cannot get ZIP selection path");
+  const std::wstring path(path_memory.get());
+  // A filter is not validation: a user can enter a filename directly.
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  if (path.size() <= 4 || _wcsicmp(path.c_str() + path.size() - 4, L".zip") != 0 ||
+      attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    throw std::runtime_error("Select an existing ZIP file");
+  }
+  using Value = flutter::EncodableValue;
+  return Value(flutter::EncodableMap{{Value("path"), Value(Utf8(path))},
+                                     {Value("temporary"), Value(false)}});
+}
 const flutter::EncodableValue* Field(const flutter::EncodableMap& args, const char* name) {
   auto found = args.find(flutter::EncodableValue(name));
   return found == args.end() ? nullptr : &found->second;
@@ -332,11 +393,15 @@ void PlatformIntegration::Handle(const flutter::MethodCall<Value>& call, std::un
       result->Success(Value(Map{{Value("platform"), Value("windows")}, {Value("aumid"), Value("com.jingyu.client")}, {Value("tray"), Value(tray_)}, {Value("globalShortcut"), Value(hotkey_)}, {Value("notifications"), Value(true)}})); return;
     }
     if (method == "getDataDirectory") {
-      PWSTR local = nullptr;
-      Check(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &local), "Cannot find app data");
-      const std::wstring path = std::wstring(local) + L"\\JingyuClient"; CoTaskMemFree(local);
+      const auto path = AppDataPath();
       if (!CreateDirectoryW(path.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) throw std::runtime_error("Cannot create app data directory");
       result->Success(Value(Utf8(path))); return;
+    }
+    if (method == "getLive2DPreviewDirectory") {
+      result->Success(Value(Live2DPreviewDirectory())); return;
+    }
+    if (method == "pickLive2DZip") {
+      result->Success(PickLive2DZip(window_)); return;
     }
     if (method == "hasPin") { result->Success(Value(pin_.HasPin())); return; }
     if (method == "configurePin") pin_.Configure(Text(a, "pin"));

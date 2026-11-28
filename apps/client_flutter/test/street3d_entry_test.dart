@@ -14,6 +14,11 @@ class _Model extends ChangeNotifier implements ShellViewModel {
   String? connectedAccountId;
   @override
   bool get authenticated => connectedAccountId != null;
+  // Read by the Live2D import panel that shares the World page.
+  @override
+  bool appLockEnabled = false;
+  @override
+  Object? get ownAiSessionContext => connectedAccountId;
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

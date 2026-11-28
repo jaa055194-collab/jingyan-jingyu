@@ -1,20 +1,23 @@
 import 'package:jingyu_client_kit/jingyu_client_kit.dart';
 import 'package:test/test.dart';
 
-Live2DProfile _profile(String id, {int rev = 1, String file = 'avatar.model3.json'}) =>
-    Live2DProfile.fromJson({
-      'schemaVersion': 1,
-      'modelId': id,
-      'profileRev': rev,
-      'modelFile': file,
-      'paramMap': {
-        'mouthOpen': 'ParamMouthOpenY',
-        'blinkLeft': 'ParamEyeLOpen',
-        'blinkRight': 'ParamEyeROpen',
-        'expressions': {'happy': 'F01'},
-        'motions': {'wave': 'Motion01'},
-      },
-    });
+Live2DProfile _profile(String id, {int rev = 1}) => Live2DProfile.fromJson({
+  'schemaVersion': 1,
+  'modelId': id,
+  'profileRev': rev,
+  'modelFile': 'avatar.model3.json',
+  'paramMap': {
+    'mouthOpen': 'ParamMouthOpenY',
+    'blinkLeft': 'ParamEyeLOpen',
+    'blinkRight': 'ParamEyeROpen',
+    'noExpressions': false,
+    'noMotions': false,
+    'expressions': {'happy': 'F01'},
+    'motions': {
+      'wave': {'group': 'Idle', 'index': 0},
+    },
+  },
+});
 
 void main() {
   group('Live2DModelStore', () {
@@ -47,6 +50,43 @@ void main() {
       expect(store.models, isEmpty);
     });
 
+    test('setActive with model info lists every missing target', () {
+      final store = Live2DModelStore()
+        ..save(_profile('model.a'))
+        ..save(_profile('model.b'));
+      final full = Live2DModelInfo.fromReadyEvent({
+        'parameters': [
+          {'id': 'ParamMouthOpenY'},
+          {'id': 'ParamEyeLOpen'},
+          {'id': 'ParamEyeROpen'},
+        ],
+        'expressions': ['F01'],
+        'motions': [
+          {'group': 'Idle', 'count': 1},
+        ],
+      });
+      final partial = Live2DModelInfo.fromReadyEvent({
+        'parameters': [
+          {'id': 'ParamMouthOpenY'},
+        ],
+        'expressions': ['F02'],
+      });
+      store.setActive('model.b', info: full);
+      expect(
+        () => store.setActive('model.a', info: partial),
+        throwsA(
+          isA<Live2DTargetException>().having(
+            (error) => [for (final miss in error.misses) miss.field],
+            'fields',
+            ['blinkLeft', 'blinkRight', 'expressions[happy]', 'motions[wave]'],
+          ),
+        ),
+      );
+      expect(store.activeModelId, 'model.b');
+      store.setActive('model.a', info: full);
+      expect(store.activeModelId, 'model.a');
+    });
+
     test('export/import round-trips models and active atomically', () {
       final store = Live2DModelStore()
         ..save(_profile('model.a', rev: 2))
@@ -56,6 +96,7 @@ void main() {
       expect(restored.models.map((m) => m.modelId), ['model.a', 'model.b']);
       expect(restored.activeModelId, 'model.b');
       expect(restored.active?.paramMap.mouthOpen, 'ParamMouthOpenY');
+      expect(restored.toJson(), store.toJson());
     });
 
     test('import rejects invalid snapshot without mutating existing store', () {
@@ -101,6 +142,7 @@ void main() {
       expect(reparsed.modelId, profile.modelId);
       expect(reparsed.profileRev, 5);
       expect(reparsed.paramMap.expressions, {'happy': 'F01'});
+      expect(reparsed.toJson(), profile.toJson());
     });
   });
 }
