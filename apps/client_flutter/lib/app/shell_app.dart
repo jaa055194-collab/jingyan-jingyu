@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
 
+import '../ui/jy_motion.dart';
 import '../net/creative_api.dart';
 import '../net/host_connection.dart';
 import '../net/notification_api.dart';
@@ -52,8 +53,12 @@ class _WhaleChatAppState extends State<WhaleChatApp> {
           textScaler: TextScaler.linear(
             MediaQuery.textScalerOf(context).scale(1) * model.fontScale,
           ),
+          disableAnimations:
+              MediaQuery.maybeDisableAnimationsOf(context) == true ||
+              model.reduceMotion,
         ),
-        child: child!,
+        // Above the Navigator, so routes, dialogs and sheets also see it.
+        child: JyMotionScope(reduce: model.reduceMotion, child: child!),
       ),
       home: !model.ready
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
