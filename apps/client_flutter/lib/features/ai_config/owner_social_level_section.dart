@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/owner_social_level_api.dart';
+import '../../ui/ui.dart';
 import 'ai_config_problem_line.dart';
 
 /// Owner-only Android controls for the pinned AI. No request runs on build.
@@ -173,9 +174,10 @@ class _OwnerSocialLevelSectionState extends State<OwnerSocialLevelSection> {
       _ => '尚未读取社交等级。',
     };
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Card(
+      padding: const EdgeInsets.only(bottom: JySpace.lg),
+      child: JySlab(
         key: const Key('owner-social-level'),
+        padding: EdgeInsets.zero,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -190,8 +192,9 @@ class _OwnerSocialLevelSectionState extends State<OwnerSocialLevelSection> {
               ),
               const SizedBox(height: 8),
               if (_pending)
-                LinearProgressIndicator(
-                  semanticsLabel: _saving ? '正在保存社交等级' : '正在读取社交等级',
+                JyBusyIndicator(
+                  label: _saving ? '正在保存社交等级' : '正在读取社交等级',
+                  linear: true,
                 )
               else
                 AiConfigNoticeLine(
