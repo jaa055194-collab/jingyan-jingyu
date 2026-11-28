@@ -15,8 +15,7 @@ import '../../net/owner_reply_preferences_api.dart';
 import '../../net/owner_rule_greeting_api.dart';
 import '../../net/owner_social_level_api.dart';
 import '../../net/persona_history_api.dart';
-import '../../ui/jy_palette.dart';
-import '../../ui/jy_tokens.dart';
+import '../../ui/ui.dart';
 import 'ai_config_problem_line.dart';
 import 'owner_auto_memory_section.dart';
 import 'owner_memory_notes_section.dart';
@@ -1185,10 +1184,11 @@ abstract class _AiConfigEditorBase extends State<AiConfigEditor> {
     String? help,
   }) => Padding(
     key: group == null ? null : Key('ai-config-group-${group.name}'),
-    padding: const EdgeInsets.only(bottom: 16),
-    child: Card(
+    padding: const EdgeInsets.only(bottom: JySpace.lg),
+    child: JySlab(
+      padding: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(JySpace.lg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

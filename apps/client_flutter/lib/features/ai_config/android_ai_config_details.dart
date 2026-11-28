@@ -401,7 +401,7 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
                   key: const Key('android-ai-config-progress'),
                   height: 4,
                   child: _resolving || _busy
-                      ? const LinearProgressIndicator()
+                      ? const JyBusyIndicator(label: '正在读取或保存', linear: true)
                       : null,
                 ),
                 if (_readNotice case final notice?) AiConfigProblemLine(notice),
