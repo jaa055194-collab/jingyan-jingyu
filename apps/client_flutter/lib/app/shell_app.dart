@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../ui/jy_motion.dart';
 import '../ui/jy_dock.dart';
+import '../ui/jy_presence.dart';
 import '../net/creative_api.dart';
 import '../net/host_connection.dart';
 import '../net/notification_api.dart';
@@ -62,7 +63,7 @@ class _WhaleChatAppState extends State<WhaleChatApp> {
         child: JyMotionScope(reduce: model.reduceMotion, child: child!),
       ),
       home: !model.ready
-          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+          ? const ShellSplash()
           : model.locked
           ? UnlockScreen(model: model)
           : !model.onboarded && !(model.authenticated && model.chatEntered)
@@ -77,6 +78,33 @@ class _WhaleChatAppState extends State<WhaleChatApp> {
 
 // Observes route intent without altering any push, pop, or back behavior. A
 // generation tracks transient dialogs/pages even if the source is current again.
+/// Shown while the app starts: the companion's light core breathes above the
+/// app name (MASTER.md section 7). With reduced motion the core is still.
+class ShellSplash extends StatelessWidget {
+  /// Creates the start-up screen.
+  const ShellSplash({super.key});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: Center(
+      child: Semantics(
+        label: '正在启动鲸言鲸语',
+        liveRegion: true,
+        child: ExcludeSemantics(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const JyPresenceOrb(size: 72, state: JyPresence.thinking),
+              const SizedBox(height: 20),
+              Text('鲸言鲸语', style: Theme.of(context).textTheme.titleMedium),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class _NavigationIntentObserver extends NavigatorObserver with ChangeNotifier {
   int generation = 0;
 
@@ -245,11 +273,7 @@ class _ShellHomeState extends State<_ShellHome> {
         builder: (routeContext) => ListenableBuilder(
           listenable: model,
           builder: (_, _) {
-            if (!model.ready) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
+            if (!model.ready) return const ShellSplash();
             if (model.locked) return UnlockScreen(model: model);
             if (!model.authenticated) {
               return OnboardingScreen(
@@ -279,11 +303,7 @@ class _ShellHomeState extends State<_ShellHome> {
         builder: (_) => ListenableBuilder(
           listenable: model,
           builder: (_, _) {
-            if (!model.ready) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
+            if (!model.ready) return const ShellSplash();
             if (model.locked) return UnlockScreen(model: model);
             final connection = model is ClientRuntime ? model.connection : null;
             final selfId = model.connectedAccountId;
@@ -596,7 +616,8 @@ class _ShellHomeState extends State<_ShellHome> {
                             });
                           },
                         ),
-                      if (model.busy) const LinearProgressIndicator(),
+                      if (model.busy)
+                        const JyBusyIndicator(label: '正在处理', linear: true),
                       if (model.error != null)
                         Material(
                           color: Theme.of(context).colorScheme.errorContainer,
