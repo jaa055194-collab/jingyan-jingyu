@@ -26,6 +26,7 @@ import '../../net/search_api.dart';
 import '../../net/voice_api.dart';
 import '../../net/voice_call_api.dart';
 import '../../net/world_api.dart';
+import '../../ui/ui.dart';
 import '../ai_config/ai_config_editor.dart';
 import '../ai_config/ai_config_panel.dart';
 import '../ai_config/model_diagnostics_screen.dart';
@@ -403,6 +404,42 @@ class SettingsScreen extends StatelessWidget {
     ];
   }
 
+  Widget _accountCard(BuildContext context) {
+    final palette = JyPalette.of(context);
+    final text = Theme.of(context).textTheme;
+    final account = model.connectedAccountId;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: JySpace.md),
+      child: JySlab(
+        padding: const EdgeInsets.all(JySpace.lg),
+        child: Row(
+          children: [
+            JyAvatar(label: account ?? '?'),
+            const SizedBox(width: JySpace.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    account ?? '未登录',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: text.titleMedium?.copyWith(color: palette.text1),
+                  ),
+                  Text(
+                    model.online ? '已连接宿主' : '未连接到宿主',
+                    style: text.bodySmall?.copyWith(color: palette.text3),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Column(
     children: [
@@ -418,7 +455,8 @@ class SettingsScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text('隐私与安全', style: Theme.of(context).textTheme.titleMedium),
+            _accountCard(context),
+            const JySectionHeader(title: '隐私与安全'),
             SwitchListTile(
               title: const Text('应用锁'),
               subtitle: const Text('使用 PIN 保护本机聊天内容'),
@@ -485,7 +523,7 @@ class SettingsScreen extends StatelessWidget {
                 model.authenticated &&
                 !model.locked) ...[
               const Divider(height: 32),
-              Text('我的 AI 配置', style: Theme.of(context).textTheme.titleMedium),
+              const JySectionHeader(title: '我的 AI 配置'),
               const Text('查看每个 AI 使用的模型与 API、人格和活人感设置，或打开本机私聊。'),
               ListTile(
                 key: const Key('open-android-ai-directory'),
@@ -511,7 +549,7 @@ class SettingsScreen extends StatelessWidget {
               ),
             ],
             const Divider(height: 32),
-            Text('通用', style: Theme.of(context).textTheme.titleMedium),
+            const JySectionHeader(title: '通用'),
             SwitchListTile(
               title: const Text('开机自启动'),
               subtitle: const Text('由当前设备的平台能力决定是否可用'),
@@ -519,7 +557,7 @@ class SettingsScreen extends StatelessWidget {
               onChanged: model.busy ? null : model.setAutoStart,
             ),
             const SizedBox(height: 16),
-            const Text('外观'),
+            const JySectionHeader(title: '外观'),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -551,7 +589,7 @@ class SettingsScreen extends StatelessWidget {
               onChanged: model.busy ? null : model.setReduceMotion,
             ),
             const Divider(height: 32),
-            Text('开发者', style: Theme.of(context).textTheme.titleMedium),
+            const JySectionHeader(title: '开发者'),
             Text('只读检查', style: Theme.of(context).textTheme.labelLarge),
             const Text('以下入口只读展示宿主安全元数据，不代表可用、已授权或已清理。'),
             const SizedBox(height: 4),
