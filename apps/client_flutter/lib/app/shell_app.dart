@@ -4,6 +4,8 @@ import 'package:material_ui/material_ui.dart';
 import '../ui/jy_motion.dart';
 import '../ui/jy_dock.dart';
 import '../ui/jy_presence.dart';
+import '../ui/jy_surfaces.dart';
+import '../ui/jy_tokens.dart';
 import '../net/creative_api.dart';
 import '../net/host_connection.dart';
 import '../net/notification_api.dart';
@@ -508,20 +510,39 @@ class _ShellHomeState extends State<_ShellHome> {
           : destination != 0
           ? empty()
           : wide
-          ? Row(
-              children: [
-                SizedBox(
-                  width: 280,
-                  child: ConversationList(model: model, onSelected: select),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: ChatPane(
-                    model: model,
-                    openRevision: _chatOpenRevision,
+          // Wide: the conversation list and the chat are separate boards
+          // with a 12dp gap that shows the canvas (MASTER.md section 9).
+          ? Padding(
+              padding: const EdgeInsets.fromLTRB(
+                0,
+                JySpace.md,
+                JySpace.md,
+                JySpace.md,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: 320,
+                    child: JySlab(
+                      key: const Key('shell-list-board'),
+                      padding: EdgeInsets.zero,
+                      child: ConversationList(model: model, onSelected: select),
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: JySpace.md),
+                  Expanded(
+                    child: JySlab(
+                      key: const Key('shell-chat-board'),
+                      padding: EdgeInsets.zero,
+                      child: ChatPane(
+                        model: model,
+                        openRevision: _chatOpenRevision,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             )
           : showChat
           ? ChatPane(
@@ -576,23 +597,31 @@ class _ShellHomeState extends State<_ShellHome> {
             child: Row(
               children: [
                 if (wide)
-                  NavigationRail(
-                    labelType: NavigationRailLabelType.all,
-                    selectedIndex: destination,
-                    onDestinationSelected: (value) => setState(() {
-                      widget.navigation.generation++;
-                      destination = value;
-                      settings = false;
-                    }),
-                    destinations: [
-                      for (var i = 0; i < labels.length; i++)
-                        NavigationRailDestination(
-                          icon: Icon(icons[i]),
-                          label: Text(labels[i]),
-                        ),
-                    ],
+                  Padding(
+                    padding: const EdgeInsets.all(JySpace.md),
+                    child: JySlab(
+                      key: const Key('shell-nav-board'),
+                      padding: EdgeInsets.zero,
+                      child: NavigationRail(
+                        backgroundColor: Colors.transparent,
+                        labelType: NavigationRailLabelType.all,
+                        selectedIndex: destination,
+                        onDestinationSelected: (value) => setState(() {
+                          widget.navigation.generation++;
+                          destination = value;
+                          settings = false;
+                        }),
+                        destinations: [
+                          for (var i = 0; i < labels.length; i++)
+                            NavigationRailDestination(
+                              icon: Icon(icons[i]),
+                              selectedIcon: Icon(iconsSelected[i]),
+                              label: Text(labels[i]),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
-                if (wide) const VerticalDivider(width: 1),
                 Expanded(
                   child: Column(
                     children: [
