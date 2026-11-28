@@ -401,7 +401,7 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
       ];
     }
     return [
-      const Text('拖动滑块可在预览中试动，松开后恢复默认值。'),
+      const Text('拖动滑块可在预览中试动，松开后交还模型自身的动作。'),
       for (final slot in _slots) _parameterRow(slot, parameters),
       if (_driveError case final error?)
         Text(error, key: const Key('live2d-wizard-drive-error')),
