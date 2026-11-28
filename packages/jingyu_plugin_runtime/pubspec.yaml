@@ -1,0 +1,20 @@
+name: jingyu_plugin_runtime
+description: 鲸言鲸语插件运行时（纯 Dart）：插件包加载、安装管理器与 WebView/JS 沙箱策略/能力桥。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  pub_semver: ^2.2.1
+  jingyu_core:
+    path: ../jingyu_core
+  jingyu_protocol:
+    path: ../jingyu_protocol
+  jingyu_client_kit:
+    path: ../jingyu_client_kit
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

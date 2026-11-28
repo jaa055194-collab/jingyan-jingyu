@@ -9,4 +9,5 @@ library;
 export 'src/codec.dart';
 export 'src/error_codes.dart';
 export 'src/frames.dart';
+export 'src/plugin_bridge.dart';
 export 'src/routes.dart';

@@ -176,3 +176,9 @@ PluginPackageValidation validatePluginPackage(
 | 清单字段 | `PluginManifest.fromJson` 严格解析通过 | `manifestInvalid` |
 | 完整性 | 计算 sha256 与 `expectedSha256Hex` 一致（给了才校验） | `integrityMismatch` |
 
+## 8. 插件运行时内核（加载 / 管理器 / 沙箱）
+
+bundle 的安全解包、运行期加载、安装管理与 WebView/JS 沙箱策略已由纯 Dart 包 `jingyu_plugin_runtime` 承接，API、安全边界、残余风险与验证方式见 [03-plugin-runtime.md](03-plugin-runtime.md)。
+
+本节的 `PluginManifest` / `pluginApiVersion = 1` / `PluginHost.load` 语义不变；bundle 的 `permissions` 是分发层字符串 scope，不并入旧 `PluginCapability` 枚举。安装 UI、WebView 平台适配器、私有市场、HMR、动态生成与真实签名仍不在本仓库实现范围。
+

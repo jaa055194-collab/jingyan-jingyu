@@ -15,6 +15,7 @@
 | [modules/README.md](modules/README.md) | 给实现模型的逐模块编写指令（M01–M13） |
 | [plugins/01-plugin-spec.md](plugins/01-plugin-spec.md) | 客户端插件规范 v1 |
 | [plugins/02-assets.md](plugins/02-assets.md) | feiyu-room-template 素材复用与许可 |
+| [plugins/03-plugin-runtime.md](plugins/03-plugin-runtime.md) | 插件运行时内核：安全加载、安装管理器、沙箱策略与能力桥 |
 
 ## 阅读顺序
 
