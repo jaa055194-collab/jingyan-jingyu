@@ -505,7 +505,7 @@ class _Live2DImportPanelState extends State<Live2DImportPanel>
       const Divider(height: 24),
       Text('本机保存的模型', style: theme.textTheme.titleSmall),
       const SizedBox(height: 4),
-      const Text('仅保存在本机，不会上传。启用的形象暂不会显示在聊天或世界场景中。'),
+      const Text('仅保存在本机，不会上传。启用的形象会显示在聊天页，暂不显示在世界场景中。'),
       if (store == null)
         if (_storeError case final error?)
           Row(

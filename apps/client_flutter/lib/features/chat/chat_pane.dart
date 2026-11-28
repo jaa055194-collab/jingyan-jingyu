@@ -385,10 +385,15 @@ class ChatPane extends StatefulWidget {
     required this.model,
     this.onBack,
     this.openRevision = 0,
+    this.avatar,
   });
   final ShellViewModel model;
   final VoidCallback? onBack;
   final int openRevision;
+
+  /// Shown fixed (not scrolling) between the header and the messages; the
+  /// shell passes the Live2D avatar card on Android.
+  final Widget? avatar;
   @override
   State<ChatPane> createState() => _ChatPaneState();
 }
@@ -726,6 +731,7 @@ class _ChatPaneState extends State<ChatPane> {
               : Row(mainAxisSize: MainAxisSize.min, children: chatActions),
         ),
         const Divider(height: 1),
+        ?widget.avatar,
         if (model.queuedCount > 0)
           Padding(
             padding: const EdgeInsets.all(8),

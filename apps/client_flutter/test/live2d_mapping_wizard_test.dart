@@ -260,7 +260,7 @@ void main() {
     expect(wizard.store.calls.last, 'setActive(m1)');
     expect(wizard.store.lastActivationInfo, same(info));
     expect(wizard.store.activeModelId, 'm1');
-    expect(find.text('已启用。暂不会显示在聊天或世界场景中。'), findsOneWidget);
+    expect(find.text('已启用。会显示在聊天页，暂不显示在世界场景中。'), findsOneWidget);
     expect(_key('live2d-wizard-enable'), findsNothing);
   });
 

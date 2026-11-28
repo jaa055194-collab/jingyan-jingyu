@@ -9,6 +9,8 @@ import 'shell_view_model.dart';
 import 'module_catalog.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/chat/chat_pane.dart';
+import '../features/world/live2d_avatar_card.dart';
+import '../features/world/live2d_kept_models.dart';
 import '../features/settings/settings_screen.dart';
 import '../features/world/street3d_android_surface.dart';
 import '../features/world/street3d_screen.dart';
@@ -293,6 +295,14 @@ class _ShellHomeState extends State<_ShellHome> {
     );
   }
 
+  /// The chat-page Live2D avatar card, only where the Live2D view is hosted.
+  Widget? _chatAvatar() => defaultTargetPlatform == TargetPlatform.android
+      ? const Live2DAvatarCard(
+          openStore: openDeviceLive2DStore,
+          supported: true,
+        )
+      : null;
+
   Widget world() => WorldScreen(
     model: widget.model,
     onOpenSetup: openWorldSetup,
@@ -486,6 +496,7 @@ class _ShellHomeState extends State<_ShellHome> {
                   child: ChatPane(
                     model: model,
                     openRevision: _chatOpenRevision,
+                    avatar: _chatAvatar(),
                   ),
                 ),
               ],
@@ -494,6 +505,7 @@ class _ShellHomeState extends State<_ShellHome> {
           ? ChatPane(
               model: model,
               openRevision: _chatOpenRevision,
+              avatar: _chatAvatar(),
               onBack: () => setState(() => mobileChat = false),
             )
           : ConversationList(model: model, onSelected: select);

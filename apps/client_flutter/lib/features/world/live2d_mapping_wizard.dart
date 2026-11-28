@@ -753,7 +753,7 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
       Semantics(
         liveRegion: true,
         child: Text(
-          active ? '已启用。暂不会显示在聊天或世界场景中。' : '映射已保存，尚未启用。',
+          active ? '已启用。会显示在聊天页，暂不显示在世界场景中。' : '映射已保存，尚未启用。',
           key: const Key('live2d-wizard-saved'),
         ),
       ),
