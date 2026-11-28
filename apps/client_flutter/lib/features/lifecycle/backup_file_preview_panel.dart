@@ -1,9 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
-import '../../ui/jy_motion.dart';
-import '../../ui/jy_palette.dart';
-import '../../ui/jy_tokens.dart';
-import '../../ui/jy_typography.dart';
+import '../../ui/ui.dart';
 import 'backup_file_preview.dart';
 
 /// Capabilities captured when Settings opens the lifecycle route. The picker
@@ -170,18 +167,33 @@ class _BackupFilePreviewPanelState extends State<BackupFilePreviewPanel> {
             // pending label to go away.
             label: Text(_reading ? '正在选择或预检…' : '选择导出文件并预检'),
           ),
-          _Reveal(
+          JyExpand(
+            expanded: _invalid || notice != null || summary != null,
             child: _invalid
-                ? const _Banner('本次预检会话已结束。请返回后重新打开。')
+                ? const Padding(
+                    padding: EdgeInsets.only(top: JySpace.md),
+                    child: JyBanner(
+                      kind: JyBannerKind.info,
+                      message: '本次预检会话已结束。请返回后重新打开。',
+                    ),
+                  )
                 : notice != null
-                ? _Banner(
-                    notice,
-                    key: const Key('backup-file-preview-notice'),
-                    failed: _noticeFailed,
+                ? Padding(
+                    padding: const EdgeInsets.only(top: JySpace.md),
+                    child: JyBanner(
+                      key: const Key('backup-file-preview-notice'),
+                      kind: _noticeFailed
+                          ? JyBannerKind.error
+                          : JyBannerKind.info,
+                      message: notice,
+                    ),
                   )
                 : summary != null
-                ? _SummaryBlock(summary)
-                : null,
+                ? Padding(
+                    padding: const EdgeInsets.only(top: JySpace.md),
+                    child: _SummaryBlock(summary),
+                  )
+                : const SizedBox.shrink(),
           ),
         ],
       ),
@@ -260,88 +272,6 @@ class _SummaryBlock extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// Stand-in for JyBanner until the lib/ui components land: information in
-/// the signal tone, a refusal or failure in the danger tone. It is a live
-/// region, so screen readers read the result when it appears.
-class _Banner extends StatelessWidget {
-  const _Banner(this.message, {super.key, this.failed = false});
-
-  final String message;
-  final bool failed;
-
-  @override
-  Widget build(BuildContext context) {
-    final JyPalette palette = JyPalette.of(context);
-    final TextTheme text = Theme.of(context).textTheme;
-    final Color background = failed ? palette.dangerSoft : palette.signalSoft;
-    final Color foreground = failed
-        ? palette.onDangerSoft
-        : palette.onSignalSoft;
-    return Semantics(
-      container: true,
-      liveRegion: true,
-      child: DecoratedBox(
-        decoration: ShapeDecoration(
-          color: background,
-          shape: JyShapes.rounded(JyRadius.md),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: JySpace.lg,
-            vertical: JySpace.md,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Icon(
-                failed ? Icons.error_outline : Icons.info_outline,
-                size: 20,
-                color: foreground,
-              ),
-              const SizedBox(width: JySpace.md),
-              Expanded(
-                child: Text(
-                  message,
-                  style: text.bodyMedium?.copyWith(color: foreground),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Stand-in for JyExpand until the lib/ui components land: grows from the
-/// top to fit [child] and has no height without one. The previous result
-/// leaves the tree at once; with reduced motion the size changes at once.
-class _Reveal extends StatelessWidget {
-  const _Reveal({required this.child});
-
-  final Widget? child;
-
-  @override
-  Widget build(BuildContext context) {
-    final bool reduced = JyMotion.reducedOf(context);
-    final Widget? content = child;
-    return AnimatedSize(
-      duration: reduced ? Duration.zero : JyDurations.standard,
-      curve: JyCurves.enter,
-      alignment: AlignmentDirectional.topStart,
-      child: SizedBox(
-        width: double.infinity,
-        child: content == null
-            ? null
-            : Padding(
-                padding: const EdgeInsets.only(top: JySpace.md),
-                child: content,
-              ),
       ),
     );
   }
