@@ -81,28 +81,25 @@
     listenersAttached: false,
     pixelW: 0,
     pixelH: 0,
-    // camera (matches the upstream viewer's WorldToScreen / FitView math)
-    cx: 0,
-    cy: 0,
-    zoom: 100,
-    panX: 0,
-    panY: 0,
-    fitDone: false,
-    projection: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]),
     drawProgram: null,
     maskProgram: null,
     drawU: null,
     drawA: null,
     maskU: null,
     maskA: null,
-    cache: null,
-    textures: [],
-    // Texture budget result of the last prepare(); see loadTextures().
-    textureInfo: emptyTextureInfo(),
-    // Bumped by dispose() so an older prepare() still loading textures stops.
+    // Live scenes share this one context, canvas and program. Each scene owns
+    // its textures, geometry cache and camera fit (see createScene()).
+    scenes: [],
+    // Scene returned by prepare() or the last one created; draw(model) uses it.
+    currentScene: null,
+    // Reason of the last createScene()/prepare() failure; null after success.
+    // 'texture_budget' means the request was refused before any texture upload.
+    lastError: null,
+    // True between beginFrame() and endFrame(). draw() opens an implicit frame.
+    frameOpen: false,
+    // Bumped by dispose() so an older prepare()/createScene() still loading
+    // textures stops and deletes what it uploaded.
     generation: 0,
-    modelRef: null,
-    lastPositions: null,
     warned: {},
   };
 
@@ -128,12 +125,14 @@
     'uniform vec4 uBaseColor;', // rgb = 1, a = opacity
     'uniform vec4 uMultiplyColor;',
     'uniform vec4 uScreenColor;',
+    'uniform float u_alpha;', // whole-scene fade, 1 = opaque
     'void main() {',
     '  vec4 t = texture2D(uTexture, vUv);',
     '  t.rgb *= uMultiplyColor.rgb;',
     '  t.rgb = t.rgb + uScreenColor.rgb - t.rgb * uScreenColor.rgb;',
     '  vec4 c = t * uBaseColor;',
-    '  gl_FragColor = vec4(c.rgb * c.a, c.a);', // premultiplied output
+    '  vec4 premultiplied = vec4(c.rgb * c.a, c.a);',
+    '  gl_FragColor = premultiplied * u_alpha;', // fade the premultiplied output
     '}',
   ].join('\n');
 
@@ -197,6 +196,7 @@
       uBaseColor: gl.getUniformLocation(state.drawProgram, 'uBaseColor'),
       uMultiplyColor: gl.getUniformLocation(state.drawProgram, 'uMultiplyColor'),
       uScreenColor: gl.getUniformLocation(state.drawProgram, 'uScreenColor'),
+      u_alpha: gl.getUniformLocation(state.drawProgram, 'u_alpha'),
     };
     state.drawA = {
       aPos: gl.getAttribLocation(state.drawProgram, 'aPos'),
@@ -228,29 +228,52 @@
       canvas.height = h;
       state.pixelW = w;
       state.pixelH = h;
-      state.fitDone = false;
+      invalidateFits();
     } else if (!state.pixelW) {
       state.pixelW = canvas.width;
       state.pixelH = canvas.height;
     }
   }
 
-  function updateProjection() {
+  function newFit() {
+    return {
+      // camera (matches the upstream viewer's WorldToScreen / FitView math)
+      cx: 0,
+      cy: 0,
+      zoom: 100,
+      panX: 0,
+      panY: 0,
+      fitDone: false,
+      projection: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]),
+    };
+  }
+
+  // A canvas resize changes every scene's fit (keyboard-driven resizes included).
+  function invalidateFits() {
+    for (var i = 0; i < state.scenes.length; i++) state.scenes[i].fit.fitDone = false;
+  }
+
+  function updateProjection(scene) {
     var sw = state.pixelW || 1;
     var sh = state.pixelH || 1;
+    var fit = scene.fit;
     // Derived from the upstream viewer WorldToScreen(): model y is flipped to
     // screen y (down), scaled by zoom, centred on (cx, cy) with optional pan.
-    var a = (2 * state.zoom) / sw;
-    var b = (2 * state.zoom) / sh;
-    var tx = -a * state.cx + (2 * state.panX) / sw;
-    var ty = b * state.cy - (2 * state.panY) / sh;
-    state.projection = new Float32Array([a, 0, 0, 0, b, 0, tx, ty, 1]);
+    var a = (2 * fit.zoom) / sw;
+    var b = (2 * fit.zoom) / sh;
+    var tx = -a * fit.cx + (2 * fit.panX) / sw;
+    var ty = b * fit.cy - (2 * fit.panY) / sh;
+    fit.projection = new Float32Array([a, 0, 0, 0, b, 0, tx, ty, 1]);
   }
 
   // Fit the camera to the model's current AABB (mirrors upstream FitView()).
-  function computeFit(model) {
+  // Each scene keeps its own fit, so two models of different sizes can be drawn
+  // in the same frame without sharing one camera.
+  function computeFit(scene) {
     var sw = state.pixelW || 1;
     var sh = state.pixelH || 1;
+    var fit = scene.fit;
+    var model = scene.model;
     var dw = model && model.drawables;
     var minx = 1e30;
     var miny = 1e30;
@@ -273,20 +296,20 @@
       }
     }
     if (!any || maxx <= minx || maxy <= miny) {
-      state.cx = 0;
-      state.cy = 0;
-      state.zoom = 100;
+      fit.cx = 0;
+      fit.cy = 0;
+      fit.zoom = 100;
     } else {
-      state.cx = (minx + maxx) * 0.5;
-      state.cy = (miny + maxy) * 0.5;
+      fit.cx = (minx + maxx) * 0.5;
+      fit.cy = (miny + maxy) * 0.5;
       var zx = (sw * 0.8) / (maxx - minx);
       var zy = (sh * 0.8) / (maxy - miny);
-      state.zoom = zx < zy ? zx : zy;
+      fit.zoom = zx < zy ? zx : zy;
     }
-    state.panX = 0;
-    state.panY = 0;
-    state.fitDone = true;
-    updateProjection();
+    fit.panX = 0;
+    fit.panY = 0;
+    fit.fitDone = true;
+    updateProjection(scene);
   }
 
   // ---------------------------------------------------------------------------
@@ -420,9 +443,11 @@
 
   // Loads the model textures within the GPU memory budget. Resolves
   // {textures, info} with one slot per URL (null when that texture failed),
-  // or null when dispose() ran meanwhile; textures uploaded so far are then
-  // deleted. Throws when no plan fits (the budget is too small even for 1x1).
-  async function loadTextures(urls, budgetApi, options, generation) {
+  // null when dispose() ran meanwhile (uploaded textures are then deleted), or
+  // {rejected: true} when the scene plus the already-live scenes would exceed
+  // the budget — checked after planning, before any decode/upload. Throws when
+  // no plan fits (the budget is too small even for 1x1).
+  async function loadTextures(urls, budgetApi, options, generation, existingBytes) {
     var gl = state.gl;
     // 1. Fetch every file and read its size before decoding any texture.
     var entries = [];
@@ -441,6 +466,17 @@
       if (entries[s]) sizes.push({ width: entries[s].width, height: entries[s].height });
     }
     var plan = budgetApi.planTextureSizes(sizes, maxTextureSize, options.textureBudgetBytes);
+    // The budget covers every live scene, not just this one. Refuse before
+    // uploading so a hot-switch preload never peaks over the GPU memory limit.
+    var existing = typeof existingBytes === 'number' && existingBytes > 0 ? existingBytes : 0;
+    if (existing + plan.bytes > plan.budgetBytes) {
+      warnOnce(
+        'texture-budget',
+        'texture budget exceeded: live ' + existing + ' + new ' + plan.bytes +
+          ' > ' + plan.budgetBytes + ' bytes; scene refused'
+      );
+      return { rejected: true };
+    }
     // 3. Decode, upload and close one texture at a time.
     var textures = [];
     var mipmapped = [];
@@ -475,9 +511,9 @@
     };
   }
 
-  function textureFor(index) {
-    if (typeof index !== 'number' || index < 0) return null;
-    return state.textures[index] || null;
+  function textureFor(scene, index) {
+    if (!scene || !scene.textures || typeof index !== 'number' || index < 0) return null;
+    return scene.textures[index] || null;
   }
 
   // ---------------------------------------------------------------------------
@@ -581,7 +617,7 @@
   // ---------------------------------------------------------------------------
   // Mask stencil pre-pass (single level, best-effort).
   // ---------------------------------------------------------------------------
-  function beginMask(mainEntry) {
+  function beginMask(scene, mainEntry) {
     var gl = state.gl;
     if (!gl || !mainEntry.masks || mainEntry.masks.length === 0) return false;
     gl.enable(gl.STENCIL_TEST);
@@ -589,18 +625,18 @@
     gl.colorMask(false, false, false, false);
     gl.disable(gl.BLEND);
     gl.useProgram(state.maskProgram);
-    gl.uniformMatrix3fv(state.maskU.uProjection, false, state.projection);
+    gl.uniformMatrix3fv(state.maskU.uProjection, false, scene.fit.projection);
     gl.stencilFunc(gl.ALWAYS, 1, 0xff);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
     var drewMask = false;
     for (var m = 0; m < mainEntry.masks.length; m++) {
       try {
         var maskIndex = mainEntry.masks[m] | 0;
-        var maskEntry = state.cache.list[maskIndex];
+        var maskEntry = scene.cache.list[maskIndex];
         if (!maskEntry || !maskEntry.ok) continue;
-        var maskPositions = state.lastPositions && state.lastPositions[maskIndex];
+        var maskPositions = scene.lastPositions && scene.lastPositions[maskIndex];
         if (!maskPositions || maskPositions.length < maskEntry.vertexCount * 2) continue;
-        var maskTexture = textureFor(maskEntry.textureIndex);
+        var maskTexture = textureFor(scene, maskEntry.textureIndex);
         if (!maskTexture) continue;
         uploadPositions(maskEntry, maskPositions);
         bindGeometry(state.maskProgram, state.maskA, maskEntry);
@@ -651,27 +687,56 @@
 
   // ---------------------------------------------------------------------------
   // Public API.
+  //
+  // One canvas/context and one pair of shader programs are shared by every
+  // scene. A scene owns its model, textures, geometry cache, texture-budget
+  // estimate and camera fit, so a hot switch can preload a second model while
+  // the first keeps drawing. Pattern (consulted, no code copied): three.js
+  // WebGLRenderer (MIT) renders several scenes into one context with a
+  // controlled clear, and PixiJS (MIT) scales a container's whole output by a
+  // propagated alpha value.
   // ---------------------------------------------------------------------------
-  // options (all optional): textureBudgetBytes, the GPU memory budget for the
-  // textures (default 256 MiB, see live2d_texture_budget.js), and
+  var sceneId = 0;
+  var FALLBACK_BUDGET_BYTES = 256 * 1024 * 1024;
+
+  // options (all optional): textureBudgetBytes, the GPU memory budget for ALL
+  // live scenes together (default 256 MiB, see live2d_texture_budget.js), and
   // maxTextureSize, which can only lower the GPU's MAX_TEXTURE_SIZE.
-  async function prepare(canvas, model, textureUrls, options) {
-    dispose();
-    state.disposed = false;
-    var generation = state.generation;
-    state.canvas = canvas || null;
-    state.modelRef = model || null;
-    if (!canvas || typeof canvas.getContext !== 'function') {
-      warnOnce('no-canvas', 'prepare() called without a usable canvas');
-      return { ok: false, reason: 'no-canvas' };
-    }
-    var budgetApi = window.Live2DTextureBudget;
-    if (!budgetApi || typeof budgetApi.planTextureSizes !== 'function') {
+  function budgetApi() {
+    var api = window.Live2DTextureBudget;
+    if (!api || typeof api.planTextureSizes !== 'function') {
       warnOnce(
         'no-texture-budget',
         'window.Live2DTextureBudget is missing; load live2d_texture_budget.js before the renderer'
       );
-      return { ok: false, reason: 'texture-budget-unavailable' };
+      return null;
+    }
+    return api;
+  }
+
+  function defaultBudgetBytes() {
+    var api = window.Live2DTextureBudget;
+    return api && typeof api.DEFAULT_BUDGET_BYTES === 'number'
+      ? api.DEFAULT_BUDGET_BYTES
+      : FALLBACK_BUDGET_BYTES;
+  }
+
+  // Gets the shared context, or creates it once for the first scene. Returns
+  // {ok:true} or {ok:false, reason} without throwing.
+  function initContext(canvas) {
+    if (state.gl) {
+      if (canvas && state.canvas && canvas !== state.canvas) {
+        warnOnce(
+          'canvas-mismatch',
+          'createScene() must reuse the prepare() canvas; a renderer owns one context'
+        );
+        return { ok: false, reason: 'canvas-mismatch' };
+      }
+      return { ok: true };
+    }
+    if (!canvas || typeof canvas.getContext !== 'function') {
+      warnOnce('no-canvas', 'scene creation called without a usable canvas');
+      return { ok: false, reason: 'no-canvas' };
     }
     try {
       var attributes = {
@@ -694,6 +759,7 @@
       }
       state.gl = gl;
       state.version = version;
+      state.canvas = canvas;
 
       if (!state.listenersAttached) {
         state.listenersAttached = true;
@@ -703,6 +769,7 @@
             if (event && event.preventDefault) event.preventDefault();
             state.contextLost = true;
             state.ready = false;
+            state.frameOpen = false;
             warnOnce('ctx-lost', 'WebGL context lost; rendering paused');
           },
           false
@@ -719,36 +786,184 @@
 
       buildPrograms(gl);
       resizeCanvas();
-      state.cache = buildCache(model);
+      return { ok: true };
+    } catch (contextError) {
+      state.gl = null;
+      state.drawProgram = null;
+      state.maskProgram = null;
+      warnOnce('context', 'could not create the WebGL context: ' + contextError);
+      return {
+        ok: false,
+        reason: String((contextError && contextError.message) || contextError),
+      };
+    }
+  }
 
-      var urls = Array.isArray(textureUrls) ? textureUrls : [];
-      var loadResult = await loadTextures(urls, budgetApi, options || {}, generation);
-      if (!loadResult) return { ok: false, reason: 'disposed' };
-      var loaded = loadResult.textures;
-      state.textures = loaded;
-      state.textureInfo = loadResult.info;
+  function liveSceneCount() {
+    var count = 0;
+    for (var i = 0; i < state.scenes.length; i++) {
+      if (!state.scenes[i].disposed) count++;
+    }
+    return count;
+  }
 
-      computeFit(model);
-      state.ready = true;
+  function totalLiveBytes() {
+    var total = 0;
+    for (var i = 0; i < state.scenes.length; i++) {
+      var scene = state.scenes[i];
+      if (!scene.disposed && typeof scene.bytes === 'number') total += scene.bytes;
+    }
+    return total;
+  }
 
+  // Estimated texture bytes of one scene (0 for null/disposed).
+  function sceneBytes(scene) {
+    if (!scene || scene.disposed) return 0;
+    return typeof scene.textureBytes === 'number' ? scene.textureBytes : 0;
+  }
+
+  function infoBytes(info) {
+    if (typeof info === 'number') {
+      return info >= 0 && info !== Infinity ? info : Infinity;
+    }
+    if (!info || typeof info !== 'object') return Infinity;
+    var value = typeof info.bytes === 'number' ? info.bytes : info.textureBytes;
+    return typeof value === 'number' && value >= 0 && value !== Infinity ? value : Infinity;
+  }
+
+  // Pure budget helper: true when existing scene bytes + the new scene estimate
+  // still fit. newSceneInfo may be a number or {bytes|textureBytes}.
+  function canBeAdded(existingBytes, newSceneInfo, budget) {
+    var limit =
+      typeof budget === 'number' && budget > 0 ? budget : defaultBudgetBytes();
+    var existing =
+      typeof existingBytes === 'number' && existingBytes > 0 ? existingBytes : 0;
+    return existing + infoBytes(newSceneInfo) <= limit;
+  }
+
+  // Shared scene creation. The caller owns the generation token so a dispose()
+  // during texture loading aborts this scene and deletes anything it uploaded.
+  async function createSceneInternal(canvas, model, textureUrls, options, generation) {
+    var api = budgetApi();
+    if (!api) {
+      state.lastError = 'texture-budget-unavailable';
+      return null;
+    }
+    if (state.disposed) state.disposed = false;
+    var init = initContext(canvas);
+    if (!init.ok) {
+      state.lastError = init.reason;
+      return null;
+    }
+    var sceneOptions = options || {};
+    var urls = Array.isArray(textureUrls) ? textureUrls : [];
+    var loadResult;
+    try {
+      loadResult = await loadTextures(
+        urls,
+        api,
+        sceneOptions,
+        generation,
+        totalLiveBytes()
+      );
+    } catch (loadError) {
+      state.lastError = String((loadError && loadError.message) || loadError);
+      warnOnce('scene-load', 'scene creation failed: ' + loadError);
+      return null;
+    }
+    if (!loadResult) {
+      // dispose() ran while fetching/decoding; uploaded textures were deleted.
+      state.lastError = 'disposed';
+      return null;
+    }
+    if (loadResult.rejected) {
+      // Budget refusal happened before any decode/upload for this scene.
+      state.lastError = 'texture_budget';
+      return null;
+    }
+
+    var scene = {
+      isLive2DScene: true,
+      id: ++sceneId,
+      model: model || null,
+      canvas: state.canvas,
+      glVersion: state.version,
+      textures: loadResult.textures,
+      cache: buildCache(model),
+      fit: newFit(),
+      textureInfo: loadResult.info,
+      // Both names are kept: `.bytes` for internal sums, `.textureBytes` for the
+      // documented public estimate.
+      bytes: loadResult.info.bytes,
+      textureBytes: loadResult.info.bytes,
+      lastPositions: null,
+      disposed: false,
+    };
+    computeFit(scene);
+    state.scenes.push(scene);
+    if (!state.currentScene) state.currentScene = scene;
+    state.ready = true;
+    state.lastError = null;
+    return scene;
+  }
+
+  // Creates another scene on the shared canvas/context. Resolves the scene, or
+  // null with Live2DRenderer.lastError set ('texture_budget' when refused before
+  // any texture upload, 'canvas-mismatch', 'texture-budget-unavailable',
+  // 'webgl-unavailable', 'no-canvas' or 'disposed').
+  async function createScene(canvas, model, textureUrls, options) {
+    return await createSceneInternal(
+      canvas,
+      model,
+      textureUrls,
+      options,
+      state.generation
+    );
+  }
+
+  // Backward-compatible single-scene entry point. Disposes everything, creates
+  // one scene, makes it current and returns the same summary as before.
+  async function prepare(canvas, model, textureUrls, options) {
+    dispose();
+    state.disposed = false;
+    state.canvas = canvas || null;
+    var generation = state.generation;
+    if (!canvas || typeof canvas.getContext !== 'function') {
+      state.lastError = 'no-canvas';
+      warnOnce('no-canvas', 'prepare() called without a usable canvas');
+      return { ok: false, reason: 'no-canvas' };
+    }
+    if (!budgetApi()) {
+      state.lastError = 'texture-budget-unavailable';
+      return { ok: false, reason: 'texture-budget-unavailable' };
+    }
+    try {
+      var scene = await createSceneInternal(canvas, model, textureUrls, options, generation);
+      if (!scene) {
+        state.ready = false;
+        return { ok: false, reason: state.lastError || 'scene-failed' };
+      }
+      state.currentScene = scene;
+      var info = scene.textureInfo;
+      var loaded = scene.textures;
       var summary = {
         ok: true,
-        webgl: version,
-        drawables: state.cache.count,
-        cached: state.cache.withIndex,
-        skipped: state.cache.skipped,
+        webgl: state.version,
+        drawables: scene.cache.count,
+        cached: scene.cache.withIndex,
+        skipped: scene.cache.skipped,
         textures: loaded.length,
         loadedTextures: loaded.filter(Boolean).length,
-        textureScale: loadResult.info.scale,
-        maxTextureSize: loadResult.info.maxTextureSize,
-        textureBytes: loadResult.info.bytes,
-        textureCount: loadResult.info.count,
-        textureBudgetBytes: loadResult.info.budgetBytes,
+        textureScale: info.scale,
+        maxTextureSize: info.maxTextureSize,
+        textureBytes: info.bytes,
+        textureCount: info.count,
+        textureBudgetBytes: info.budgetBytes,
       };
       if (window.console && window.console.info) {
         window.console.info(
           '[Live2DRenderer] prepare webgl' +
-            version +
+            state.version +
             ' drawables=' +
             summary.drawables +
             ' cached=' +
@@ -770,27 +985,22 @@
       return summary;
     } catch (prepareError) {
       state.ready = false;
+      state.lastError = String((prepareError && prepareError.message) || prepareError);
       warnOnce('prepare', 'prepare failed: ' + prepareError);
-      return { ok: false, reason: String((prepareError && prepareError.message) || prepareError) };
+      return { ok: false, reason: state.lastError };
     }
   }
 
-  function draw(model) {
-    if (state.disposed || !state.ready || !state.gl) return;
+  // Starts one frame: resize, viewport, one transparent clear. Call it before
+  // drawing a cross-fade, then draw each scene with an alpha and endFrame().
+  // draw() opens an implicit frame when the caller did not, so a single-scene
+  // draw still clears (the legacy viewer's draw(model) contract).
+  function beginFrame() {
+    if (!state.gl || state.disposed) return false;
+    if (state.frameOpen) return true;
     var gl = state.gl;
     try {
-      if (state.contextLost || (gl.isContextLost && gl.isContextLost())) return;
-      var drawables = model && model.drawables;
-      if (!drawables || typeof drawables.count !== 'number') return;
-
-      if (!state.cache || state.cache.modelRef !== model) {
-        // Geometry cache does not match this model (defensive; prepare normally
-        // handles this). Rebuild so we never index stale buffers.
-        state.cache = buildCache(model);
-        state.cache.modelRef = model;
-        state.fitDone = false;
-      }
-
+      if (state.contextLost || (gl.isContextLost && gl.isContextLost())) return false;
       resizeCanvas();
       gl.viewport(0, 0, state.pixelW, state.pixelH);
       gl.clearColor(0, 0, 0, 0); // transparent background for the WebView shell
@@ -799,104 +1009,175 @@
       gl.disable(gl.CULL_FACE);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      state.frameOpen = true;
+      return true;
+    } catch (frameError) {
+      warnOnce('frame', 'beginFrame() failed: ' + frameError);
+      return false;
+    }
+  }
 
-      if (!state.fitDone) computeFit(model);
-      state.lastPositions = drawables.vertexPositions;
+  function endFrame() {
+    state.frameOpen = false;
+  }
 
-      var count = drawables.count | 0;
-      var renderOrders = model.renderOrders;
-      var order = [];
-      for (var i = 0; i < count; i++) {
-        var entryCheck = state.cache.list[i];
-        if (!entryCheck || !entryCheck.ok) continue;
-        if (renderOrders && i < renderOrders.length) {
-          order.push({ index: i, key: renderOrders[i] });
-        } else {
-          order.push({ index: i, key: i });
-        }
+  function normalizeAlpha(alpha) {
+    if (typeof alpha !== 'number' || !isFinite(alpha)) return 1; // default 1
+    if (alpha <= 0) return 0;
+    if (alpha >= 1) return 1;
+    return alpha;
+  }
+
+  // draw(model) backwards compatibility: the scene that was made current by
+  // prepare(), or the last live scene whose model matches the argument.
+  function sceneForModel(model) {
+    var current = state.currentScene;
+    if (current && !current.disposed && current.model === model) return current;
+    for (var i = state.scenes.length - 1; i >= 0; i--) {
+      var scene = state.scenes[i];
+      if (!scene.disposed && scene.model === model) return scene;
+    }
+    if (current && !current.disposed) return current;
+    return state.scenes.length ? state.scenes[state.scenes.length - 1] : null;
+  }
+
+  function drawScene(scene, alpha) {
+    if (!scene || scene.disposed) return;
+    var gl = state.gl;
+    var drawables = scene.model && scene.model.drawables;
+    if (!drawables || typeof drawables.count !== 'number') return;
+
+    if (!scene.cache || scene.cache.modelRef !== scene.model) {
+      // Geometry cache does not match this model (defensive; createScene
+      // normally handles this). Rebuild so we never index stale buffers.
+      scene.cache = buildCache(scene.model);
+      scene.cache.modelRef = scene.model;
+      scene.fit.fitDone = false;
+    }
+
+    if (!scene.fit.fitDone) computeFit(scene);
+    scene.lastPositions = drawables.vertexPositions;
+
+    var count = drawables.count | 0;
+    var renderOrders = scene.model.renderOrders;
+    var order = [];
+    for (var i = 0; i < count; i++) {
+      var entryCheck = scene.cache.list[i];
+      if (!entryCheck || !entryCheck.ok) continue;
+      if (renderOrders && i < renderOrders.length) {
+        order.push({ index: i, key: renderOrders[i] });
+      } else {
+        order.push({ index: i, key: i });
       }
-      order.sort(function (a, b) { return a.key - b.key; });
+    }
+    order.sort(function (a, b) { return a.key - b.key; });
 
-      var positions = drawables.vertexPositions;
-      var opacities = drawables.opacities;
-      var dynamicFlags = drawables.dynamicFlags;
-      var multiplyColors = drawables.multiplyColors;
-      var screenColors = drawables.screenColors;
+    var positions = drawables.vertexPositions;
+    var opacities = drawables.opacities;
+    var dynamicFlags = drawables.dynamicFlags;
+    var multiplyColors = drawables.multiplyColors;
+    var screenColors = drawables.screenColors;
 
-      for (var k = 0; k < order.length; k++) {
-        var drawableIndex = order[k].index;
-        var entry = state.cache.list[drawableIndex];
-        try {
-          if (dynamicFlags && drawableIndex < dynamicFlags.length) {
-            if ((dynamicFlags[drawableIndex] & DYNAMIC_VISIBLE) !== DYNAMIC_VISIBLE) continue;
-          }
-          if (opacities && drawableIndex < opacities.length && opacities[drawableIndex] <= 0) continue;
-
-          var positionArray = positions && positions[drawableIndex];
-          if (!positionArray || positionArray.length < entry.vertexCount * 2) continue;
-
-          var texture = textureFor(entry.textureIndex);
-          if (!texture) continue; // texture failed to load: skip, do not throw
-
-          uploadPositions(entry, positionArray);
-
-          var maskApplied = beginMask(entry);
-          applyBlend(entry.constantFlags);
-
-          gl.useProgram(state.drawProgram);
-          gl.uniformMatrix3fv(state.drawU.uProjection, false, state.projection);
-          bindGeometry(state.drawProgram, state.drawA, entry);
-          gl.activeTexture(gl.TEXTURE0);
-          gl.bindTexture(gl.TEXTURE_2D, texture);
-          gl.uniform1i(state.drawU.uTexture, 0);
-
-          var opacity = opacities && drawableIndex < opacities.length ? opacities[drawableIndex] : 1;
-          gl.uniform4f(state.drawU.uBaseColor, 1, 1, 1, opacity);
-
-          var mr = 1;
-          var mg = 1;
-          var mb = 1;
-          var sr = 0;
-          var sg = 0;
-          var sb = 0;
-          var co = drawableIndex * 4;
-          if (multiplyColors && co + 2 < multiplyColors.length) {
-            mr = multiplyColors[co];
-            mg = multiplyColors[co + 1];
-            mb = multiplyColors[co + 2];
-          }
-          if (screenColors && co + 2 < screenColors.length) {
-            sr = screenColors[co];
-            sg = screenColors[co + 1];
-            sb = screenColors[co + 2];
-          }
-          gl.uniform4f(state.drawU.uMultiplyColor, mr, mg, mb, 1);
-          gl.uniform4f(state.drawU.uScreenColor, sr, sg, sb, 0);
-
-          gl.drawElements(gl.TRIANGLES, entry.indexCount, gl.UNSIGNED_SHORT, 0);
-          endMask(maskApplied);
-        } catch (drawableError) {
-          // A single bad drawable must never break the animation loop.
-          warnOnce('drawable', 'drawable ' + drawableIndex + ' skipped: ' + drawableError);
-          endMask(false);
-          gl.disable(gl.STENCIL_TEST);
+    for (var k = 0; k < order.length; k++) {
+      var drawableIndex = order[k].index;
+      var entry = scene.cache.list[drawableIndex];
+      try {
+        if (dynamicFlags && drawableIndex < dynamicFlags.length) {
+          if ((dynamicFlags[drawableIndex] & DYNAMIC_VISIBLE) !== DYNAMIC_VISIBLE) continue;
         }
+        if (opacities && drawableIndex < opacities.length && opacities[drawableIndex] <= 0) continue;
+
+        var positionArray = positions && positions[drawableIndex];
+        if (!positionArray || positionArray.length < entry.vertexCount * 2) continue;
+
+        var texture = textureFor(scene, entry.textureIndex);
+        if (!texture) continue; // texture failed to load: skip, do not throw
+
+        uploadPositions(entry, positionArray);
+
+        var maskApplied = beginMask(scene, entry);
+        applyBlend(entry.constantFlags);
+
+        gl.useProgram(state.drawProgram);
+        gl.uniformMatrix3fv(state.drawU.uProjection, false, scene.fit.projection);
+        gl.uniform1f(state.drawU.u_alpha, alpha);
+        bindGeometry(state.drawProgram, state.drawA, entry);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.uniform1i(state.drawU.uTexture, 0);
+
+        var opacity = opacities && drawableIndex < opacities.length ? opacities[drawableIndex] : 1;
+        gl.uniform4f(state.drawU.uBaseColor, 1, 1, 1, opacity);
+
+        var mr = 1;
+        var mg = 1;
+        var mb = 1;
+        var sr = 0;
+        var sg = 0;
+        var sb = 0;
+        var co = drawableIndex * 4;
+        if (multiplyColors && co + 2 < multiplyColors.length) {
+          mr = multiplyColors[co];
+          mg = multiplyColors[co + 1];
+          mb = multiplyColors[co + 2];
+        }
+        if (screenColors && co + 2 < screenColors.length) {
+          sr = screenColors[co];
+          sg = screenColors[co + 1];
+          sb = screenColors[co + 2];
+        }
+        gl.uniform4f(state.drawU.uMultiplyColor, mr, mg, mb, 1);
+        gl.uniform4f(state.drawU.uScreenColor, sr, sg, sb, 0);
+
+        gl.drawElements(gl.TRIANGLES, entry.indexCount, gl.UNSIGNED_SHORT, 0);
+        endMask(maskApplied);
+      } catch (drawableError) {
+        // A single bad drawable must never break the animation loop.
+        warnOnce('drawable', 'drawable ' + drawableIndex + ' skipped: ' + drawableError);
+        endMask(false);
+        gl.disable(gl.STENCIL_TEST);
       }
+    }
+  }
+
+  // draw(scene, alpha) draws that scene; draw(model) keeps the old single-scene
+  // call working by drawing the tracked current/last scene at alpha 1.
+  function draw(target, alpha) {
+    if (state.disposed || !state.gl) return;
+    var gl = state.gl;
+    try {
+      if (state.contextLost || (gl.isContextLost && gl.isContextLost())) return;
+      var scene = null;
+      var drawAlpha = 1;
+      var autoFrame;
+      if (target && target.isLive2DScene) {
+        scene = target;
+        drawAlpha = normalizeAlpha(alpha);
+        autoFrame = !state.frameOpen;
+      } else {
+        // Legacy call: always clear once and draw at full opacity.
+        if (!state.ready) return;
+        scene = sceneForModel(target);
+        state.frameOpen = false;
+        autoFrame = true;
+      }
+      if (!scene || scene.disposed) return;
+      if (!beginFrame()) return;
+      drawScene(scene, drawAlpha);
+      if (autoFrame) endFrame();
     } catch (error) {
       // Never throw out of draw(); report once and keep the loop alive.
+      if (autoFrame) endFrame();
       warnOnce('draw', 'draw() error: ' + error);
     }
   }
 
-  function dispose() {
-    state.disposed = true;
-    state.ready = false;
-    // Stops a prepare() that is still loading textures (see loadTextures).
-    state.generation++;
-    var gl = state.gl;
+  function freeSceneResources(scene, gl) {
+    if (!scene || scene.disposed) return;
+    scene.disposed = true;
     try {
-      if (gl) {
-        var list = (state.cache && state.cache.list) || [];
+      if (gl && scene.cache) {
+        var list = scene.cache.list || [];
         for (var i = 0; i < list.length; i++) {
           var entry = list[i];
           if (!entry || !entry.ok) continue;
@@ -908,15 +1189,53 @@
             /* ignore individual buffer cleanup errors */
           }
         }
-        for (var t = 0; t < state.textures.length; t++) {
-          if (state.textures[t]) {
-            try {
-              gl.deleteTexture(state.textures[t]);
-            } catch (textureError) {
-              /* ignore */
-            }
-          }
-        }
+      }
+    } catch (cacheError) {
+      /* ignore */
+    }
+    try {
+      if (gl && scene.textures) deleteTextures(gl, scene.textures);
+    } catch (textureError) {
+      /* ignore */
+    }
+    scene.cache = null;
+    scene.textures = [];
+    scene.textureInfo = emptyTextureInfo();
+    scene.lastPositions = null;
+  }
+
+  function forgetScene(scene) {
+    var index = state.scenes.indexOf(scene);
+    if (index >= 0) state.scenes.splice(index, 1);
+    if (state.currentScene === scene) {
+      state.currentScene = state.scenes.length
+        ? state.scenes[state.scenes.length - 1]
+        : null;
+    }
+    state.ready = state.scenes.length > 0;
+  }
+
+  // Frees only this scene's geometry buffers and textures. The shared context
+  // and programs stay usable for the remaining scenes (fade-out then dispose).
+  function disposeScene(scene) {
+    if (!scene || !scene.isLive2DScene) return false;
+    if (!scene.disposed) freeSceneResources(scene, state.gl);
+    forgetScene(scene);
+    return true;
+  }
+
+  function dispose() {
+    state.disposed = true;
+    state.ready = false;
+    state.frameOpen = false;
+    // Stops a prepare()/createScene() that is still loading textures.
+    state.generation++;
+    var gl = state.gl;
+    try {
+      for (var i = 0; i < state.scenes.length; i++) {
+        freeSceneResources(state.scenes[i], gl);
+      }
+      if (gl) {
         if (state.drawProgram) {
           try { gl.deleteProgram(state.drawProgram); } catch (programError) { /* ignore */ }
         }
@@ -927,38 +1246,57 @@
     } catch (disposeError) {
       /* dispose must never throw */
     }
-    state.cache = null;
-    state.textures = [];
-    state.textureInfo = emptyTextureInfo();
+    state.scenes = [];
+    state.currentScene = null;
     state.gl = null;
+    state.canvas = null;
     state.drawProgram = null;
     state.maskProgram = null;
-    state.lastPositions = null;
-    state.modelRef = null;
+    state.drawU = null;
+    state.drawA = null;
+    state.maskU = null;
+    state.maskA = null;
   }
 
   // Public surface used by live2d_viewer.js and the native WebView shell.
   window.Live2DRenderer = {
-    version: '0.1.0-webgl-adapter',
+    version: '0.2.0-webgl-multi-scene',
     prepare: prepare,
+    createScene: createScene,
     draw: draw,
+    beginFrame: beginFrame,
+    endFrame: endFrame,
+    disposeScene: disposeScene,
     dispose: dispose,
+    sceneBytes: sceneBytes,
+    totalLiveBytes: totalLiveBytes,
+    canBeAdded: canBeAdded,
+    get lastError() {
+      return state.lastError;
+    },
     // Exposed for debugging / device validation only.
     diagnostics: function () {
+      var scene = state.currentScene;
+      if (scene && scene.disposed) scene = null;
+      var info = scene ? scene.textureInfo : emptyTextureInfo();
+      var textures = scene ? scene.textures : [];
+      var cache = scene ? scene.cache : null;
       return {
         ready: state.ready,
         webgl: state.version,
         contextLost: state.contextLost,
-        drawables: state.cache ? state.cache.count : 0,
-        cached: state.cache ? state.cache.withIndex : 0,
-        skipped: state.cache ? state.cache.skipped : 0,
-        textures: state.textures.length,
-        loadedTextures: state.textures.filter(Boolean).length,
-        textureScale: state.textureInfo.scale,
-        maxTextureSize: state.textureInfo.maxTextureSize,
-        textureBytes: state.textureInfo.bytes,
-        textureCount: state.textureInfo.count,
-        textureBudgetBytes: state.textureInfo.budgetBytes,
+        drawables: cache ? cache.count : 0,
+        cached: cache ? cache.withIndex : 0,
+        skipped: cache ? cache.skipped : 0,
+        textures: textures.length,
+        loadedTextures: textures.filter(Boolean).length,
+        textureScale: info.scale,
+        maxTextureSize: info.maxTextureSize,
+        textureBytes: info.bytes,
+        textureCount: info.count,
+        textureBudgetBytes: info.budgetBytes,
+        liveScenes: liveSceneCount(),
+        totalTextureBytes: totalLiveBytes(),
       };
     },
   };

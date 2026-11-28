@@ -6,8 +6,22 @@
 // Protocol (kept in sync with `Live2DRendererBridge` in jingyu_client_kit and
 // the Android host in apps/client_flutter):
 //   Flutter -> viewer: load, setParam, clearParam, setExpression, setMotion,
-//                      behavior, blink, speak, dispose
-//   viewer -> Flutter: boot (once, before any other event), ready, error
+//                      behavior, blink, speak, dispose,
+//                      preload, swap, pause, resume
+//   viewer -> Flutter: boot (once, before any other event), ready, error,
+//                      preloaded, preload_rejected, preload_failed,
+//                      swapped, swap_failed, paused, resumed
+// `preload {loadId, modelId?, profileRev?, model3, textureUrls?}` stages a
+// second model and scene while the shown one keeps ticking; `swap {loadId,
+// fadeMs?}` cross-fades to it (default 250 ms, clamped 0..1000) and only then
+// disposes the old one. A swap before `preloaded`, while paused, or during
+// another swap fails with `not_preloaded`, `paused` or `busy`. A newer
+// `preload` releases the older pending scene and suppresses its reply.
+// `pause {}` / `resume {}` stop and restart the frame loop without releasing
+// anything (idempotent; `preload` is still allowed while paused).
+// `preloaded` carries loadId; `preload_rejected` carries loadId and code
+// `texture_budget`; `preload_failed` / `swap_failed` carry loadId, code and
+// message; `swapped` carries loadId and the same fields as `ready`.
 // `ready` means the renderer adapter prepared and the first draw returned
 // without throwing. A core-only update is never reported as ready.
 // `ready` carries modelId and profileRev, and also `parameters` (runtime
@@ -82,6 +96,11 @@
     disposed: false,
     anim: null, // the shown model's animation (createAnimation)
     lastFrameTime: null, // the previous animation frame's timestamp, in ms
+    scene: null, // the shown model's renderer scene (multi-scene renderer)
+    pending: null, // the preload record waiting for a swap
+    preloadToken: 0, // bumped to discard a superseded preload's continuations
+    swap: null, // the active cross-fade (also owns the incoming scene)
+    paused: false, // rAF stopped by pause(), nothing released
   };
 
   function post(message) {
@@ -152,6 +171,136 @@
     state.ready = false;
   }
 
+  // The multi-scene renderer surface D3b needs. A renderer without it keeps
+  // the legacy single-scene load path; preload/swap fail as bad commands.
+  function sceneApiAvailable() {
+    var renderer = window.Live2DRenderer;
+    return !!renderer &&
+      typeof renderer.createScene === 'function' &&
+      typeof renderer.draw === 'function' &&
+      typeof renderer.beginFrame === 'function' &&
+      typeof renderer.endFrame === 'function' &&
+      typeof renderer.disposeScene === 'function';
+  }
+
+  function disposeSceneQuietly(scene) {
+    if (!scene || !window.Live2DRenderer ||
+        typeof window.Live2DRenderer.disposeScene !== 'function') {
+      return;
+    }
+    try {
+      window.Live2DRenderer.disposeScene(scene);
+    } catch (_) {
+      // best effort: a lost context makes the delete calls no-ops
+    }
+  }
+
+  // Frees a preload record: its scene first, then the core objects, like the
+  // renderer-before-core order used for the shown model.
+  function releaseRecord(record) {
+    if (!record || record.released) return;
+    record.released = true;
+    record.cancelled = true;
+    record.ready = false;
+    disposeSceneQuietly(record.scene);
+    if (record.model && record.model.release) record.model.release();
+    if (record.moc && record.moc._release) record.moc._release();
+    record.scene = null;
+    record.model = null;
+    record.moc = null;
+    record.anim = null;
+    if (state.pending === record) state.pending = null;
+  }
+
+  // Drops the pending preload (in flight or waiting for swap). Bumping the
+  // token makes any older async continuation release its work and stay silent.
+  function cancelPreload() {
+    state.preloadToken += 1;
+    var record = state.pending;
+    state.pending = null;
+    if (record) releaseRecord(record);
+  }
+
+  function releaseSwap(swap) {
+    if (!swap || swap.released) return;
+    swap.released = true;
+    if (state.anim === swap.anim) state.anim = swap.oldAnim || null;
+    disposeSceneQuietly(swap.scene);
+    if (swap.model && swap.model.release) swap.model.release();
+    if (swap.moc && swap.moc._release) swap.moc._release();
+    swap.scene = null;
+    swap.model = null;
+    swap.moc = null;
+    swap.anim = null;
+    if (state.swap === swap) state.swap = null;
+  }
+
+  function releaseCurrentScene() {
+    var scene = state.scene;
+    state.scene = null;
+    disposeSceneQuietly(scene);
+  }
+
+  function ensureLoop() {
+    if (state.disposed || state.paused || state.raf) return;
+    if (!state.model && !state.swap) return;
+    state.raf = window.requestAnimationFrame(tick);
+  }
+
+  // Same fields as `ready`, without the event name, for `swapped`.
+  function readyFields(model, lists) {
+    var fields = {};
+    var parameterList = readyParameters(model);
+    if (parameterList) fields.parameters = parameterList;
+    var partList = readyParts(model);
+    if (partList) fields.parts = partList;
+    if (lists && lists.expressions) fields.expressions = lists.expressions;
+    if (lists && lists.motions) fields.motions = lists.motions;
+    return fields;
+  }
+
+  function readyEvent(model, lists, modelId, profileRev) {
+    var event = { event: 'ready', modelId: modelId, profileRev: profileRev };
+    var fields = readyFields(model, lists);
+    for (var key in fields) event[key] = fields[key];
+    return event;
+  }
+
+  function swappedEvent(swap) {
+    var event = {
+      event: 'swapped',
+      loadId: swap.loadId,
+      modelId: swap.modelId,
+      profileRev: swap.profileRev,
+    };
+    var fields = readyFields(swap.model, swap.lists);
+    for (var key in fields) event[key] = fields[key];
+    return event;
+  }
+
+  function postPreloadFailed(loadId, code, message) {
+    post({
+      event: 'preload_failed',
+      loadId: loadId,
+      code: code,
+      message: String(message),
+    });
+  }
+
+  function postSwapFailed(loadId, code, message) {
+    post({
+      event: 'swap_failed',
+      loadId: loadId,
+      code: code,
+      message: String(message),
+    });
+  }
+
+  function validLoadId(value) {
+    return typeof value === 'string' ||
+      (typeof value === 'number' && Number.isFinite(value));
+  }
+
   // A loss while a model is shown is reported here, once. A running load
   // reports the loss itself; an idle viewer reports it on the next load.
   // preventDefault asks the browser to restore the context later: without it
@@ -162,6 +311,10 @@
     if (state.contextLost) return;
     state.contextLost = true;
     state.contextLosses += 1;
+    // A preload or fade that was waiting on GL cannot outlive the context.
+    // They are dropped silently; the shown model reports the loss below.
+    cancelPreload();
+    if (state.swap) releaseSwap(state.swap);
     if (state.loading || !state.model) return;
     stopLoop();
     releaseModel();
@@ -724,13 +877,27 @@
     return last === null ? 0 : Math.min(100, Math.max(0, time - last));
   }
 
+  // Command texture URLs when the host passed a non-empty list, else the
+  // model3 Textures list; each resolved against the model3 URL.
+  function textureUrlsFor(command, refs, model3Url) {
+    var textures = [];
+    var list = Array.isArray(command.textureUrls) && command.textureUrls.length
+      ? command.textureUrls
+      : (Array.isArray(refs.Textures) ? refs.Textures : []);
+    for (var i = 0; i < list.length; i++) {
+      textures.push(resolve(model3Url, list[i]));
+    }
+    return textures;
+  }
+
   async function load(command) {
     if (state.disposed) throw codedError('bad_command', 'viewer disposed');
     if (state.loading) throw codedError('bad_command', 'load already in progress');
     if (!core) throw new Error('PurismCore runtime missing');
     if (!window.Live2DRenderer ||
-        typeof window.Live2DRenderer.prepare !== 'function' ||
-        typeof window.Live2DRenderer.draw !== 'function') {
+        typeof window.Live2DRenderer.draw !== 'function' ||
+        (typeof window.Live2DRenderer.prepare !== 'function' &&
+         typeof window.Live2DRenderer.createScene !== 'function')) {
       throw new Error('renderer adapter missing');
     }
     if (!window.Live2DMotion || !window.Live2DBehavior ||
@@ -742,6 +909,7 @@
     var moc = null;
     var model = null;
     var adopted = false;
+    var createdScene = null;
     // GL objects made before a loss stay unusable after a restore, so a load
     // that saw any loss must not claim ready.
     var losses = state.contextLosses;
@@ -769,16 +937,15 @@
       var effects = ready[1];
       if (state.disposed) throw new Error('viewer disposed');
 
-      var textures = [];
-      var list = Array.isArray(command.textureUrls) && command.textureUrls.length
-        ? command.textureUrls
-        : (Array.isArray(refs.Textures) ? refs.Textures : []);
-      for (var i = 0; i < list.length; i++) {
-        textures.push(resolve(model3Url, list[i]));
-      }
+      var textures = textureUrlsFor(command, refs, model3Url);
 
       // One frame loop at a time: stop the shown model's loop before the swap.
+      // A pending preload or fade belongs to the model being replaced.
       stopLoop();
+      cancelPreload();
+      if (state.swap) releaseSwap(state.swap);
+      disposeSceneQuietly(state.scene);
+      state.scene = null;
       releaseModel();
       state.moc = moc;
       state.model = model;
@@ -792,30 +959,41 @@
         state.anim = null;
       }
 
-      var prepared = await window.Live2DRenderer.prepare(canvas, model, textures);
-      if (state.disposed) throw new Error('viewer disposed');
-      if (state.contextLost || state.contextLosses !== losses) throw contextLostError();
-      if (!prepared || prepared.ok !== true) {
-        throw new Error('renderer prepare failed: ' +
-          (prepared && prepared.reason ? prepared.reason : 'no result'));
+      // The multi-scene renderer returns a scene handle so a later swap can
+      // draw the old scene at a fading alpha. The single-scene adapter keeps
+      // the legacy prepare() path.
+      if (sceneApiAvailable()) {
+        createdScene = await window.Live2DRenderer.createScene(canvas, model, textures);
+        if (state.disposed) throw new Error('viewer disposed');
+        if (state.contextLost || state.contextLosses !== losses) throw contextLostError();
+        if (!createdScene) {
+          throw new Error('renderer createScene failed: ' +
+            (window.Live2DRenderer.lastError || 'no result'));
+        }
+        state.scene = createdScene;
+      } else {
+        var prepared = await window.Live2DRenderer.prepare(canvas, model, textures);
+        if (state.disposed) throw new Error('viewer disposed');
+        if (state.contextLost || state.contextLosses !== losses) throw contextLostError();
+        if (!prepared || prepared.ok !== true) {
+          throw new Error('renderer prepare failed: ' +
+            (prepared && prepared.reason ? prepared.reason : 'no result'));
+        }
       }
 
       state.ready = true;
       // tick() reports a failed first frame and releases the model itself;
       // never claim ready after it.
-      if (!tick()) return;
-      var readyEvent = { event: 'ready', modelId: state.modelId, profileRev: state.profileRev };
-      // The ID lists are optional: each helper returns null instead of
-      // throwing, and a null list is left out of the event.
-      var parameterList = readyParameters(model);
-      if (parameterList) readyEvent.parameters = parameterList;
-      var partList = readyParts(model);
-      if (partList) readyEvent.parts = partList;
-      if (lists.expressions) readyEvent.expressions = lists.expressions;
-      if (lists.motions) readyEvent.motions = lists.motions;
-      post(readyEvent);
+      if (!tick()) {
+        disposeSceneQuietly(createdScene);
+        if (state.scene === createdScene) state.scene = null;
+        return;
+      }
+      post(readyEvent(model, lists, state.modelId, state.profileRev));
     } catch (error) {
       stopLoop();
+      disposeSceneQuietly(createdScene);
+      if (state.scene === createdScene) state.scene = null;
       if (!adopted) {
         if (model && model.release) model.release();
         if (moc && moc._release) moc._release();
@@ -831,12 +1009,328 @@
     }
   }
 
+  // Stages a second model and its renderer scene without touching the shown
+  // model, its animation or the frame loop. Resolves after posting exactly one
+  // of preloaded / preload_rejected / preload_failed, unless superseded or
+  // disposed first (then it posts nothing).
+  async function preload(command) {
+    if (state.disposed) return;
+    var loadId = command.loadId;
+    if (!validLoadId(loadId)) {
+      postPreloadFailed(loadId, 'bad_command', 'loadId must be a string or number');
+      return;
+    }
+    if (state.loading) {
+      postPreloadFailed(loadId, 'busy', 'load in progress');
+      return;
+    }
+    if (state.swap) {
+      postPreloadFailed(loadId, 'busy', 'swap in progress');
+      return;
+    }
+
+    // A newer preload supersedes the older one: release its scene and core
+    // objects, and make its async continuation stay silent.
+    cancelPreload();
+    var record = {
+      loadId: loadId,
+      modelId: command.modelId,
+      profileRev: command.profileRev,
+      token: ++state.preloadToken,
+      cancelled: false,
+      released: false,
+      ready: false,
+      moc: null,
+      model: null,
+      anim: null,
+      scene: null,
+      lists: null,
+    };
+    state.pending = record;
+
+    try {
+      if (!core) throw new Error('PurismCore runtime missing');
+      if (!sceneApiAvailable()) {
+        throw codedError('bad_command', 'renderer adapter missing multi-scene support');
+      }
+      if (!window.Live2DMotion || !window.Live2DBehavior ||
+          !window.Live2DPhysics || !window.Live2DPose) {
+        throw new Error('animation modules missing');
+      }
+      var canvas = acquireCanvas();
+      if (state.contextLost) throw contextLostError();
+      var losses = state.contextLosses;
+      var model3Url = command.model3;
+      if (typeof model3Url !== 'string' || model3Url === '') {
+        throw new Error('model3 URL missing');
+      }
+
+      var json = await (await fetch(model3Url, { cache: 'no-store' })).json();
+      if (record.cancelled || record.released || state.disposed ||
+          record.token !== state.preloadToken) {
+        releaseRecord(record);
+        return;
+      }
+      var refs = json.FileReferences || {};
+      if (!refs.Moc) throw new Error('model3 has no Moc reference');
+      var mocBytes = await fetchBytes(resolve(model3Url, refs.Moc));
+      if (record.cancelled || record.released || state.disposed ||
+          record.token !== state.preloadToken) {
+        releaseRecord(record);
+        return;
+      }
+      record.moc = core.Moc.fromArrayBuffer(mocBytes);
+      if (!record.moc) throw new Error('Moc rejected');
+      record.model = core.Model.fromMoc(record.moc);
+      if (!record.model) {
+        throw new Error('Model creation failed, code=' + record.moc.getError());
+      }
+      if (record.cancelled || record.released || state.disposed ||
+          record.token !== state.preloadToken) {
+        releaseRecord(record);
+        return;
+      }
+
+      // Same staging as load: expressions/motions and effects are loaded
+      // without touching GL, and a model whose parameters cannot be read is
+      // still a valid preload with no animation.
+      var staged = await Promise.all([
+        readyExpressionsAndMotions(model3Url, refs, window.Live2DMotion),
+        loadEffects(model3Url, refs),
+      ]);
+      if (record.cancelled || record.released || state.disposed ||
+          record.token !== state.preloadToken) {
+        releaseRecord(record);
+        return;
+      }
+      record.lists = staged[0];
+      var effects = staged[1];
+      try {
+        record.anim = createAnimation(record.model, record.lists.play, json, effects);
+      } catch (_) {
+        record.anim = null;
+      }
+
+      var textures = textureUrlsFor(command, refs, model3Url);
+      var scene = await window.Live2DRenderer.createScene(canvas, record.model, textures);
+      record.scene = scene || null;
+      if (record.cancelled || record.released || state.disposed ||
+          record.token !== state.preloadToken) {
+        // The record may have been released while createScene() was in flight,
+        // so releaseRecord() is already a no-op; free the late scene here.
+        if (record.released) {
+          disposeSceneQuietly(scene);
+          record.scene = null;
+        } else {
+          releaseRecord(record);
+        }
+        return;
+      }
+      if (!scene) {
+        var reason = window.Live2DRenderer.lastError || 'scene-failed';
+        if (reason === 'texture_budget') {
+          releaseRecord(record);
+          post({ event: 'preload_rejected', loadId: loadId, code: 'texture_budget' });
+          return;
+        }
+        throw new Error('renderer createScene failed: ' + reason);
+      }
+      if (state.contextLost || state.contextLosses !== losses) {
+        throw contextLostError();
+      }
+
+      record.ready = true;
+      post({ event: 'preloaded', loadId: loadId });
+    } catch (error) {
+      if (record.cancelled || record.released || state.disposed ||
+          record.token !== state.preloadToken) {
+        releaseRecord(record);
+        return; // superseded or disposed: no reply
+      }
+      releaseRecord(record);
+      postPreloadFailed(
+        loadId,
+        error && error.viewerCode ? error.viewerCode : 'load_failed',
+        error && error.message ? error.message : error
+      );
+    }
+  }
+
+  // Milliseconds for a fade: default 250, clamped to 0..1000. A malformed
+  // value uses the default; 0 is a hard cut on the next frame.
+  function fadeDuration(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 250;
+    return Math.min(1000, Math.max(0, value));
+  }
+
+  function fadeClock(time) {
+    if (typeof time === 'number' && Number.isFinite(time)) return time;
+    if (typeof performance !== 'undefined' && performance &&
+        typeof performance.now === 'function') {
+      return performance.now();
+    }
+    return Date.now();
+  }
+
+  // 0..1 across fadeMs, starting at the first swap frame. fadeMs 0 is 1 on
+  // that first frame, so a hard cut still attempts the incoming draw.
+  function fadeProgress(swap, time) {
+    if (swap.fadeMs <= 0) return 1;
+    var now = fadeClock(time);
+    if (swap.startedAt === null) swap.startedAt = now;
+    var progress = (now - swap.startedAt) / swap.fadeMs;
+    if (progress < 0) return 0;
+    return progress > 1 ? 1 : progress;
+  }
+
+  // Starts a cross-fade to the preloaded model. The preload record is consumed
+  // here: after this point only swap / dispose own the incoming scene.
+  function swap(command) {
+    if (state.disposed) return;
+    var loadId = command.loadId;
+    if (state.paused) {
+      postSwapFailed(loadId, 'paused', 'viewer is paused');
+      return;
+    }
+    if (state.swap) {
+      postSwapFailed(loadId, 'busy', 'swap already in progress');
+      return;
+    }
+    var record = state.pending;
+    if (!record || !record.ready || record.loadId !== loadId) {
+      postSwapFailed(loadId, 'not_preloaded', 'no preloaded model for this loadId');
+      return;
+    }
+
+    state.pending = null;
+    record.ready = false;
+    record.released = true; // consumed, not freed: the fade owns its objects
+    var fading = {
+      loadId: loadId,
+      fadeMs: fadeDuration(command.fadeMs),
+      scene: record.scene,
+      model: record.model,
+      moc: record.moc,
+      anim: record.anim,
+      lists: record.lists,
+      modelId: record.modelId,
+      profileRev: record.profileRev,
+      oldScene: state.scene,
+      oldModel: state.model,
+      oldMoc: state.moc,
+      oldAnim: state.anim,
+      startedAt: null,
+      bound: false,
+      released: false,
+    };
+    record.scene = null;
+    record.model = null;
+    record.moc = null;
+    record.anim = null;
+    state.swap = fading;
+    ensureLoop();
+  }
+
+  function commitSwap(swap) {
+    if (!swap || state.swap !== swap) return;
+    var oldScene = state.scene;
+    var oldModel = state.model;
+    var oldMoc = state.moc;
+    state.swap = null;
+    swap.released = true;
+    // Renderer resources first, then the core objects, then adopt the new
+    // model as the shown one; the event goes out last.
+    disposeSceneQuietly(oldScene);
+    if (oldModel && oldModel.release) oldModel.release();
+    if (oldMoc && oldMoc._release) oldMoc._release();
+    swap.oldScene = null;
+    swap.oldModel = null;
+    swap.oldMoc = null;
+    swap.oldAnim = null;
+    state.scene = swap.scene;
+    state.model = swap.model;
+    state.moc = swap.moc;
+    state.anim = swap.anim;
+    state.modelId = swap.modelId;
+    state.profileRev = swap.profileRev;
+    state.ready = true;
+    post(swappedEvent(swap));
+    swap.scene = null;
+    swap.model = null;
+    swap.moc = null;
+    swap.anim = null;
+  }
+
+  // A failed incoming frame keeps the old model: free only the candidate,
+  // make commands address the old animation again, and report once.
+  function rollbackSwap(swap, error) {
+    if (!swap || swap.released) return;
+    swap.released = true;
+    if (state.swap === swap) state.swap = null;
+    if (swap.bound) state.anim = swap.oldAnim;
+    disposeSceneQuietly(swap.scene);
+    if (swap.model && swap.model.release) swap.model.release();
+    if (swap.moc && swap.moc._release) swap.moc._release();
+    swap.scene = null;
+    swap.model = null;
+    swap.moc = null;
+    swap.anim = null;
+    postSwapFailed(
+      swap.loadId,
+      'render_failed',
+      error && error.message ? error.message : error
+    );
+  }
+
+  // One frame during a cross-fade: update both animations/models, clear once
+  // through beginFrame(), then draw old at 1-t and new at t. The incoming draw
+  // is attempted inside try/catch so a render failure rolls back cleanly.
+  function tickSwap(time) {
+    var swap = state.swap;
+    if (!swap) return false;
+    var renderer = window.Live2DRenderer;
+    try {
+      var dt = frameDelta(time);
+      if (swap.oldAnim) swap.oldAnim.frame(dt);
+      if (swap.oldModel) swap.oldModel.update();
+      if (swap.anim) swap.anim.frame(dt);
+      if (swap.model) swap.model.update();
+
+      var t = fadeProgress(swap, time);
+      var opened = false;
+      try {
+        opened = renderer.beginFrame();
+        if (!opened) throw new Error('beginFrame failed');
+        if (swap.oldScene) renderer.draw(swap.oldScene, 1 - t);
+        renderer.draw(swap.scene, t);
+      } finally {
+        if (opened) renderer.endFrame();
+      }
+
+      // After the first successful incoming draw, commands address the new
+      // animation. The old one keeps animating until the fade commits.
+      if (!swap.bound) {
+        state.anim = swap.anim;
+        swap.bound = true;
+      }
+      if (t >= 1) commitSwap(swap);
+    } catch (error) {
+      rollbackSwap(swap, error);
+    }
+    if (!state.paused && !state.disposed) {
+      state.raf = window.requestAnimationFrame(tick);
+    }
+    return true;
+  }
+
   // Runs one animation frame, core update and renderer draw. `time` is the
   // requestAnimationFrame timestamp. Returns false when no frame ran or the
   // frame failed; a failure is reported once and releases the model.
   function tick(time) {
     state.raf = 0;
-    if (state.disposed || !state.model) return false;
+    if (state.disposed) return false;
+    if (state.swap) return tickSwap(time);
+    if (!state.model) return false;
     try {
       var dt = frameDelta(time);
       if (state.anim) state.anim.frame(dt);
@@ -847,7 +1341,7 @@
       fail(error, 'render_failed');
       return false;
     }
-    state.raf = window.requestAnimationFrame(tick);
+    if (!state.paused) state.raf = window.requestAnimationFrame(tick);
     return true;
   }
 
@@ -870,10 +1364,32 @@
     }
   }
 
+  // Stops the frame loop without releasing the model, scene or pending preload.
+  // Idempotent: a second pause still acknowledges, with no other effect.
+  function pause() {
+    if (state.disposed) return;
+    state.paused = true;
+    stopLoop();
+    post({ event: 'paused' });
+  }
+
+  // Restarts the frame loop after pause(). A pending fade resumes where it
+  // stopped; nothing is created or released. Idempotent.
+  function resume() {
+    if (state.disposed) return;
+    state.paused = false;
+    ensureLoop();
+    post({ event: 'resumed' });
+  }
+
   function dispose() {
     state.disposed = true;
     state.loading = false;
+    state.paused = false;
     stopLoop();
+    cancelPreload();
+    if (state.swap) releaseSwap(state.swap);
+    releaseCurrentScene();
     try {
       if (window.Live2DRenderer && window.Live2DRenderer.dispose) {
         window.Live2DRenderer.dispose();
@@ -891,6 +1407,25 @@
     switch (message.cmd) {
       case 'load':
         load(message).catch(function (error) { fail(error, 'load_failed'); });
+        break;
+      case 'preload':
+        preload(message).catch(function (error) {
+          fail(error, 'bad_command');
+        });
+        break;
+      case 'swap':
+        try {
+          swap(message);
+        } catch (error) {
+          postSwapFailed(message.loadId, 'bad_command',
+            error && error.message ? error.message : error);
+        }
+        break;
+      case 'pause':
+        pause();
+        break;
+      case 'resume':
+        resume();
         break;
       case 'setParam':
       case 'clearParam':
