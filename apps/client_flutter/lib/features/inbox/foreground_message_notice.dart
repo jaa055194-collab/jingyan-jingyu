@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
+import '../../ui/ui.dart';
 import 'foreground_message_activity.dart';
 
 /// The shell mounts this slot only on the Contacts/Inbox main page. The
@@ -132,34 +133,20 @@ class _ForegroundMessageNoticeState extends State<ForegroundMessageNotice> {
 
   @override
   Widget build(BuildContext context) {
-    if (_ticket == null || _ticket != widget.activity.viewTicket) {
-      return const SizedBox.shrink();
-    }
-    final colors = Theme.of(context).colorScheme;
-    return Material(
-      color: colors.secondaryContainer,
-      child: Padding(
-        padding: const EdgeInsetsDirectional.only(start: 16, end: 8),
-        child: Row(
-          children: [
-            Expanded(
-              child: Semantics(
-                liveRegion: true,
-                child: Text(
-                  '收到新消息，可在聊天中查看。',
-                  style: TextStyle(color: colors.onSecondaryContainer),
-                ),
+    final ticket = _ticket;
+    final visible = ticket != null && ticket == widget.activity.viewTicket;
+    return JySwitcher(
+      child: visible
+          ? KeyedSubtree(
+              key: ObjectKey(_presentation),
+              child: JyBanner(
+                kind: JyBannerKind.info,
+                message: '收到新消息，可在聊天中查看。',
+                onClose: _dismiss,
+                closeTooltip: '关闭新消息提示',
               ),
-            ),
-            IconButton(
-              tooltip: '关闭新消息提示',
-              onPressed: _dismiss,
-              icon: const Icon(Icons.close),
-              color: colors.onSecondaryContainer,
-            ),
-          ],
-        ),
-      ),
+            )
+          : const SizedBox.shrink(key: ValueKey('foreground-notice-none')),
     );
   }
 }

@@ -3,18 +3,16 @@ import 'dart:async';
 import 'package:jingyu_core/jingyu_core.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../app/status_panel.dart';
 import '../../net/host_connection.dart';
 import '../../net/notification_api.dart';
+import '../../ui/ui.dart';
 
 /// The host-confirmed outcome for one inbox row. Only a completed host write
 /// ever produces one; an unknown result never fabricates a label.
 class _RowOutcome {
-  const _RowOutcome.accepted()
-    : label = '已接受',
-      failure = null;
-  const _RowOutcome.denied()
-    : label = '已拒绝',
-      failure = null;
+  const _RowOutcome.accepted() : label = '已接受', failure = null;
+  const _RowOutcome.denied() : label = '已拒绝', failure = null;
   const _RowOutcome.failed(this.failure) : label = null;
 
   final String? label;
@@ -71,6 +69,7 @@ class _InboxScreenState extends State<InboxScreen> {
   bool _loading = false;
   String? _message;
   final _outcomes = <String, _RowOutcome>{};
+  final _expandedKinds = <String, bool>{};
   String? _busyRefId;
   bool get _refreshBlocked => _loading || _busyRefId != null;
 
@@ -145,13 +144,13 @@ class _InboxScreenState extends State<InboxScreen> {
     final changes = widget.actionChanges;
     final navigator = Navigator.of(context, rootNavigator: true);
     var invalidated = false;
-    late final DialogRoute<bool> route;
+    late final JyDialogRoute<bool> route;
 
     void finish(bool confirmed) {
       if (route.isCurrent && !invalidated) navigator.pop(confirmed);
     }
 
-    route = DialogRoute<bool>(
+    route = JyDialogRoute<bool>(
       context: context,
       themes: InheritedTheme.capture(from: context, to: navigator.context),
       barrierColor:
@@ -232,31 +231,24 @@ class _InboxScreenState extends State<InboxScreen> {
     });
   }
 
+  double get _pagePad => MediaQuery.sizeOf(context).width < 720
+      ? JySpace.pageNarrow
+      : JySpace.pageWide;
+
   @override
   Widget build(BuildContext context) {
+    final palette = JyPalette.of(context);
     if (widget.loadNotifications == null) {
       return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.inbox_outlined, size: 40),
-              const SizedBox(height: 16),
-              Text('收件箱', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              const Text(
-                '当前未连接宿主，无法读取收件箱。',
-                key: Key('inbox-gap'),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                '连接后可查看待处理的好友邀请。',
-                key: Key('inbox-after-wiring'),
-                textAlign: TextAlign.center,
-              ),
-            ],
+        child: SingleChildScrollView(
+          padding: EdgeInsets.all(_pagePad),
+          child: StatusPanel(
+            tone: StatusTone.offline,
+            icon: Icons.link_off_rounded,
+            title: '当前未连接宿主，无法读取收件箱。',
+            titleKey: const Key('inbox-gap'),
+            detail: '连接后可查看待处理的好友邀请。',
+            detailKey: const Key('inbox-after-wiring'),
           ),
         ),
       );
@@ -264,14 +256,25 @@ class _InboxScreenState extends State<InboxScreen> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          padding: EdgeInsetsDirectional.fromSTEB(
+            _pagePad,
+            JySpace.sm,
+            _pagePad,
+            0,
+          ),
           child: Align(
             alignment: AlignmentDirectional.centerEnd,
-            child: TextButton.icon(
-              key: const Key('inbox-refresh'),
-              onPressed: _refreshBlocked ? null : _load,
-              icon: const Icon(Icons.refresh),
-              label: Text(_message == null ? '刷新收件箱' : '重试读取'),
+            child: JyPressable(
+              borderRadius: BorderRadius.circular(JyRadius.md),
+              child: TextButton.icon(
+                key: const Key('inbox-refresh'),
+                onPressed: _refreshBlocked ? null : _load,
+                icon: Icon(
+                  Icons.refresh_rounded,
+                  color: _refreshBlocked ? palette.text3 : null,
+                ),
+                label: Text(_message == null ? '刷新收件箱' : '重试读取'),
+              ),
             ),
           ),
         ),
@@ -281,106 +284,278 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Widget _connectedBody() {
+    final Widget child;
     if (_loading) {
-      return Center(
-        child: Semantics(
-          liveRegion: true,
-          child: const Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 8),
-              Text('正在读取收件箱…'),
-            ],
+      child = Semantics(
+        key: const ValueKey('inbox-loading'),
+        liveRegion: true,
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(_pagePad),
+            child: const JyBusyIndicator(label: '正在读取收件箱…'),
           ),
         ),
       );
-    }
-    if (_message != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            _message!,
-            key: const Key('inbox-message'),
-            textAlign: TextAlign.center,
+    } else if (_message != null) {
+      child = Padding(
+        key: const ValueKey('inbox-error'),
+        padding: EdgeInsets.all(_pagePad),
+        child: Center(
+          child: SingleChildScrollView(
+            child: StatusPanel(
+              tone: StatusTone.error,
+              icon: Icons.cloud_off_rounded,
+              title: '没能读取收件箱',
+              detail: _message,
+              detailKey: const Key('inbox-message'),
+            ),
           ),
         ),
       );
+    } else {
+      child = KeyedSubtree(key: const ValueKey('inbox-list'), child: _list());
     }
+    return JySwitcher(child: child);
+  }
+
+  Map<String, List<NotificationItem>> _grouped(List<NotificationItem> items) {
+    final groups = <String, List<NotificationItem>>{};
+    for (final item in items) {
+      groups.putIfAbsent(item.kind, () => <NotificationItem>[]).add(item);
+    }
+    return groups;
+  }
+
+  Widget _list() {
     final items = _items ?? const <NotificationItem>[];
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        if (items.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Center(child: Text('暂无新通知。', key: Key('inbox-empty'))),
-          )
-        else
-          for (final item in items) _row(item),
-        const SizedBox(height: 12),
-        const Text(
-          '仅「待确认」的好友邀请可在此处理：接受/拒绝需要再次确认，结果以宿主返回为准；'
-          '其他通知只读。',
-          key: Key('inbox-footer'),
+    final children = <Widget>[];
+    if (items.isEmpty) {
+      children.add(
+        const StatusPanel(
+          icon: Icons.mark_email_read_outlined,
+          title: '暂无新通知。',
+          titleKey: Key('inbox-empty'),
         ),
-      ],
+      );
+    } else {
+      var index = 0;
+      _grouped(items).forEach((kind, group) {
+        final cards = <Widget>[
+          for (final item in group)
+            JyEntrance(index: index++, child: _card(item)),
+        ];
+        children.add(
+          cards.length == 1
+              ? cards.first
+              : JyStackDeck(
+                  children: cards,
+                  summary: kind == 'friendRequest'
+                      ? '${cards.length} 条好友邀请'
+                      : '${cards.length} 条同类通知',
+                  expanded: _expandedKinds[kind] ?? false,
+                  onExpandedChanged: (open) =>
+                      setState(() => _expandedKinds[kind] = open),
+                ),
+        );
+        children.add(const SizedBox(height: JySpace.md));
+      });
+    }
+    children.add(
+      Padding(
+        padding: const EdgeInsets.only(top: JySpace.sm, bottom: JySpace.xl),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: ExcludeSemantics(
+                child: Icon(
+                  Icons.info_outline_rounded,
+                  size: 16,
+                  color: JyPalette.of(context).text3,
+                ),
+              ),
+            ),
+            const SizedBox(width: JySpace.sm),
+            Expanded(
+              child: Text(
+                '仅「待确认」的好友邀请可在此处理：接受/拒绝需要再次确认，结果以宿主返回为准；'
+                '其他通知只读。',
+                key: const Key('inbox-footer'),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: JyPalette.of(context).text3),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    return ListView(
+      padding: EdgeInsets.symmetric(horizontal: _pagePad, vertical: JySpace.sm),
+      children: children,
     );
   }
 
-  Widget _row(NotificationItem item) {
+  Widget _statusChip(
+    String label, {
+    required Color background,
+    required Color foreground,
+    IconData? icon,
+  }) {
+    return Container(
+      decoration: ShapeDecoration(
+        color: background,
+        shape: JyShapes.rounded(JyRadius.pill),
+      ),
+      padding: const EdgeInsets.symmetric(
+        horizontal: JySpace.md,
+        vertical: JySpace.xs,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 16, color: foreground),
+            const SizedBox(width: JySpace.xs),
+          ],
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium
+                ?.copyWith(color: foreground),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _card(NotificationItem item) {
+    final palette = JyPalette.of(context);
+    final text = Theme.of(context).textTheme;
     final outcome = _outcomes[item.refId];
     final actionable = _actionable(item);
     final busy = _busyRefId != null;
-    final trailing = <Widget>[];
+    final actions = <Widget>[];
+    Widget? trailingStatus;
     if (outcome?.label != null) {
-      trailing.add(Text(outcome!.label!));
+      trailingStatus = outcome!.label == '已接受'
+          ? _statusChip(
+              outcome.label!,
+              background: palette.success.withValues(alpha: 0.16),
+              foreground: palette.success,
+              icon: Icons.check_rounded,
+            )
+          : _statusChip(
+              outcome.label!,
+              background: palette.raised,
+              foreground: palette.text2,
+              icon: Icons.close_rounded,
+            );
     } else if (actionable) {
-      if (widget.acceptFriend != null) {
-        trailing.add(
-          TextButton(
-            key: Key('inbox-accept-${item.refId}'),
-            onPressed: busy ? null : () => _respond(item, accept: true),
-            child: const Text('接受'),
+      if (widget.denyFriend != null) {
+        actions.add(
+          JyPressable(
+            borderRadius: BorderRadius.circular(JyRadius.md),
+            child: TextButton(
+              key: Key('inbox-deny-${item.refId}'),
+              onPressed: busy ? null : () => _respond(item, accept: false),
+              child: const Text('拒绝'),
+            ),
           ),
         );
       }
-      if (widget.denyFriend != null) {
-        trailing.add(
-          TextButton(
-            key: Key('inbox-deny-${item.refId}'),
-            onPressed: busy ? null : () => _respond(item, accept: false),
-            child: const Text('拒绝'),
+      if (widget.acceptFriend != null) {
+        actions.add(
+          JyPressable(
+            borderRadius: BorderRadius.circular(JyRadius.md),
+            child: TextButton(
+              key: Key('inbox-accept-${item.refId}'),
+              style: TextButton.styleFrom(
+                backgroundColor: palette.signalSoft,
+                foregroundColor: palette.onSignalSoft,
+              ),
+              onPressed: busy ? null : () => _respond(item, accept: true),
+              child: const Text('接受'),
+            ),
           ),
         );
       }
     } else {
-      trailing.add(Text(item.status));
+      trailingStatus = _statusChip(
+        item.status,
+        background: palette.raised,
+        foreground: palette.text2,
+      );
     }
-    return ListTile(
-      key: Key('notification-${item.refId}'),
-      leading: const Icon(Icons.person_add_alt),
-      title: Text(item.title),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return JySlab(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('来自 ${item.refId} · ${item.createdAt}'),
-          if (outcome?.failure != null)
-            Semantics(
-              liveRegion: true,
-              child: Text(
-                outcome!.failure!,
-                key: Key('inbox-action-failure-${item.refId}'),
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ListTile(
+            key: Key('notification-${item.refId}'),
+            leading: JyIconTile(
+              icon: item.kind == 'friendRequest'
+                  ? Icons.person_add_alt_rounded
+                  : Icons.notifications_none_rounded,
+            ),
+            title: Text(
+              item.title,
+              style: text.titleMedium?.copyWith(color: palette.text1),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '来自 ${item.refId} · ${item.createdAt}',
+                  style: text.bodySmall?.copyWith(
+                    color: palette.text3,
+                    fontFeatures: JyTypography.tabularFigures,
+                  ),
+                ),
+                if (outcome?.failure != null)
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      outcome!.failure!,
+                      key: Key('inbox-action-failure-${item.refId}'),
+                      style: TextStyle(color: palette.danger),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (actions.isNotEmpty)
+            Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(
+                JySpace.lg,
+                0,
+                JySpace.lg,
+                JySpace.md,
+              ),
+              child: OverflowBar(
+                alignment: MainAxisAlignment.end,
+                spacing: JySpace.sm,
+                overflowSpacing: JySpace.sm,
+                children: actions,
+              ),
+            )
+          else if (trailingStatus != null)
+            Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(
+                JySpace.lg,
+                0,
+                JySpace.lg,
+                JySpace.md,
+              ),
+              child: Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: trailingStatus,
               ),
             ),
         ],
       ),
-      trailing: trailing.length == 1
-          ? trailing.single
-          : Row(mainAxisSize: MainAxisSize.min, children: trailing),
     );
   }
 }
