@@ -555,43 +555,55 @@ class SettingsScreen extends StatelessWidget {
             ],
             const Divider(height: 32),
             const JySectionHeader(title: '通用'),
-            SwitchListTile(
-              title: const Text('开机自启动'),
-              subtitle: const Text('由当前设备的平台能力决定是否可用'),
-              value: model.autoStart,
-              onChanged: model.busy ? null : model.setAutoStart,
+            JyGroup(
+              children: [
+                SwitchListTile(
+                  title: const Text('开机自启动'),
+                  subtitle: const Text('由当前设备的平台能力决定是否可用'),
+                  value: model.autoStart,
+                  onChanged: model.busy ? null : model.setAutoStart,
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             const JySectionHeader(title: '外观'),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final item in const {
-                  ThemeMode.system: '跟随系统',
-                  ThemeMode.light: '浅色',
-                  ThemeMode.dark: '深色',
-                }.entries)
-                  ChoiceChip(
-                    label: Text(item.value),
-                    selected: model.themeMode == item.key,
-                    onSelected: model.busy
-                        ? null
-                        : (_) => model.setThemeMode(item.key),
+            JySlab(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final item in const {
+                        ThemeMode.system: '跟随系统',
+                        ThemeMode.light: '浅色',
+                        ThemeMode.dark: '深色',
+                      }.entries)
+                        ChoiceChip(
+                          label: Text(item.value),
+                          selected: model.themeMode == item.key,
+                          onSelected: model.busy
+                              ? null
+                              : (_) => model.setThemeMode(item.key),
+                        ),
+                    ],
                   ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            _FontScaleControl(model: model),
-            const Text('此设置同时应用于导航、消息和输入区域。'),
-            const SizedBox(height: 8),
-            SwitchListTile(
-              key: const Key('reduce-motion'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('减少动效'),
-              subtitle: const Text('关闭位移、缩放和弹簧动画，只保留不超过 120ms 的淡入淡出'),
-              value: model.reduceMotion,
-              onChanged: model.busy ? null : model.setReduceMotion,
+                  const SizedBox(height: 24),
+                  _FontScaleControl(model: model),
+                  const Text('此设置同时应用于导航、消息和输入区域。'),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    key: const Key('reduce-motion'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('减少动效'),
+                    subtitle: const Text('关闭位移、缩放和弹簧动画，只保留不超过 120ms 的淡入淡出'),
+                    value: model.reduceMotion,
+                    onChanged: model.busy ? null : model.setReduceMotion,
+                  ),
+                ],
+              ),
             ),
             const Divider(height: 32),
             const JySectionHeader(title: '开发者'),
