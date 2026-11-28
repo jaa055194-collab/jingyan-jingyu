@@ -94,8 +94,10 @@ final class Live2DAvatarSession extends ChangeNotifier {
   String? _errorDetail;
 
   Live2DAvatarRenderer? _renderer;
+  Live2DSwitchCoordinator? _switcher;
   StreamSubscription<Live2DPreviewState>? _states;
   int _generation = 0;
+  int _switchId = 0;
   bool _disposed = false;
   bool _active = true;
 
@@ -186,6 +188,12 @@ final class Live2DAvatarSession extends ChangeNotifier {
       _notify();
       return;
     }
+    if (_active && _status == Live2DAvatarStatus.ready && _switcher != null) {
+      // Visible switch: stage the new model behind the old one and cross-fade.
+      // The old model stays until the incoming first frame succeeds.
+      await _switchTo(renderer, directory);
+      return;
+    }
     _status = Live2DAvatarStatus.loading;
     _notify();
     await _serveAndLoad(renderer, directory);
@@ -253,6 +261,7 @@ final class Live2DAvatarSession extends ChangeNotifier {
     }
     _releaseRenderer();
     _renderer = renderer;
+    _switcher = Live2DSwitchCoordinator(host: renderer.controller.host);
     _states = renderer.controller.states.listen(_onControllerState);
     _errorText = null;
     _errorDetail = null;
@@ -316,6 +325,50 @@ final class Live2DAvatarSession extends ChangeNotifier {
           // completes with an error, so ignore it here.
           .catchError((Object _) {}),
     );
+  }
+
+  Future<void> _switchTo(
+    Live2DAvatarRenderer renderer,
+    String directory,
+  ) async {
+    final Live2DStoredModel? model = _model;
+    final Live2DSwitchCoordinator? switcher = _switcher;
+    if (model == null || switcher == null) return;
+    String served;
+    try {
+      served = await renderer.serve(directory);
+    } on Object catch (error) {
+      if (identical(renderer, _renderer)) {
+        _fail('无法读取本机形象文件。', detail: _cleanText('$error'));
+      }
+      return;
+    }
+    if (_disposed || !identical(renderer, _renderer)) return;
+    final String baseUrl = served.endsWith('/') ? served : '$served/';
+    final String model3Url = '$baseUrl${Uri(path: model.model3).path}';
+    final String loadId = 'switch-${++_switchId}';
+    try {
+      await switcher.preload(
+        loadId: loadId,
+        modelId: model.id,
+        model3Url: model3Url,
+        textureUrls: const <String>[],
+        profileRev: profileRev,
+      );
+      await switcher.swap(loadId: loadId);
+      if (_disposed || !identical(renderer, _renderer)) return;
+      _status = Live2DAvatarStatus.ready;
+      _notify();
+    } on Object catch (error) {
+      if (_disposed || !identical(renderer, _renderer)) return;
+      // The viewer kept the old model on a rejected/failed swap. Fall back to
+      // a normal reload so the selected model still becomes visible.
+      _status = Live2DAvatarStatus.loading;
+      _notify();
+      await _serveAndLoad(renderer, directory);
+      _errorDetail = _cleanText('$error');
+      _notify();
+    }
   }
 
   void _onControllerState(Live2DPreviewState state) {
@@ -383,10 +436,13 @@ final class Live2DAvatarSession extends ChangeNotifier {
 
   void _releaseRenderer() {
     final StreamSubscription<Live2DPreviewState>? states = _states;
+    final Live2DSwitchCoordinator? switcher = _switcher;
     final Live2DAvatarRenderer? renderer = _renderer;
     _states = null;
+    _switcher = null;
     _renderer = null;
     if (states != null) unawaited(states.cancel());
+    if (switcher != null) unawaited(switcher.close());
     renderer?.dispose();
   }
 

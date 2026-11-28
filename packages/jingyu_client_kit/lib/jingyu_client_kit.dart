@@ -14,6 +14,7 @@ export 'src/live2d_param_proposal.dart';
 export 'src/live2d_profile.dart';
 export 'src/live2d_renderer_bridge.dart';
 export 'src/live2d_renderer_controller.dart';
+export 'src/live2d_switch_coordinator.dart';
 export 'src/live2d_store.dart';
 export 'src/local_message_cache.dart';
 export 'src/outbox.dart' hide OutboxCheckpoint;

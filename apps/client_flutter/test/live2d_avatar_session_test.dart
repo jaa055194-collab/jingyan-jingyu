@@ -304,6 +304,50 @@ void main() {
     expect(renderer.host.commands.last['cmd'], 'pause');
   });
 
+  test('a visible model switch preloads and swaps without releasing the old model',
+      () async {
+    store.addModel('m1', active: true);
+    final session = Live2DAvatarSession(openStore: () async => store);
+    addTearDown(session.dispose);
+    await session.refresh();
+    final renderer = _FakeRenderer();
+    session.attach(renderer);
+    await _flush();
+    renderer.host.emit(<String, Object?>{
+      'event': 'ready',
+      'modelId': 'm1',
+      'profileRev': 1,
+    });
+    await _flush();
+
+    store.addModel('m2', active: true);
+    final switchFuture = session.onActiveModelChanged();
+    await _flush();
+    final preload = renderer.host.commands.last;
+    expect(preload['cmd'], 'preload');
+    expect(preload['modelId'], 'm2');
+    final loadId = preload['loadId'];
+    expect(loadId, isA<String>());
+    renderer.host.emit(<String, Object?>{
+      'event': 'preloaded',
+      'loadId': loadId,
+    });
+    await _flush();
+    expect(renderer.host.commands.last['cmd'], 'swap');
+    expect(renderer.host.commands.last['loadId'], loadId);
+    renderer.host.emit(<String, Object?>{
+      'event': 'swapped',
+      'loadId': loadId,
+      'modelId': 'm2',
+      'profileRev': 1,
+    });
+    await _flush();
+    await switchFuture;
+    expect(session.modelId, 'm2');
+    expect(session.status, Live2DAvatarStatus.ready);
+    expect(renderer.disposed, isFalse);
+  });
+
   test('re-reading the same active model does not reload', () async {
     store.addModel('m1', active: true);
     final session = Live2DAvatarSession(openStore: () async => store);
