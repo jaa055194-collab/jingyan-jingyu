@@ -2,8 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
 import '../../net/model_diagnostics_api.dart';
-import '../../ui/jy_palette.dart';
-import '../../ui/jy_tokens.dart';
+import '../../ui/ui.dart';
 
 /// Read-only "模型能力与预算诊断" screen.
 ///
@@ -893,19 +892,30 @@ class _SectionCard extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Card(
-    margin: const EdgeInsets.only(bottom: 12),
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 4),
-          Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 8),
-          child,
-        ],
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: JySpace.md),
+    child: JySlab(
+      padding: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(JySpace.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(color: JyPalette.of(context).text1),
+            ),
+            const SizedBox(height: JySpace.xs),
+            Text(
+              subtitle,
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: JyPalette.of(context).text2),
+            ),
+            const SizedBox(height: JySpace.sm),
+            child,
+          ],
+        ),
       ),
     ),
   );
