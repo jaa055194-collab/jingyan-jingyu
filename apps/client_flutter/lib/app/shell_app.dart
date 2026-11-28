@@ -577,9 +577,16 @@ class _ShellHomeState extends State<_ShellHome> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Center(
-                  child: Text(
-                    model.online ? '在线' : '离线',
-                    style: Theme.of(context).textTheme.labelLarge,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      JyStatusDot(online: model.online),
+                      const SizedBox(width: 6),
+                      Text(
+                        model.online ? '在线' : '离线',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -648,25 +655,16 @@ class _ShellHomeState extends State<_ShellHome> {
                       if (model.busy)
                         const JyBusyIndicator(label: '正在处理', linear: true),
                       if (model.error != null)
-                        Material(
-                          color: Theme.of(context).colorScheme.errorContainer,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Semantics(
-                                    liveRegion: true,
-                                    child: Text(model.error!),
-                                  ),
-                                ),
-                                IconButton(
-                                  tooltip: '关闭提示',
-                                  onPressed: model.clearError,
-                                  icon: const Icon(Icons.close),
-                                ),
-                              ],
-                            ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            JySpace.lg,
+                            JySpace.sm,
+                            JySpace.lg,
+                            0,
+                          ),
+                          child: JyBanner(
+                            message: model.error!,
+                            onClose: model.clearError,
                           ),
                         ),
                       if (activity != null &&
