@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
 
 import '../ui/jy_motion.dart';
+import '../ui/jy_dock.dart';
 import '../net/creative_api.dart';
 import '../net/host_connection.dart';
 import '../net/notification_api.dart';
@@ -121,6 +122,13 @@ class _ShellHomeState extends State<_ShellHome> {
     Icons.people_outline,
     Icons.photo_library_outlined,
     Icons.inbox_outlined,
+    Icons.public,
+  ];
+  static const iconsSelected = [
+    Icons.chat_bubble,
+    Icons.people,
+    Icons.photo_library,
+    Icons.inbox,
     Icons.public,
   ];
   void select(String id) async {
@@ -612,17 +620,18 @@ class _ShellHomeState extends State<_ShellHome> {
         ),
         bottomNavigationBar: wide || showChat || settings
             ? null
-            : NavigationBar(
+            : JyDock(
                 selectedIndex: destination,
-                onDestinationSelected: (value) => setState(() {
+                onSelected: (value) => setState(() {
                   widget.navigation.generation++;
                   destination = value;
                   mobileChat = false;
                 }),
-                destinations: [
+                items: [
                   for (var i = 0; i < labels.length; i++)
-                    NavigationDestination(
-                      icon: Icon(icons[i]),
+                    JyDockItem(
+                      icon: icons[i],
+                      selectedIcon: iconsSelected[i],
                       label: labels[i],
                     ),
                 ],
