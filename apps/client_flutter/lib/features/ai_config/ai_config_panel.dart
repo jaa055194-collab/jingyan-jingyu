@@ -1,7 +1,9 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../../app/status_panel.dart';
 import '../../net/owner_ai_direct_api.dart';
 import '../../net/owner_ai_readiness_api.dart';
+import '../../ui/ui.dart';
 
 /// One read-only configuration row. These values describe saved host metadata
 /// only; none of them means a model/worker is available, a budget is admitted,
@@ -266,12 +268,14 @@ class _AiConfigPanelState extends State<AiConfigPanel> {
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: Text(widget.title)),
     body: ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(JySpace.lg),
       children: [
-        const Text(
+        Text(
           '只读体检：以下为宿主返回的已保存配置元数据，不等于模型可用、不等于预算获批、不等于已授权回复；本页不写入配置、不配置密钥、不发起模型调用。',
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: JyPalette.of(context).text2),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: JySpace.md),
         if (widget.loadForAccount != null &&
             widget.ownedAiAccountIds.isNotEmpty)
           Padding(
@@ -293,37 +297,41 @@ class _AiConfigPanelState extends State<AiConfigPanel> {
           ),
         if (_loading)
           const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Center(child: CircularProgressIndicator()),
+            padding: EdgeInsets.symmetric(vertical: JySpace.xl),
+            child: Center(child: JyBusyIndicator(label: '正在读取配置体检')),
           ),
         if (_unknown)
-          Padding(
+          StatusPanel(
             key: const Key('ai-config-unknown'),
-            padding: const EdgeInsets.only(top: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text('状态未知：未连接宿主或读取失败；不会自动重试。'),
-                SizedBox(height: 4),
-                Text('未知不代表未配置，也不代表已配置。'),
-              ],
-            ),
+            tone: StatusTone.error,
+            icon: Icons.help_outline_rounded,
+            title: '状态未知：未连接宿主或读取失败；不会自动重试。',
+            detail: '未知不代表未配置，也不代表已配置。',
           ),
         if (_snapshot != null)
           for (final entry in _snapshot!.entries)
             Padding(
-              key: ValueKey('ai-config-entry-${entry.title}'),
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('${entry.title} · ${_statusLabel(entry.status)}'),
-                  for (final line in entry.lines)
-                    SelectableText(
-                      line,
-                      style: Theme.of(context).textTheme.bodySmall,
+              padding: const EdgeInsets.only(bottom: JySpace.md),
+              child: JySlab(
+                key: ValueKey('ai-config-entry-${entry.title}'),
+                tone: JyTone.raised,
+                padding: const EdgeInsets.all(JySpace.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${entry.title} · ${_statusLabel(entry.status)}',
+                      style: Theme.of(context).textTheme.titleSmall
+                          ?.copyWith(color: JyPalette.of(context).text1),
                     ),
-                ],
+                    for (final line in entry.lines)
+                      SelectableText(
+                        line,
+                        style: Theme.of(context).textTheme.bodySmall
+                            ?.copyWith(color: JyPalette.of(context).text2),
+                      ),
+                  ],
+                ),
               ),
             ),
       ],
