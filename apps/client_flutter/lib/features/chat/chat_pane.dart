@@ -5,6 +5,11 @@ import 'package:jingyu_core/jingyu_core.dart';
 
 import '../../app/shell_view_model.dart';
 import '../../app/status_panel.dart';
+import '../../ui/jy_palette.dart';
+import '../../ui/jy_presence.dart';
+import '../../ui/jy_surfaces.dart';
+import '../../ui/jy_tokens.dart';
+import '../../ui/jy_typography.dart';
 import '../favorites/favorites_screen.dart';
 import 'chat_pins_dialog.dart';
 import 'message_favorite_action.dart';
@@ -38,61 +43,66 @@ class ConversationList extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Column(
     children: [
+      // One compact action row (pages/conversations.md section 2); it wraps
+      // on small screens and large text instead of scrolling sideways.
       Padding(
-        padding: const EdgeInsets.all(16),
-        child: FilledButton.icon(
-          key: const Key('create-group'),
-          onPressed:
-              model.authenticated &&
-                  model.online &&
-                  !model.locked &&
-                  !model.busy
-              ? () => create(context)
-              : null,
-          icon: const Icon(Icons.group_add_outlined),
-          label: const Text('创建群聊'),
+        padding: const EdgeInsets.fromLTRB(
+          JySpace.lg,
+          JySpace.md,
+          JySpace.lg,
+          JySpace.sm,
+        ),
+        child: Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: Wrap(
+            spacing: JySpace.sm,
+            runSpacing: JySpace.sm,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              FilledButton.icon(
+                key: const Key('create-group'),
+                onPressed:
+                    model.authenticated &&
+                        model.online &&
+                        !model.locked &&
+                        !model.busy
+                    ? () => create(context)
+                    : null,
+                icon: const Icon(Icons.group_add_outlined),
+                label: const Text('创建群聊'),
+              ),
+              TextButton.icon(
+                key: const Key('refresh-conversations'),
+                onPressed: model.authenticated && !model.locked && !model.busy
+                    ? model.refreshConversations
+                    : null,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('刷新会话'),
+              ),
+              if (FavoritesScreen.canOpen(model))
+                TextButton.icon(
+                  key: const Key('open-favorites'),
+                  onPressed: () => FavoritesScreen.open(context, model),
+                  icon: const Icon(Icons.bookmark_border_rounded),
+                  label: const Text('我的收藏'),
+                ),
+            ],
+          ),
         ),
       ),
-      TextButton.icon(
-        key: const Key('refresh-conversations'),
-        onPressed: model.authenticated && !model.locked && !model.busy
-            ? model.refreshConversations
-            : null,
-        icon: const Icon(Icons.refresh),
-        label: const Text('刷新会话'),
-      ),
-      if (FavoritesScreen.canOpen(model))
-        TextButton.icon(
-          key: const Key('open-favorites'),
-          onPressed: () => FavoritesScreen.open(context, model),
-          icon: const Icon(Icons.bookmark_border),
-          label: const Text('我的收藏'),
-        ),
       Expanded(
         child: model.conversations.isEmpty
             ? _ConversationsStatus(model: model)
             : ListView(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: JySpace.sm,
+                  vertical: JySpace.xs,
+                ),
                 children: [
                   for (final conversation in model.conversations)
-                    ListTile(
-                      key: ValueKey(conversation.id),
+                    _ConversationRow(
+                      conversation: conversation,
                       selected: model.selectedConversationId == conversation.id,
-                      leading: CircleAvatar(
-                        child: Text(
-                          conversation.title.isEmpty
-                              ? '?'
-                              : conversation.title.characters.first,
-                        ),
-                      ),
-                      title: Text(conversation.title),
-                      subtitle: Text(
-                        conversation.preview,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: conversation.unread > 0
-                          ? Badge(label: Text('${conversation.unread}'))
-                          : null,
                       onTap: model.busy
                           ? null
                           : () => onSelected(conversation.id),
@@ -102,6 +112,119 @@ class ConversationList extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// One conversation: a 44dp avatar (two stacked discs for a group), the
+/// title, a one-line preview, and the time above the unread badge. The
+/// selected row gets a signalSoft fill and a 3dp signal bar on its leading
+/// edge, so the selection does not rely on colour alone.
+class _ConversationRow extends StatelessWidget {
+  const _ConversationRow({
+    required this.conversation,
+    required this.selected,
+    required this.onTap,
+  });
+  final ShellConversation conversation;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  static String _timeLabel(DateTime at, DateTime now) {
+    final local = at.toLocal();
+    String two(int value) => value.toString().padLeft(2, '0');
+    if (local.year == now.year &&
+        local.month == now.month &&
+        local.day == now.day) {
+      return '${two(local.hour)}:${two(local.minute)}';
+    }
+    if (local.year == now.year) return '${local.month}/${local.day}';
+    return '${local.year}/${local.month}/${local.day}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = JyPalette.of(context);
+    final text = Theme.of(context).textTheme;
+    final at = conversation.lastActivityAt;
+    final unread = conversation.unread > 0;
+    final shape = JyShapes.rounded(JyRadius.md);
+    final tile = ListTile(
+      key: ValueKey(conversation.id),
+      selected: selected,
+      minTileHeight: 64,
+      shape: shape,
+      selectedTileColor: palette.signalSoft,
+      contentPadding: const EdgeInsetsDirectional.only(
+        start: JySpace.md,
+        end: JySpace.md,
+      ),
+      leading: JyAvatar(
+        label: conversation.title.isEmpty
+            ? '?'
+            : conversation.title.characters.first,
+        kind: conversation.kind == 'group'
+            ? JyAvatarKind.group
+            : JyAvatarKind.person,
+      ),
+      title: Text(
+        conversation.title,
+        style: text.titleMedium?.copyWith(
+          color: selected ? palette.onSignalSoft : palette.text1,
+          fontWeight: unread ? FontWeight.w700 : null,
+        ),
+      ),
+      subtitle: Text(
+        conversation.preview,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: text.bodyMedium?.copyWith(color: palette.text2),
+      ),
+      trailing: at == null && !unread
+          ? null
+          : Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (at != null)
+                  Text(
+                    _timeLabel(at, DateTime.now()),
+                    style: text.labelSmall?.copyWith(
+                      color: palette.text3,
+                      fontFeatures: JyTypography.tabularFigures,
+                    ),
+                  ),
+                if (at != null && unread) const SizedBox(height: JySpace.xs),
+                if (unread) JyBadge(count: conversation.unread),
+              ],
+            ),
+      onTap: onTap,
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Stack(
+        children: [
+          tile,
+          if (selected)
+            PositionedDirectional(
+              start: 0,
+              top: JySpace.md,
+              bottom: JySpace.md,
+              child: IgnorePointer(
+                child: SizedBox(
+                  width: 3,
+                  child: DecoratedBox(
+                    decoration: ShapeDecoration(
+                      color: palette.signal,
+                      shape: JyShapes.pill,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Why the conversation list is empty, most specific cause first: not signed
