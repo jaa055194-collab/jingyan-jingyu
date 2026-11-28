@@ -164,13 +164,13 @@ class JyMotionScope extends InheritedWidget { const JyMotionScope({required bool
 
 // 交互动效
 class JyPressable extends StatefulWidget { child; onTap; onLongPress; pressedScale = 0.97; borderRadius; enabled = true; }
-class JyExpand extends StatelessWidget { required bool expanded; required Widget child; }
+class JyExpand extends StatelessWidget { required bool expanded; required Widget child; bool maintainState = false; }  // 收起后移出树；maintainState 为 true 时留在树里（offstage）
 class JyChevron extends StatelessWidget { required bool expanded; }
 class JyStackDeck extends StatefulWidget { required List<Widget> children; required String summary;
   bool? expanded; ValueChanged<bool>? onExpandedChanged; int maxPeek = 2; }
 class JyEntrance extends StatefulWidget { required int index; required Widget child; }  // 首次出现错开进场
 enum JySwitcherStyle { fadeThrough, sharedAxisX }
-class JySwitcher extends StatelessWidget { required Widget child; JySwitcherStyle style = fadeThrough; }  // child 带 Key
+class JySwitcher extends StatelessWidget { required Widget child; JySwitcherStyle style = fadeThrough; bool reverse = false; }  // child 带 Key；换 key 时旧子树当帧移除，只做新子树进场；reverse 从起始侧进入
 class JyPageTransitionsBuilder extends PageTransitionsBuilder {}
 
 // 表面与行
