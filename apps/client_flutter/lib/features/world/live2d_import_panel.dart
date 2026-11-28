@@ -408,6 +408,7 @@ class _Live2DImportPanelState extends State<Live2DImportPanel>
       _busy = false;
       _keptErrors = errors;
     });
+    if (errors.isEmpty) widget.onAvatarEnabled?.call();
   }
 
   static Future<void> _discard(Live2DImportSession session) async {
