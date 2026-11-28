@@ -74,6 +74,30 @@
 - 上游：<https://github.com/SakuraMotion/PurismCore/tree/v1.1.0/src/samples/viewer>
 - 改编位置：`packages/jingyu_live2d_web/web/live2d_renderer_webgl.js` 的相机计算（`updateProjection()`、`computeFit()`，对应上游 `WorldToScreen()`、`FitView()`），以及 `DRAW_FRAGMENT_SHADER` 的乘算色、屏幕色与预乘步骤。文件头保留原版权与许可声明。
 
+### pixi-live2d-display（FocusController）
+
+- 来源：`guansss/pixi-live2d-display@31317b37d5e22955a44d5b11f37f421e94a11269`，`src/cubism-common/FocusController.ts` L3-86 与 `src/cubism4/Cubism4InternalModel.ts` L239-249。
+- 许可证：MIT（Copyright (c) 2020 Guan）。上游：<https://github.com/guansss/pixi-live2d-display>
+- 改编位置：`packages/jingyu_live2d_web/web/live2d_behavior.js` 的视线焦点插值与视线参数映射（ES5 重写）。文件头保留原版权与 MIT 全文。
+
+### airi（眨眼、扫视间隔、呼吸与口型释放）
+
+- 来源：`moeru-ai/airi@68b35a7b4e7f90fb5e3d6bcbe98c98b17c1cfa9f`，`packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts` L317-507、L791-840，`stores/motion-control.ts` L100-106、L148-215，`utils/eye-motions.ts` L1-32，`composables/live2d/animation.ts` L19-23。
+- 许可证：MIT（Copyright (c) 2024-PRESENT Neko Ayaka）。上游：<https://github.com/moeru-ai/airi>
+- 改编位置：`packages/jingyu_live2d_web/web/live2d_behavior.js` 的眨眼时序与缓动、扫视目标与间隔表、呼吸曲线默认值、口型 smoothstep 释放（ES5 重写）。文件头保留原版权与 MIT 全文。
+
+### Kokoro-Engine（口型平滑因子）
+
+- 来源：`chyinan/Kokoro-Engine@0272b2f009011dace181570a4faf7455c7ba8426`，`src/features/live2d/LipSyncProcessor.ts` L80-88。
+- 许可证：MIT（Copyright (c) 2026 chyinan）。上游：<https://github.com/chyinan/Kokoro-Engine>
+- 改编位置：`packages/jingyu_live2d_web/web/live2d_behavior.js` 的帧率无关口型 EMA 因子。文件头保留原版权与 MIT 全文。
+
+### motion3 / exp3 公开格式
+
+- 来源：Live2D/CubismSpecs `e2de04dd4514`，`FileFormats/motion3.json.md` 与 `FileFormats/exp3.json.md`（公开格式说明；上游没有 LICENSE 文件）。
+- 上游：<https://github.com/Live2D/CubismSpecs>
+- 用途：`packages/jingyu_live2d_web/web/live2d_motion.js` 按公开格式说明自行实现解析与求值，没有复制其文本或 Cubism Framework/Samples 的代码；Cubism Framework 只用作行为参考，未随包分发。
+
 ### Flutter 平台视图测试替身
 
 - 来源：flutter/flutter 的 `packages/flutter/test/services/fake_platform_views.dart`
