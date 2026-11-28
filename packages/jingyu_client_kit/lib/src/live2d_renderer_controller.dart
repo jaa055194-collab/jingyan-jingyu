@@ -145,6 +145,85 @@ final class Live2DPreviewController {
     await host.send(_bridge.parameterCommand(id, value));
   }
 
+  /// Releases the model parameter [id] that [setParameter] holds, so the
+  /// viewer's own animation drives it again. Completes with a [StateError]
+  /// unless [state] is [Live2DPreviewState.ready], and with a
+  /// [FormatException] for an ID the model did not report; neither sends
+  /// anything.
+  Future<void> clearParameter(String id) async {
+    if (_state != Live2DPreviewState.ready) {
+      throw StateError('parameters require a ready preview');
+    }
+    await host.send(_bridge.parameterClearCommand(id));
+  }
+
+  /// Shows the expression [name] on the ready preview. Completes with a
+  /// [StateError] unless [state] is [Live2DPreviewState.ready], and with a
+  /// [FormatException] for a name the model did not report; neither sends
+  /// anything.
+  Future<void> setExpression(String name) async {
+    if (_state != Live2DPreviewState.ready) {
+      throw StateError('expressions require a ready preview');
+    }
+    await host.send(_bridge.expressionCommand(name));
+  }
+
+  /// Clears the expression of the ready preview. Completes with a
+  /// [StateError] unless [state] is [Live2DPreviewState.ready], without
+  /// sending anything.
+  Future<void> clearExpression() async {
+    if (_state != Live2DPreviewState.ready) {
+      throw StateError('expressions require a ready preview');
+    }
+    await host.send(_bridge.expressionClearCommand());
+  }
+
+  /// Plays motion [index] of [group] on the ready preview. Completes with a
+  /// [StateError] unless [state] is [Live2DPreviewState.ready], and with a
+  /// [FormatException] for a negative index or a group or index the model
+  /// did not report; neither sends anything.
+  Future<void> playMotion(String group, int index) async {
+    if (_state != Live2DPreviewState.ready) {
+      throw StateError('motions require a ready preview');
+    }
+    await host.send(_bridge.motionCommand(group, index));
+  }
+
+  /// Sets the parameters the ready preview blinks with ([blink]) and the ones
+  /// it moves for lip sync ([mouth]). Completes with a [StateError] unless
+  /// [state] is [Live2DPreviewState.ready], and with a [FormatException] for
+  /// a list the bridge rejects; neither sends anything.
+  Future<void> setBehavior({
+    required List<String> blink,
+    required List<String> mouth,
+  }) async {
+    if (_state != Live2DPreviewState.ready) {
+      throw StateError('behavior requires a ready preview');
+    }
+    await host.send(_bridge.behaviorCommand(blink: blink, mouth: mouth));
+  }
+
+  /// Makes the ready preview blink once. Completes with a [StateError] unless
+  /// [state] is [Live2DPreviewState.ready], without sending anything.
+  Future<void> blink() async {
+    if (_state != Live2DPreviewState.ready) {
+      throw StateError('blinks require a ready preview');
+    }
+    await host.send(_bridge.blinkCommand());
+  }
+
+  /// Plays the lip-sync envelope [levels], one mouth level from 0 to 1 per
+  /// [stepMs] milliseconds, on the ready preview; an empty list stops speech.
+  /// Completes with a [StateError] unless [state] is
+  /// [Live2DPreviewState.ready], and with a [FormatException] for levels or a
+  /// step the bridge rejects; neither sends anything.
+  Future<void> speak(List<double> levels, int stepMs) async {
+    if (_state != Live2DPreviewState.ready) {
+      throw StateError('speech requires a ready preview');
+    }
+    await host.send(_bridge.speakCommand(levels, stepMs));
+  }
+
   /// Releases the viewer and makes this controller terminal. Safe to call
   /// repeatedly.
   Future<void> close() async {

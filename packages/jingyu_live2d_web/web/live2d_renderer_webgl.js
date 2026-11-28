@@ -17,7 +17,8 @@
 //   * Blend modes: v5 constant-flag additive/multiplicative are approximated;
 //     v6 extended color+alpha blend modes and offscreen compositing are ignored.
 //   * Physics, motions, expressions, breath/eye-blink and the model3 motion
-//     pipeline are out of scope. setExpression/setMotion only record intent.
+//     pipeline are implemented by live2d_motion.js, live2d_behavior.js and the
+//     viewer protocol layer, not by this pixel adapter.
 //   * Texture color-space, premultiplied-alpha nuances and sustained frame
 //     rate are untested here. Large atlases are downscaled to fit the GPU's
 //     MAX_TEXTURE_SIZE and a memory budget (live2d_texture_budget.js), but
@@ -102,8 +103,6 @@
     generation: 0,
     modelRef: null,
     lastPositions: null,
-    expression: null,
-    motion: null,
     warned: {},
   };
 
@@ -889,28 +888,6 @@
     }
   }
 
-  function setExpression(name) {
-    state.expression = name == null ? null : String(name);
-    warnOnce(
-      'expression',
-      'setExpression("' +
-        state.expression +
-        '") recorded but not applied: this adapter renders the current core pose; expression/motion playback needs a motion pipeline (not included)'
-    );
-  }
-
-  function setMotion(group, index) {
-    state.motion = { group: group, index: index };
-    warnOnce(
-      'motion',
-      'setMotion(' +
-        JSON.stringify(group) +
-        ', ' +
-        index +
-        ') recorded but not applied: motion playback needs a model3 motion pipeline (not included)'
-    );
-  }
-
   function dispose() {
     state.disposed = true;
     state.ready = false;
@@ -965,8 +942,6 @@
     version: '0.1.0-webgl-adapter',
     prepare: prepare,
     draw: draw,
-    setExpression: setExpression,
-    setMotion: setMotion,
     dispose: dispose,
     // Exposed for debugging / device validation only.
     diagnostics: function () {

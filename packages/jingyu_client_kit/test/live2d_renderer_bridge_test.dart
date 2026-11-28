@@ -300,5 +300,199 @@ void main() {
       rejected.markLoading('m');
       expect(rejected.modelInfoError, isNull);
     });
+
+    Live2DRendererBridge readyWith(Map<String, Object?> report) =>
+        Live2DRendererBridge()
+          ..markLoading('m')
+          ..handleEvent({
+            'event': 'ready',
+            'modelId': 'm',
+            'profileRev': 1,
+            ...report,
+          });
+
+    Map<String, Object?> param(String id) =>
+        {'id': id, 'min': 0, 'max': 1, 'default': 1};
+
+    test('behaviour commands require a ready renderer', () {
+      final loading = Live2DRendererBridge()..markLoading('m');
+      for (final bridge in [Live2DRendererBridge(), loading]) {
+        expect(() => bridge.parameterClearCommand('A'), throwsStateError);
+        expect(() => bridge.expressionCommand('F01'), throwsStateError);
+        expect(bridge.expressionClearCommand, throwsStateError);
+        expect(() => bridge.motionCommand('Idle', 0), throwsStateError);
+        expect(
+          () => bridge.behaviorCommand(blink: const [], mouth: const []),
+          throwsStateError,
+        );
+        expect(bridge.blinkCommand, throwsStateError);
+        expect(() => bridge.speakCommand(const [], 10), throwsStateError);
+      }
+    });
+
+    test('parameterClearCommand names a reported parameter', () {
+      final bridge = readyWith({
+        'parameters': [param('ParamEyeLOpen')],
+      });
+      expect(bridge.parameterClearCommand('ParamEyeLOpen'), {
+        'cmd': 'clearParam',
+        'name': 'ParamEyeLOpen',
+      });
+      for (final name in ['', ' ', 'ParamMissing']) {
+        expect(
+          () => bridge.parameterClearCommand(name),
+          throwsFormatException,
+          reason: name,
+        );
+      }
+      expect(readyWith({}).parameterClearCommand('ParamAny'), {
+        'cmd': 'clearParam',
+        'name': 'ParamAny',
+      });
+    });
+
+    test('expression commands check reported names and clear with null', () {
+      final bridge = readyWith({
+        'expressions': ['F01'],
+      });
+      expect(bridge.expressionCommand('F01'), {
+        'cmd': 'setExpression',
+        'name': 'F01',
+      });
+      for (final name in ['', ' ', 'F02']) {
+        expect(
+          () => bridge.expressionCommand(name),
+          throwsFormatException,
+          reason: name,
+        );
+      }
+      expect(bridge.expressionClearCommand(), {
+        'cmd': 'setExpression',
+        'name': null,
+      });
+      expect(readyWith({}).expressionCommand('F02'), {
+        'cmd': 'setExpression',
+        'name': 'F02',
+      });
+    });
+
+    test('motionCommand allows an empty group and checks reported counts', () {
+      final bridge = readyWith({
+        'motions': [
+          {'group': '', 'count': 1},
+          {'group': 'Idle', 'count': 2},
+        ],
+      });
+      expect(bridge.motionCommand('', 0), {
+        'cmd': 'setMotion',
+        'group': '',
+        'index': 0,
+      });
+      expect(bridge.motionCommand('Idle', 1)['index'], 1);
+      const rejected = [('', 1), ('Idle', 2), ('Tap', 0), ('Idle', -1)];
+      for (final (group, index) in rejected) {
+        expect(
+          () => bridge.motionCommand(group, index),
+          throwsFormatException,
+          reason: '$group/$index',
+        );
+      }
+      final unreported = readyWith({});
+      expect(unreported.motionCommand('Any', 5)['group'], 'Any');
+      expect(unreported.motionCommand('', 0)['group'], '');
+      expect(() => unreported.motionCommand('', -1), throwsFormatException);
+    });
+
+    test('behaviorCommand checks both ID lists', () {
+      final bridge = readyWith({
+        'parameters': [
+          param('ParamEyeLOpen'),
+          param('ParamEyeROpen'),
+          param('ParamMouthOpenY'),
+        ],
+      });
+      final blink = ['ParamEyeLOpen', 'ParamEyeROpen'];
+      final command = bridge.behaviorCommand(
+        blink: blink,
+        mouth: const ['ParamMouthOpenY'],
+      );
+      blink.clear();
+      expect(command, {
+        'cmd': 'behavior',
+        'blink': ['ParamEyeLOpen', 'ParamEyeROpen'],
+        'mouth': ['ParamMouthOpenY'],
+      });
+      expect(bridge.behaviorCommand(blink: const [], mouth: const []), {
+        'cmd': 'behavior',
+        'blink': <String>[],
+        'mouth': <String>[],
+      });
+      final rejected = [
+        ['ParamEyeLOpen', 'ParamEyeLOpen'],
+        ['ParamEyeLOpen', ''],
+        [' '],
+        ['ParamMissing'],
+      ];
+      for (final ids in rejected) {
+        expect(
+          () => bridge.behaviorCommand(blink: ids, mouth: const []),
+          throwsFormatException,
+          reason: 'blink $ids',
+        );
+        expect(
+          () => bridge.behaviorCommand(blink: const [], mouth: ids),
+          throwsFormatException,
+          reason: 'mouth $ids',
+        );
+      }
+      final unreported = readyWith({});
+      final most = List.generate(64, (i) => 'P$i');
+      expect(
+        unreported.behaviorCommand(blink: most, mouth: most)['blink'],
+        most,
+      );
+      final tooMany = [...most, 'P64'];
+      expect(
+        () => unreported.behaviorCommand(blink: tooMany, mouth: const []),
+        throwsFormatException,
+      );
+      expect(
+        () => unreported.behaviorCommand(blink: const [], mouth: tooMany),
+        throwsFormatException,
+      );
+    });
+
+    test('blinkCommand and speakCommand carry checked values', () {
+      final bridge = readyWith({});
+      expect(bridge.blinkCommand(), {'cmd': 'blink'});
+      expect(bridge.speakCommand([0, 0.5, 1], 40), {
+        'cmd': 'speak',
+        'levels': [0, 0.5, 1],
+        'step': 40,
+      });
+      expect(bridge.speakCommand(const [], 10), {
+        'cmd': 'speak',
+        'levels': <double>[],
+        'step': 10,
+      });
+      final most = List.filled(3000, 0.25);
+      expect(bridge.speakCommand(most, 100)['levels'], hasLength(3000));
+      final rejected = <(List<double>, int)>[
+        ([...most, 0.25], 10),
+        ([-0.1], 10),
+        ([1.1], 10),
+        ([double.nan], 10),
+        ([double.infinity], 10),
+        ([0.5], 9),
+        ([0.5], 101),
+      ];
+      for (final (levels, step) in rejected) {
+        expect(
+          () => bridge.speakCommand(levels, step),
+          throwsFormatException,
+          reason: '${levels.length} levels at $step ms',
+        );
+      }
+    });
   });
 }

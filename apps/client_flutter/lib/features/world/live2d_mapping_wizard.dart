@@ -97,6 +97,7 @@ class Live2DMappingWizard extends StatefulWidget {
     this.infoError,
     this.groups = const <Live2DModelGroup>[],
     required this.setParameter,
+    required this.clearParameter,
     required this.onClose,
     required this.onChanged,
   });
@@ -113,8 +114,13 @@ class Live2DMappingWizard extends StatefulWidget {
   /// they are not known.
   final List<Live2DModelGroup> groups;
 
-  /// Sets a parameter of the preview, in the parameter's own units.
+  /// Sets a parameter of the preview, in the parameter's own units. The
+  /// preview holds the value until [clearParameter].
   final Future<void> Function(String id, double value) setParameter;
+
+  /// Hands a parameter back to the preview, so its own motions, blinking and
+  /// lip sync move it again.
+  final Future<void> Function(String id) clearParameter;
 
   /// Leaves the wizard. Choices that were not saved are discarded.
   final VoidCallback onClose;
@@ -142,6 +148,7 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
   double _trialValue = 0;
   String? _driveError;
   final Map<String, double> _queued = {};
+  final Set<String> _releasing = {};
   final Set<String> _driving = {};
 
   bool _busy = false;
@@ -230,26 +237,41 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
     _ => _motionsReady,
   };
 
-  /// Sends the latest value for [id] once the previous one went out, so a
-  /// dragged slider does not queue up commands.
+  /// Sends the latest value for [id] once the previous command went out, so
+  /// a dragged slider does not queue up commands. A release that has not gone
+  /// out yet is dropped: the new drag ends with its own.
   void _drive(String id, double value) {
+    _releasing.remove(id);
     _queued[id] = value;
-    if (!_driving.add(id)) return;
-    unawaited(_send(id));
+    _start(id);
+  }
+
+  /// Clears [id] once its last value went out, so the preview's own motions
+  /// move it again instead of holding the trial value.
+  void _release(String id) {
+    _releasing.add(id);
+    _start(id);
+  }
+
+  void _start(String id) {
+    if (_driving.add(id)) unawaited(_send(id));
   }
 
   Future<void> _send(String id) async {
     try {
-      for (
-        var value = _queued.remove(id);
-        value != null;
-        value = _queued.remove(id)
-      ) {
-        await widget.setParameter(id, value);
+      while (true) {
+        if (_queued.remove(id) case final value?) {
+          await widget.setParameter(id, value);
+        } else if (_releasing.remove(id)) {
+          await widget.clearParameter(id);
+        } else {
+          break;
+        }
       }
       if (mounted && _driveError != null) setState(() => _driveError = null);
     } catch (_) {
       _queued.remove(id);
+      _releasing.remove(id);
       if (mounted) setState(() => _driveError = '预览暂时无法试动。');
     } finally {
       _driving.remove(id);
@@ -466,7 +488,7 @@ class _Live2DMappingWizardState extends State<Live2DMappingWizard> {
             },
       onChangeEnd: (_) {
         setState(() => _trialSlot = null);
-        _drive(parameter.id, initial);
+        _release(parameter.id);
       },
     );
   }

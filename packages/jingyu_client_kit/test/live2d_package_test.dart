@@ -543,18 +543,110 @@ void main() {
       expect(r.groups, isEmpty);
     });
 
-    test('hands the groups to the preview without writing them out', () {
-      final bundle = prepareLive2DPreview(_zip(_validEntries(
-        model3Text: withGroups([
-          {'Target': 'Parameter', 'Name': 'LipSync', 'Ids': ['ParamMouthOpenY']},
-        ]),
-      )));
+    Map<String, Object?> manifestOf(Live2DPreviewBundle bundle) =>
+        jsonDecode(utf8.decode(bundle.files[bundle.model3Name]!))
+            as Map<String, Object?>;
+
+    Live2DPreviewBundle prepare(Object? groups) {
+      final model3Text = withGroups(groups);
+      return prepareLive2DPreview(_zip(_validEntries(model3Text: model3Text)));
+    }
+
+    test('hands the groups to the preview, which writes out LipSync', () {
+      final bundle = prepare([
+        {'Target': 'Parameter', 'Name': 'LipSync', 'Ids': ['ParamMouthOpenY']},
+      ]);
       expect(groupsOf(bundle.groups), [
         {'name': 'LipSync', 'ids': ['ParamMouthOpenY']},
       ]);
-      final manifest =
-          jsonDecode(utf8.decode(bundle.files[bundle.model3Name]!));
-      expect(manifest, isNot(contains('Groups')));
+      expect(manifestOf(bundle)['Groups'], [
+        {'Target': 'Parameter', 'Name': 'LipSync', 'Ids': ['ParamMouthOpenY']},
+      ]);
+    });
+
+    test('writes out only the first EyeBlink and the first LipSync', () {
+      final bundle = prepare([
+        {'Target': 'Parameter', 'Name': 'Custom', 'Ids': ['ParamAngleX']},
+        {'Target': 'Part', 'Name': 'LipSync', 'Ids': ['ParamMouthOpenY', 3]},
+        {'Name': 'eyeblink', 'Ids': ['ParamCheek']},
+        {'Name': 'EyeBlink', 'Ids': ['ParamEyeLOpen', '', 'ParamEyeROpen']},
+        {'Name': 'EyeBlink', 'Ids': ['ParamBrowLY']},
+        {'Name': 'LipSync', 'Ids': ['ParamMouthForm']},
+      ]);
+      // Every group still feeds mapping suggestions.
+      expect(bundle.groups.map((group) => group.name), [
+        'Custom', 'LipSync', 'eyeblink', 'EyeBlink', 'EyeBlink', 'LipSync',
+      ]);
+      expect(manifestOf(bundle)['Groups'], [
+        {
+          'Target': 'Parameter',
+          'Name': 'EyeBlink',
+          'Ids': ['ParamEyeLOpen', 'ParamEyeROpen'],
+        },
+        {'Target': 'Parameter', 'Name': 'LipSync', 'Ids': ['ParamMouthOpenY']},
+      ]);
+      // The first group of a name counts even without IDs, as in Cubism.
+      final empty = prepare([
+        {'Name': 'EyeBlink', 'Ids': <String>[]},
+        {'Name': 'EyeBlink', 'Ids': ['ParamEyeLOpen']},
+      ]);
+      expect(manifestOf(empty)['Groups'], [
+        {'Target': 'Parameter', 'Name': 'EyeBlink', 'Ids': <String>[]},
+      ]);
+    });
+
+    test('writes no Groups without an EyeBlink or LipSync group', () {
+      final cases = <Object?>[
+        null,
+        'EyeBlink',
+        <Object?>[],
+        [
+          {'Target': 'Parameter', 'Name': 'Custom', 'Ids': ['ParamAngleX']},
+          {'Name': 'eyeblink', 'Ids': ['ParamEyeLOpen']},
+          {'Name': 'LipSync ', 'Ids': ['ParamMouthOpenY']},
+          {'Ids': ['ParamMouthOpenY']},
+        ],
+      ];
+      for (final groups in cases) {
+        expect(manifestOf(prepare(groups)), isNot(contains('Groups')),
+            reason: '$groups');
+      }
+      final plain = prepareLive2DPreview(_zip(_validEntries()));
+      expect(manifestOf(plain), isNot(contains('Groups')));
+    });
+
+    test('counts the written groups against the preview byte cap', () {
+      final zip = _zip([
+        ..._validEntries(
+          model3Text: jsonEncode({
+            'Version': 3,
+            'FileReferences': {
+              'Moc': 'avatar.moc3',
+              'Textures': ['tex0.png'],
+              'Expressions': [
+                {'Name': 'Smile', 'File': 'smile.exp3.json'},
+              ],
+            },
+            'Groups': [
+              {'Name': 'EyeBlink', 'Ids': ['ParamEyeLOpen', 'ParamEyeROpen']},
+            ],
+          }),
+        ),
+        _textFile('model/smile.exp3.json', '{}'),
+      ]);
+      int sizeOf(Live2DPreviewBundle bundle) =>
+          bundle.files.values.fold(0, (sum, file) => sum + file.length);
+      // An exact fit keeps the expression; one byte less leaves it out.
+      final size = sizeOf(prepareLive2DPreview(zip));
+      final fit = prepareLive2DPreview(zip, maxPreviewBytes: size);
+      expect(fit.warnings, isEmpty);
+      expect(fit.files, contains('expression-0.exp3.json'));
+      final capped = prepareLive2DPreview(zip, maxPreviewBytes: size - 1);
+      expect(capped.files, isNot(contains('expression-0.exp3.json')));
+      expect(capped.warnings.single.message, contains('byte cap'));
+      for (final bundle in [fit, capped]) {
+        expect(manifestOf(bundle), contains('Groups'));
+      }
     });
   });
 

@@ -35,7 +35,10 @@ final class Live2DPreviewBundle {
 
   /// The package manifest's `Groups`, as [Live2DPackageValidation.groups]
   /// reads them, for mapping suggestions (`Live2DParamProposal`). The
-  /// generated manifest leaves them out.
+  /// generated manifest keeps only the first `EyeBlink` and the first
+  /// `LipSync` of them, in that order, as `Parameter` groups, so the viewer
+  /// blinks and lip-syncs with the model's own parameters; it has no `Groups`
+  /// when the package has neither.
   final List<Live2DModelGroup> groups;
 
   /// Non-fatal problems: expressions and motions left out of the preview.
@@ -945,6 +948,8 @@ Live2DPackageValidation _validateLive2DPackage(
   }
 
   final ok = issues.isEmpty;
+  final modelGroups =
+      ok ? _readGroups(root['Groups']) : const <Live2DModelGroup>[];
   final warnings = <Live2DPackageIssue>[];
   if (ok) {
     // Keep each usable expression and motion under a generated name. A problem
@@ -961,7 +966,18 @@ Live2DPackageValidation _validateLive2DPackage(
           for (final path in texturePaths) previewNames[path]!,
       ],
     };
-    final generated = {'Version': 3, 'FileReferences': refs};
+    // The model's own blink and lip-sync parameters, which the viewer looks
+    // up as Cubism does: the first EyeBlink group, then the first LipSync.
+    final keptGroups = [
+      for (final name in const ['EyeBlink', 'LipSync'])
+        for (final group in modelGroups.where((g) => g.name == name).take(1))
+          {'Target': 'Parameter', 'Name': name, 'Ids': group.ids},
+    ];
+    final generated = {
+      'Version': 3,
+      'FileReferences': refs,
+      if (keptGroups.isNotEmpty) 'Groups': keptGroups,
+    };
     // The generated model3's size so far: exact, so that no expression or
     // motion can push it over the preview byte cap.
     var generatedBytes = preview == null ? 0 : jsonBytes(generated);
@@ -1161,7 +1177,7 @@ Live2DPackageValidation _validateLive2DPackage(
     totalPixels: totalPixels,
     sha256Hex: sha256Hex,
     issues: List<Live2DPackageIssue>.unmodifiable(issues),
-    groups: ok ? _readGroups(root['Groups']) : const [],
+    groups: modelGroups,
     warnings: List<Live2DPackageIssue>.unmodifiable(warnings),
   );
 }

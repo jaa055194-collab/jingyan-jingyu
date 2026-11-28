@@ -20,6 +20,11 @@ const RENDERER = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'live2d_renderer_webgl.js'),
   'utf8',
 );
+// The animation modules the viewer needs, loaded before it like the page does.
+const ANIMATION = ['live2d_motion.js', 'live2d_behavior.js'].map((name) => ({
+  name,
+  source: fs.readFileSync(path.join(__dirname, '..', 'web', name), 'utf8'),
+}));
 
 function createHarness(options = {}) {
   // `posted` (parent.postMessage) and `channelPosts` (Live2DBridge) hold every
@@ -34,6 +39,7 @@ function createHarness(options = {}) {
   const rendererCalls = [];
   let nextRafId = 1;
   let draws = 0;
+  let shownModel = null;
 
   const record = (target, message) => {
     log.push(message);
@@ -85,6 +91,7 @@ function createHarness(options = {}) {
           release: () => rendererCalls.push('model.release'),
         };
         if (options.modelParts) model.parts = options.modelParts;
+        shownModel = model;
         return model;
       },
     },
@@ -106,9 +113,6 @@ function createHarness(options = {}) {
       if (options.drawFails) throw new Error('first draw failed');
       if (draws === options.drawFailsAt) throw new Error('draw ' + draws + ' failed');
     },
-    setExpression: (name) => rendererCalls.push('renderer.expression:' + name),
-    setMotion: (group, index) =>
-      rendererCalls.push('renderer.motion:' + group + ':' + index),
     dispose: () => rendererCalls.push('renderer.dispose'),
   };
 
@@ -222,6 +226,11 @@ function createHarness(options = {}) {
   // The viewer checks expression and motion files with TextDecoder.
   if (!options.noTextDecoder) globals.TextDecoder = TextDecoder;
   const context = vm.createContext(globals);
+  if (!options.noAnimation) {
+    for (const module of ANIMATION) {
+      vm.runInContext(module.source, context, { filename: module.name });
+    }
+  }
   vm.runInContext(VIEWER, context, { filename: 'live2d_viewer.js' });
 
   const flush = async () => {
@@ -249,11 +258,12 @@ function createHarness(options = {}) {
         listener({ data: JSON.stringify(message) });
       }
     },
-    flushOneFrame() {
+    model: () => shownModel,
+    flushOneFrame(time) {
       const entry = rafCallbacks.entries().next();
       if (entry.done) return;
       rafCallbacks.delete(entry.value[0]);
-      entry.value[1]();
+      entry.value[1](time);
     },
     rafPending: () => rafCallbacks.size,
   };
@@ -421,9 +431,23 @@ test('ready from a model without ranges, parts, expressions or motions lists bar
   assert.deepEqual(wire(empty.posted[0].motions), []);
 });
 
-// Any JSON object loads as an exp3 or motion3 file; its fields are read only
-// when it is applied.
-const OBJECT_FILE = '{"Version":3}';
+// A staged file is listed only when live2d_motion.js can compile it. This
+// minimal object is both a valid exp3 and a valid motion3 file.
+const OBJECT_FILE = JSON.stringify({
+  Version: 3,
+  Type: 'Live2D Expression',
+  Parameters: [],
+  Meta: { Duration: 1 },
+  Curves: [],
+});
+// One parameter curve from 0 to 1, for checking that the frame pipeline plays.
+const MOUTH_MOTION = JSON.stringify({
+  Version: 3,
+  Meta: { Duration: 2, FadeInTime: 0, FadeOutTime: 0 },
+  Curves: [{
+    Target: 'Parameter', Id: 'ParamMouthOpenY', Segments: [0, 0, 0, 1, 1],
+  }],
+});
 const fileFetches = (harness) =>
   harness.fetches.filter((url) => /\.(exp3|motion3)\.json$/.test(url));
 
@@ -504,11 +528,12 @@ test('ready leaves out an expression or a motion group whose file does not load'
       'array-root.exp3.json': '[]',
       'not-utf8.exp3.json': new Uint8Array([0x7b, 0xff, 0x7d]),
       // The root object and 64 arrays: 65 levels, one past the staging limit.
-      'too-deep.exp3.json': '{"a":' + arrays(64) + '}',
+      'too-deep.exp3.json': OBJECT_FILE.slice(0, -1) + ',"a":' + arrays(64) + '}',
       'bom.exp3.json': '\ufeff' + OBJECT_FILE,
-      'deepest.exp3.json': '{"a":' + arrays(63) + '}',
+      'deepest.exp3.json': OBJECT_FILE.slice(0, -1) + ',"a":' + arrays(63) + '}',
       // Brackets in a string, after an escaped quote, do not nest.
-      'brackets.exp3.json': JSON.stringify({ a: '"' + '['.repeat(70) }),
+      'brackets.exp3.json': OBJECT_FILE.slice(0, -1) + ',"a":' +
+        JSON.stringify('"' + '['.repeat(70)) + '}',
       'loads.motion3.json': OBJECT_FILE,
     },
   });
@@ -802,7 +827,7 @@ test('the WebGL adapter exposes its public surface without a GPU', () => {
   });
   const surface = sandbox.window.Live2DRenderer;
   assert.ok(surface);
-  for (const member of ['prepare', 'draw', 'setExpression', 'setMotion', 'dispose']) {
+  for (const member of ['prepare', 'draw', 'dispose']) {
     assert.equal(typeof surface[member], 'function', member);
   }
 });
@@ -915,4 +940,71 @@ test('a load that saw a loss fails even if the context came back meanwhile', asy
   await harness.flush();
   assert.deepEqual(summary(harness.posted), ['error:webgl_context_lost']);
   assert.ok(!harness.rendererCalls.includes('renderer.draw'));
+});
+
+test('a viewer without the animation modules fails the load', async () => {
+  const harness = createHarness({ noAnimation: true });
+  harness.send(loadCommand);
+  await harness.flush();
+  assert.deepEqual(summary(harness.posted), ['error:load_failed']);
+  assert.match(harness.posted[0].message, /animation modules missing/);
+});
+
+test('an idle motion plays in the frame pipeline', async () => {
+  const harness = createHarness({
+    fileReferences: { Motions: { Idle: [{ File: 'idle.motion3.json' }] } },
+    files: { 'idle.motion3.json': MOUTH_MOTION },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+  assert.equal(harness.model().parameters.values[0], 0);
+  harness.flushOneFrame(0);
+  harness.flushOneFrame(50);
+  harness.flushOneFrame(150);
+  assert.ok(harness.model().parameters.values[0] > 0.05);
+  assert.ok(harness.rendererCalls.includes('model.update'));
+});
+
+test('setParam is held across frames and clearParam releases it', async () => {
+  const harness = createHarness();
+  harness.send(loadCommand);
+  await harness.flush();
+  harness.send({ cmd: 'setParam', name: 'ParamMouthOpenY', value: 0.75 });
+  harness.flushOneFrame(0);
+  harness.flushOneFrame(16);
+  assert.equal(harness.model().parameters.values[0], 0.75);
+  harness.send({ cmd: 'clearParam', name: 'ParamMouthOpenY' });
+  harness.flushOneFrame(32);
+  assert.notEqual(harness.model().parameters.values[0], 0.75);
+  assert.equal(harness.posted.length, 1);
+});
+
+test('animation commands accept listed names and reject malformed ones', async () => {
+  const harness = createHarness({
+    fileReferences: {
+      Expressions: [{ Name: 'Smile', File: 'smile.exp3.json' }],
+      Motions: { Idle: [{ File: 'idle.motion3.json' }] },
+    },
+    files: {
+      'smile.exp3.json': OBJECT_FILE,
+      'idle.motion3.json': MOUTH_MOTION,
+    },
+  });
+  harness.send(loadCommand);
+  await harness.flush();
+  harness.send({ cmd: 'setExpression', name: 'Smile' });
+  harness.send({ cmd: 'setExpression', name: null });
+  harness.send({ cmd: 'setMotion', group: 'Idle', index: 0 });
+  harness.send({ cmd: 'behavior', blink: ['ParamEyeLOpen'], mouth: [] });
+  harness.send({ cmd: 'blink' });
+  harness.send({ cmd: 'speak', levels: [0, 1, 0], step: 20 });
+  harness.flushOneFrame(0);
+  assert.deepEqual(harness.posted.map((message) => message.event), ['ready']);
+  harness.send({ cmd: 'setExpression', name: 'Missing' });
+  harness.send({ cmd: 'setMotion', group: 'Idle', index: 3 });
+  harness.send({ cmd: 'behavior', blink: ['ParamMissing'], mouth: [] });
+  harness.send({ cmd: 'speak', levels: [2], step: 20 });
+  assert.deepEqual(harness.posted.slice(1).map((message) => message.code), [
+    'bad_command', 'bad_command', 'bad_command', 'bad_command',
+  ]);
 });

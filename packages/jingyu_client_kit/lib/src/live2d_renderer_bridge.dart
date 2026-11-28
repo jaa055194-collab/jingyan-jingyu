@@ -10,6 +10,18 @@ import 'live2d_model_info.dart';
 enum Live2DRendererState { idle, loading, ready, error, disposed }
 
 class Live2DRendererBridge {
+  /// The most IDs each list of a [behaviorCommand] may hold.
+  static const int maxBehaviorIds = 64;
+
+  /// The most levels a [speakCommand] may carry.
+  static const int maxSpeakLevels = 3000;
+
+  /// The shortest [speakCommand] step, in milliseconds.
+  static const int minSpeakStepMs = 10;
+
+  /// The longest [speakCommand] step, in milliseconds.
+  static const int maxSpeakStepMs = 100;
+
   Live2DRendererState _state = Live2DRendererState.idle;
   String? _modelId;
   int? _profileRev;
@@ -121,9 +133,10 @@ class Live2DRendererBridge {
 
   /// The `setParam` command. The viewer writes [value] to the model parameter
   /// [name] as it is, so it is in the parameter's own units rather than
-  /// 0..1. The value must be finite. When the model reported its parameter
-  /// IDs, [name] must be one of them, and when it reported this parameter's
-  /// range, [value] must lie within it.
+  /// 0..1, and holds it there every frame until a [parameterClearCommand] for
+  /// [name] or a new load releases it. The value must be finite. When the
+  /// model reported its parameter IDs, [name] must be one of them, and when it
+  /// reported this parameter's range, [value] must lie within it.
   Map<String, Object?> parameterCommand(String name, double value) {
     if (_state != Live2DRendererState.ready) {
       throw StateError('parameters require a ready renderer');
@@ -148,6 +161,26 @@ class Live2DRendererBridge {
     return {'cmd': 'setParam', 'name': name, 'value': value};
   }
 
+  /// The `clearParam` command: the viewer stops holding the value a
+  /// [parameterCommand] set for [name], so its own animation drives that
+  /// parameter again. When the model reported its parameter IDs, [name] must
+  /// be one of them.
+  Map<String, Object?> parameterClearCommand(String name) {
+    if (_state != Live2DRendererState.ready) {
+      throw StateError('parameters require a ready renderer');
+    }
+    if (name.trim().isEmpty) {
+      throw const FormatException('parameter name must be non-empty');
+    }
+    final ids = modelInfo?.parameterIds;
+    if (ids != null && !ids.contains(name)) {
+      throw FormatException('unknown parameter', name);
+    }
+    return {'cmd': 'clearParam', 'name': name};
+  }
+
+  /// The `setExpression` command. When the model reported its expressions,
+  /// [name] must be one of them.
   Map<String, Object?> expressionCommand(String name) {
     if (_state != Live2DRendererState.ready) {
       throw StateError('expressions require a ready renderer');
@@ -155,17 +188,122 @@ class Live2DRendererBridge {
     if (name.trim().isEmpty) {
       throw const FormatException('expression name must be non-empty');
     }
+    final names = modelInfo?.expressionNames;
+    if (names != null && !names.contains(name)) {
+      throw FormatException('unknown expression', name);
+    }
     return {'cmd': 'setExpression', 'name': name};
   }
 
+  /// The `setExpression` command without a name, which clears the expression.
+  Map<String, Object?> expressionClearCommand() {
+    if (_state != Live2DRendererState.ready) {
+      throw StateError('expressions require a ready renderer');
+    }
+    return const {'cmd': 'setExpression', 'name': null};
+  }
+
+  /// The `setMotion` command. [group] may be empty, as Cubism allows, and
+  /// [index] must not be negative. When the model reported its motions,
+  /// [group] must be one of their groups and [index] below its count.
   Map<String, Object?> motionCommand(String group, int index) {
     if (_state != Live2DRendererState.ready) {
       throw StateError('motions require a ready renderer');
     }
-    if (group.trim().isEmpty || index < 0) {
-      throw const FormatException('invalid motion reference');
+    if (index < 0) {
+      throw FormatException('motion index must not be negative', index);
+    }
+    final info = modelInfo;
+    if (info != null && info.motions != null) {
+      final count = info.motionCount(group);
+      if (count == null) {
+        throw FormatException('unknown motion group', group);
+      }
+      if (index >= count) {
+        throw FormatException('motion index beyond its group', index);
+      }
     }
     return {'cmd': 'setMotion', 'group': group, 'index': index};
+  }
+
+  /// The `behavior` command: the parameters the viewer blinks with and the
+  /// ones it moves for lip sync. Each list holds at most [maxBehaviorIds]
+  /// distinct, non-empty IDs, and an empty list leaves that behaviour without
+  /// parameters. When the model reported its parameter IDs, every ID must be
+  /// one of them.
+  Map<String, Object?> behaviorCommand({
+    required List<String> blink,
+    required List<String> mouth,
+  }) {
+    if (_state != Live2DRendererState.ready) {
+      throw StateError('behavior requires a ready renderer');
+    }
+    _checkBehaviorIds(blink, 'blink');
+    _checkBehaviorIds(mouth, 'mouth');
+    return {
+      'cmd': 'behavior',
+      'blink': List<String>.unmodifiable(blink),
+      'mouth': List<String>.unmodifiable(mouth),
+    };
+  }
+
+  void _checkBehaviorIds(List<String> ids, String list) {
+    if (ids.length > maxBehaviorIds) {
+      throw FormatException('$list holds more than $maxBehaviorIds IDs');
+    }
+    final known = modelInfo?.parameterIds;
+    final seen = <String>{};
+    for (final id in ids) {
+      if (id.trim().isEmpty) {
+        throw FormatException('$list IDs must be non-empty');
+      }
+      if (!seen.add(id)) {
+        throw FormatException('$list repeats an ID', id);
+      }
+      if (known != null && !known.contains(id)) {
+        throw FormatException('unknown $list parameter', id);
+      }
+    }
+  }
+
+  /// The `blink` command: one blink at once, unless one is running.
+  Map<String, Object?> blinkCommand() {
+    if (_state != Live2DRendererState.ready) {
+      throw StateError('blinks require a ready renderer');
+    }
+    return const {'cmd': 'blink'};
+  }
+
+  /// The `speak` command: a lip-sync envelope the viewer plays from its next
+  /// frame, one mouth level from 0 to 1 per [stepMs] milliseconds, which it
+  /// maps onto each lip-sync parameter's range. [levels] holds at most
+  /// [maxSpeakLevels] finite levels, and an empty list stops speech. [stepMs]
+  /// runs from [minSpeakStepMs] to [maxSpeakStepMs].
+  Map<String, Object?> speakCommand(List<double> levels, int stepMs) {
+    if (_state != Live2DRendererState.ready) {
+      throw StateError('speech requires a ready renderer');
+    }
+    if (levels.length > maxSpeakLevels) {
+      throw const FormatException(
+        'speech holds more than $maxSpeakLevels levels',
+      );
+    }
+    for (final level in levels) {
+      if (!level.isFinite || level < 0 || level > 1) {
+        throw FormatException('speech levels must be from 0 to 1', level);
+      }
+    }
+    if (stepMs < minSpeakStepMs || stepMs > maxSpeakStepMs) {
+      throw FormatException(
+        'speech step must be $minSpeakStepMs to $maxSpeakStepMs ms',
+        stepMs,
+      );
+    }
+    return {
+      'cmd': 'speak',
+      'levels': List<double>.unmodifiable(levels),
+      'step': stepMs,
+    };
   }
 
   Map<String, Object?> disposeCommand() => const {'cmd': 'dispose'};

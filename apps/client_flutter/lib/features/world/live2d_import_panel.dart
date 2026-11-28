@@ -649,6 +649,7 @@ class _Live2DImportPanelState extends State<Live2DImportPanel>
             infoError: _keptInfoError,
             groups: _groups[id] ?? const <Live2DModelGroup>[],
             setParameter: controller.setParameter,
+            clearParameter: controller.clearParameter,
             onClose: () => setState(() => _wizard = false),
             onChanged: () => setState(() {}),
           )

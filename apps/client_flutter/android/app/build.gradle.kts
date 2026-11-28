@@ -102,6 +102,8 @@ abstract class SyncLive2DViewerAssets : DefaultTask() {
             "live2d_viewer.js",
             "live2d_renderer_webgl.js",
             "live2d_texture_budget.js",
+            "live2d_motion.js",
+            "live2d_behavior.js",
         )) {
             val source = File(web, name)
             if (!source.isFile) {

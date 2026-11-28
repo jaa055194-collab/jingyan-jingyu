@@ -42,6 +42,8 @@ internal object Live2DViewerRoutes {
         "live2d_viewer.js" to JS,
         "live2d_renderer_webgl.js" to JS,
         "live2d_texture_budget.js" to JS,
+        "live2d_motion.js" to JS,
+        "live2d_behavior.js" to JS,
         "runtime/purismcore/purismcore.js" to JS,
     )
 

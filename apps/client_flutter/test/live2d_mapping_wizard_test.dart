@@ -1,5 +1,7 @@
 // Widget tests for the Live2D mapping wizard against an in-memory store
 // (live2d_fake_store.dart).
+import 'dart:async';
+
 import 'package:client_flutter/features/world/live2d_mapping_wizard.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jingyu_client_kit/jingyu_client_kit.dart';
@@ -31,9 +33,21 @@ final class _Wizard {
   _Wizard(this.store);
 
   final FakeLive2DFileStore store;
-  final List<(String, double)> sent = [];
+
+  /// The commands sent to the preview, in order: a value for setParameter,
+  /// null for clearParameter.
+  final List<(String, double?)> sent = [];
+
+  /// When set, each command waits for it, like a preview that has not
+  /// answered yet.
+  Future<void>? reply;
   int closed = 0;
   int changed = 0;
+
+  Future<void> send(String id, double? value) async {
+    sent.add((id, value));
+    await reply;
+  }
 }
 
 Future<_Wizard> _pump(
@@ -56,7 +70,8 @@ Future<_Wizard> _pump(
               modelId: 'm1',
               info: info,
               infoError: infoError,
-              setParameter: (id, value) async => wizard.sent.add((id, value)),
+              setParameter: wizard.send,
+              clearParameter: (id) => wizard.send(id, null),
               onClose: () => wizard.closed++,
               onChanged: () => wizard.changed++,
             ),
@@ -93,7 +108,7 @@ Future<void> _next(WidgetTester tester) async {
 
 void main() {
   testWidgets('preselects the suggestions; a slider drives the preview, then '
-      'restores the default', (tester) async {
+      'releases the parameter', (tester) async {
     final wizard = await _pump(tester, _info());
     expect(find.text('第 1/3 步：口型与眨眼（必填）'), findsOneWidget);
     expect(_value(tester, 'live2d-wizard-param-mouthOpen'), 0);
@@ -107,10 +122,50 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect({for (final (id, _) in wizard.sent) id}, {'ParamMouthOpenY'});
-    expect(wizard.sent.every((sent) => sent.$2 >= 0 && sent.$2 <= 1), isTrue);
-    expect(wizard.sent.any((sent) => sent.$2 > 0), isTrue);
-    expect(wizard.sent.last, ('ParamMouthOpenY', 0.0));
+    // Letting go clears the parameter instead of setting its default (0),
+    // which the preview would go on holding.
+    final values = [for (final (_, value) in wizard.sent) ?value];
+    expect(values, isNotEmpty);
+    expect(values.every((value) => value > 0 && value <= 1), isTrue);
+    expect(wizard.sent, hasLength(values.length + 1));
+    expect(wizard.sent.last, ('ParamMouthOpenY', null));
     expect(wizard.store.calls, isEmpty);
+  });
+
+  testWidgets('the release follows the last value; a drag before it went '
+      'out drops it', (tester) async {
+    final wizard = await _pump(tester, _info());
+    final slider = _key('live2d-wizard-slider-mouthOpen');
+    const id = 'ParamMouthOpenY';
+
+    // Until the preview answers, the later value and the release wait; then
+    // the latest value goes out, and the release after it.
+    var reply = Completer<void>();
+    wizard.reply = reply.future;
+    await tester.drag(slider, const Offset(300, 0));
+    expect(wizard.sent, hasLength(1));
+    reply.complete();
+    await tester.pumpAndSettle();
+    expect(wizard.sent, hasLength(3));
+    expect(wizard.sent[1].$2, greaterThan(wizard.sent[0].$2!));
+    expect(wizard.sent.last, (id, null));
+
+    // A new drag drives the preview again. One that starts before its
+    // release went out drops it, and ends with a release of its own.
+    reply = Completer<void>();
+    wizard.reply = reply.future;
+    await tester.drag(slider, const Offset(-100, 0));
+    expect(wizard.sent, hasLength(4));
+    final gesture = await tester.startGesture(tester.getCenter(slider));
+    await gesture.moveBy(const Offset(50, 0));
+    reply.complete();
+    await tester.pump();
+    expect(wizard.sent, hasLength(5));
+    expect(wizard.sent[4].$2, isNotNull);
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(wizard.sent, hasLength(6));
+    expect(wizard.sent.last, (id, null));
   });
 
   testWidgets('恢复建议值 resets page 1; 取消 leaves without writing', (tester) async {

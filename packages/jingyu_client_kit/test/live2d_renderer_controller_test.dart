@@ -87,6 +87,108 @@ void main() {
       expect(controller.state, Live2DPreviewState.ready);
     });
 
+    List<Future<void> Function()> behaviourCalls() {
+      return [
+        () => controller.clearParameter('ParamEyeLOpen'),
+        () => controller.setExpression('F01'),
+        controller.clearExpression,
+        () => controller.playMotion('Idle', 0),
+        () => controller.setBehavior(blink: const [], mouth: const []),
+        controller.blink,
+        () => controller.speak(const [], 10),
+      ];
+    }
+
+    test('the behaviour methods require a ready preview', () async {
+      for (final call in behaviourCalls()) {
+        await expectLater(call(), throwsStateError);
+      }
+      expect(host.commands, isEmpty);
+    });
+
+    test('the behaviour methods send checked commands', () async {
+      final ready = controller.start(
+        modelId: 'model.a',
+        model3Url: 'http://127.0.0.1:8000/model.model3.json',
+        textureUrls: const <String>[],
+        profileRev: 1,
+      );
+      host.emit({
+        'event': 'ready',
+        'modelId': 'model.a',
+        'profileRev': 1,
+        'parameters': [
+          for (final id in ['ParamEyeLOpen', 'ParamMouthOpenY'])
+            {'id': id, 'min': 0, 'max': 1, 'default': 1},
+        ],
+        'parts': <String>[],
+        'expressions': ['F01'],
+        'motions': [
+          {'group': '', 'count': 1},
+          {'group': 'Idle', 'count': 2},
+        ],
+      });
+      await ready;
+      final sent = host.commands.length;
+      await controller.clearParameter('ParamEyeLOpen');
+      await controller.setExpression('F01');
+      await controller.clearExpression();
+      await controller.playMotion('', 0);
+      await controller.playMotion('Idle', 1);
+      await controller.setBehavior(
+        blink: const ['ParamEyeLOpen'],
+        mouth: const ['ParamMouthOpenY'],
+      );
+      await controller.blink();
+      await controller.speak(const [0, 0.5, 1], 20);
+      await controller.speak(const [], 20);
+      expect(host.commands.skip(sent), [
+        {'cmd': 'clearParam', 'name': 'ParamEyeLOpen'},
+        {'cmd': 'setExpression', 'name': 'F01'},
+        {'cmd': 'setExpression', 'name': null},
+        {'cmd': 'setMotion', 'group': '', 'index': 0},
+        {'cmd': 'setMotion', 'group': 'Idle', 'index': 1},
+        {
+          'cmd': 'behavior',
+          'blink': ['ParamEyeLOpen'],
+          'mouth': ['ParamMouthOpenY'],
+        },
+        {'cmd': 'blink'},
+        {
+          'cmd': 'speak',
+          'levels': [0, 0.5, 1],
+          'step': 20,
+        },
+        {'cmd': 'speak', 'levels': <double>[], 'step': 20},
+      ]);
+
+      final checked = host.commands.length;
+      const unknown = ['ParamMissing'];
+      const none = <String>[];
+      final rejected = <Future<void> Function()>[
+        () => controller.clearParameter('ParamMissing'),
+        () => controller.setExpression('F02'),
+        () => controller.playMotion('Idle', 2),
+        () => controller.playMotion('Tap', 0),
+        () => controller.setBehavior(blink: unknown, mouth: none),
+        () => controller.setBehavior(blink: none, mouth: unknown),
+        () => controller.speak(const [1.5], 20),
+        () => controller.speak(const [0.5], 5),
+      ];
+      for (final call in rejected) {
+        await expectLater(call(), throwsFormatException);
+      }
+      expect(host.commands, hasLength(checked));
+      expect(controller.state, Live2DPreviewState.ready);
+
+      await controller.close();
+      final closed = host.commands.length;
+      for (final call in behaviourCalls()) {
+        await expectLater(call(), throwsStateError);
+      }
+      expect(host.commands, hasLength(closed));
+    });
+
     test(
       'starts loading, sends the load command and waits for first frame',
       () async {

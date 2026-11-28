@@ -5,7 +5,8 @@
 //
 // Protocol (kept in sync with `Live2DRendererBridge` in jingyu_client_kit and
 // the Android host in apps/client_flutter):
-//   Flutter -> viewer: load, setParam, setExpression, setMotion, dispose
+//   Flutter -> viewer: load, setParam, clearParam, setExpression, setMotion,
+//                      behavior, blink, speak, dispose
 //   viewer -> Flutter: boot (once, before any other event), ready, error
 // `ready` means the renderer adapter prepared and the first draw returned
 // without throwing. A core-only update is never reported as ready.
@@ -15,13 +16,14 @@
 // list is whole or absent, never cut short: a missing or malformed source, or
 // one with more than 4096 entries, leaves that field out.
 // `ready` also carries `expressions` (the Name of each staged model3
-// FileReferences.Expressions entry whose exp3 file loaded, in model3 order)
-// and `motions` ({group, count} for each FileReferences.Motions group whose
-// motion3 files all loaded). A model3 without the key reports an empty list.
+// FileReferences.Expressions entry whose exp3 file loaded and compiled for
+// playback, in model3 order) and `motions` ({group, count} for each
+// FileReferences.Motions group whose motion3 files all did). A model3 without
+// the key reports an empty list.
 // A malformed list, or one over the caps (1024 expressions, 4096 groups, 1024
 // motions in a group, 4096 motions), leaves that field out, and so does a page
 // without TextDecoder when the list has files to check. A file that does not
-// load only shapes the lists; it never fails the load.
+// load or compile only shapes the lists; it never fails the load.
 // Each `error` carries `message` and one of these `code` values:
 //   load_failed         the model could not be fetched, created or prepared
 //   render_failed       a frame update or draw threw, first frame or later
@@ -31,6 +33,29 @@
 // render_failed and webgl_context_lost release the model and stop the frame
 // loop. A later `load` starts over, but fails with webgl_context_lost until
 // the browser restores the context. `dispose` is terminal.
+//
+// Animation (live2d_motion.js and live2d_behavior.js; a load fails without
+// either). Each frame restores the parameter values saved after the previous
+// frame's motions, plays the motion queue, saves, then applies the
+// expression, blink, gaze, breath and lip sync, and last the values setParam
+// holds. Part opacities keep their values from frame to frame. Whenever no
+// other motion plays, a random motion of the first group named Idle (in any
+// letter case) starts. A load takes the blink and mouth parameters from the
+// model3 EyeBlink and LipSync groups. These commands need a ready model; a
+// malformed one is a bad_command that changes nothing:
+//   setParam {name, value}    holds a finite value, kept within the
+//                             parameter's range, until clearParam {name} or
+//                             the next load
+//   setExpression {name}      fades to a listed expression; null fades out
+//   setMotion {group, index}  plays a listed motion at force priority, from
+//                             its start even when it is playing; a looping
+//                             one plays until another motion replaces it
+//   behavior {blink, mouth}   replaces the blink and mouth parameter ID lists
+//                             (at most 64 model parameters each, no
+//                             duplicates, [] for none)
+//   blink {}                  blinks once now
+//   speak {levels, step}      plays a mouth envelope, one 0..1 level per
+//                             `step` ms (10..100, at most 3000); [] stops
 //
 // Transports. Viewer -> Flutter tries `Live2DBridge.postMessage` (an Android
 // web message listener or a webview_flutter JavaScript channel), then the
@@ -55,6 +80,8 @@
     loading: false,
     ready: false,
     disposed: false,
+    anim: null, // the shown model's animation (createAnimation)
+    lastFrameTime: null, // the previous animation frame's timestamp, in ms
   };
 
   function post(message) {
@@ -120,6 +147,8 @@
     if (state.moc && state.moc._release) state.moc._release();
     state.model = null;
     state.moc = null;
+    state.anim = null;
+    state.lastFrameTime = null;
     state.ready = false;
   }
 
@@ -268,7 +297,8 @@
     return entries;
   }
 
-  // [{group, urls}] in model3 order. [] without the key; null when the map is
+  // [{group, urls, fades}] in model3 order, fades[j] holding entry j's fade
+  // overrides (entryFades). [] without the key; null when the map is
   // malformed (a group name over 256 units, a group not a list, an entry not
   // an object, a File not a non-empty string) or over the caps. A group
   // without motions is left out, since a reported count is at least 1.
@@ -289,12 +319,14 @@
       total += list.length;
       if (total > MAX_READY_MOTIONS) return null;
       var urls = [];
+      var fades = [];
       for (var j = 0; j < list.length; j++) {
         var url = entryUrl(base, list[j]);
         if (!url) return null;
         urls.push(url);
+        fades.push(entryFades(list[j]));
       }
-      if (urls.length) entries.push({ group: names[i], urls: urls });
+      if (urls.length) entries.push({ group: names[i], urls: urls, fades: fades });
     }
     return entries;
   }
@@ -320,26 +352,57 @@
     return false;
   }
 
-  // True when the file loads as a JSON object: fetched, valid UTF-8 (a
-  // leading BOM is dropped), nested at most MAX_JSON_DEPTH deep, with an
-  // object root. Its fields are read when it is applied. Never throws.
-  async function loadsJsonObject(url) {
+  // The file as a JSON object, or null when it does not load as one: fetched,
+  // valid UTF-8 (a leading BOM is dropped), nested at most MAX_JSON_DEPTH
+  // deep, with an object root. Never throws.
+  async function loadJsonObject(url) {
     try {
       var bytes = await fetchBytes(url);
       var text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      if (exceedsJsonDepth(text, MAX_JSON_DEPTH)) return false;
-      return isObject(JSON.parse(text));
+      if (exceedsJsonDepth(text, MAX_JSON_DEPTH)) return null;
+      var json = JSON.parse(text);
+      return isObject(json) ? json : null;
     } catch (_) {
-      return false;
+      return null;
     }
   }
 
-  // {expressions, motions} for `ready`, where a null list is left out. An
-  // expression is listed when its file loads and a motion group when all of
-  // its files load, so a Name or a {group, index} keeps addressing the staged
-  // model3. Each distinct file is loaded once, at most MAX_PARALLEL_FETCHES
-  // at a time. Never throws.
-  async function readyExpressionsAndMotions(base, refs) {
+  // What `parser` of the live2d_motion.js API makes of a file's JSON, or null
+  // when it rejects it.
+  function compile(api, parser, json, extra) {
+    try {
+      return api[parser](json, extra) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // A model3 motion entry's FadeInTime or FadeOutTime, as the overrides
+  // parseMotion takes: only a finite number >= 0 is kept.
+  function entryFades(entry) {
+    var fades = {};
+    if (Number.isFinite(entry.FadeInTime) && entry.FadeInTime >= 0) {
+      fades.fadeIn = entry.FadeInTime;
+    }
+    if (Number.isFinite(entry.FadeOutTime) && entry.FadeOutTime >= 0) {
+      fades.fadeOut = entry.FadeOutTime;
+    }
+    return fades;
+  }
+
+  // Compiled expressions by Name and motion lists by group, for playback.
+  function emptyPlay() {
+    return { expressions: Object.create(null), motions: Object.create(null) };
+  }
+
+  // {expressions, motions, play}: the lists for `ready`, where a null list is
+  // left out, and the compiled entries (emptyPlay) for playback. An
+  // expression is listed when its file loads and compiles, and a motion group
+  // when all of its files do, so a Name or a {group, index} keeps addressing
+  // the staged model3. Each distinct file is loaded once, at most
+  // MAX_PARALLEL_FETCHES at a time. Never throws.
+  async function readyExpressionsAndMotions(base, refs, motionApi) {
+    var play = emptyPlay();
     try {
       var expressions = expressionEntries(base, refs);
       var motions = motionEntries(base, refs);
@@ -365,7 +428,7 @@
       var worker = async function () {
         while (next < pending.length) {
           var url = pending[next++];
-          loaded[url] = await loadsJsonObject(url);
+          loaded[url] = await loadJsonObject(url);
         }
       };
       var workers = [];
@@ -373,24 +436,221 @@
         workers.push(worker());
       }
       await Promise.all(workers);
-      var allLoaded = function (entry) {
-        return entry.urls.every(function (url) { return loaded[url]; });
-      };
-      var lists = { expressions: null, motions: null };
+      var lists = { expressions: null, motions: null, play: play };
       if (expressions) {
-        lists.expressions = expressions.filter(allLoaded).map(function (entry) {
-          return entry.name;
+        lists.expressions = [];
+        expressions.forEach(function (entry) {
+          var json = loaded[entry.urls[0]];
+          var expression = json ? compile(motionApi, 'parseExpression', json) : null;
+          if (!expression) return;
+          play.expressions[entry.name] = expression;
+          lists.expressions.push(entry.name);
         });
       }
       if (motions) {
-        lists.motions = motions.filter(allLoaded).map(function (entry) {
-          return { group: entry.group, count: entry.urls.length };
+        lists.motions = [];
+        motions.forEach(function (entry) {
+          var compiled = entry.urls.map(function (url, j) {
+            var json = loaded[url];
+            return json ? compile(motionApi, 'parseMotion', json, entry.fades[j]) : null;
+          });
+          if (!compiled.every(Boolean)) return;
+          play.motions[entry.group] = compiled;
+          lists.motions.push({ group: entry.group, count: compiled.length });
         });
       }
       return lists;
     } catch (_) {
-      return { expressions: null, motions: null };
+      return { expressions: null, motions: null, play: emptyPlay() };
     }
+  }
+
+  // At most this many blink or mouth parameters, like the host's mapping.
+  var MAX_BEHAVIOR_IDS = 64;
+
+  // Index by ID of a PurismCore {count, ids} object; the first of a repeated
+  // ID wins.
+  function indexIds(source) {
+    var index = Object.create(null);
+    var count = source && Number.isInteger(source.count) ? source.count : 0;
+    for (var i = 0; i < count; i++) {
+      var id = source.ids[i];
+      if (typeof id === 'string' && !(id in index)) index[id] = i;
+    }
+    return index;
+  }
+
+  // The IDs the model has, once each, of the first model3 Groups entry with
+  // this Name; [] without one, or when it lists more than MAX_BEHAVIOR_IDS.
+  function groupIds(model3, name, index) {
+    var groups = Array.isArray(model3.Groups) ? model3.Groups : [];
+    for (var i = 0; i < groups.length; i++) {
+      if (!isObject(groups[i]) || groups[i].Name !== name) continue;
+      var ids = Array.isArray(groups[i].Ids) ? groups[i].Ids : [];
+      var list = [];
+      for (var j = 0; j < ids.length; j++) {
+        if (typeof ids[j] === 'string' && ids[j] in index && list.indexOf(ids[j]) < 0) {
+          list.push(ids[j]);
+        }
+      }
+      return list.length <= MAX_BEHAVIOR_IDS ? list : [];
+    }
+    return [];
+  }
+
+  // A copy of a behavior command's ID list, or an error: at most
+  // MAX_BEHAVIOR_IDS parameter IDs the model has, each once.
+  function behaviorIds(list, label, index) {
+    if (!Array.isArray(list) || list.length > MAX_BEHAVIOR_IDS) {
+      throw new Error(label + ' must list at most ' + MAX_BEHAVIOR_IDS + ' parameter IDs');
+    }
+    for (var i = 0; i < list.length; i++) {
+      if (typeof list[i] !== 'string' || !(list[i] in index)) {
+        throw new Error('unknown ' + label + ' parameter ' + list[i]);
+      }
+      if (list.indexOf(list[i]) !== i) throw new Error('repeated ' + label + ' parameter ' + list[i]);
+    }
+    return list.slice();
+  }
+
+  // The shown model's animation: the motion and expression queues of
+  // live2d_motion.js, the procedural layer of live2d_behavior.js and the
+  // values setParam holds. frame(dtMs) runs one frame's steps on the core's
+  // parameter values and part opacities; the other methods are the commands.
+  // Throws when the model's parameters cannot be read.
+  function createAnimation(model, play, model3) {
+    var motionApi = window.Live2DMotion;
+    var Priority = motionApi.Priority;
+    var params = model.parameters;
+    if (!params || !Number.isInteger(params.count) || !params.values) {
+      throw new Error('model parameters unreadable');
+    }
+    var count = params.count;
+    var values = params.values;
+    var paramIndex = indexIds(params);
+    var parts = model.parts && model.parts.opacities ? model.parts : null;
+    var opacities = parts ? parts.opacities : new Float32Array(0);
+    var partIndex = parts ? indexIds(parts) : Object.create(null);
+    var behavior = window.Live2DBehavior.create(params);
+    var saved = new Float32Array(count);
+    var driven = new Uint8Array(count);
+    var held = Object.create(null); // parameter index -> value from setParam
+    var blinkIndices = [];
+    var mouthIndices = [];
+    var now = 0; // seconds of animation time
+
+    function lookup(index) {
+      return function (id) { return typeof id === 'string' && id in index ? index[id] : -1; };
+    }
+    var parameterIndex = lookup(paramIndex);
+    var queue = motionApi.createMotionQueue({
+      parameterIndex: parameterIndex,
+      partIndex: lookup(partIndex),
+      blinkIndices: function () { return blinkIndices; },
+      mouthIndices: function () { return mouthIndices; },
+    });
+    var expressions = motionApi.createExpressionQueue();
+
+    function useBehaviorIds(blink, mouth) {
+      behavior.setBlinkIds(blink);
+      behavior.setMouthIds(mouth);
+      blinkIndices = blink.map(parameterIndex);
+      mouthIndices = mouth.map(parameterIndex);
+    }
+    useBehaviorIds(groupIds(model3, 'EyeBlink', paramIndex),
+      groupIds(model3, 'LipSync', paramIndex));
+
+    var idleMotions = null;
+    Object.keys(play.motions).some(function (group) {
+      if (group.toLowerCase() !== 'idle') return false;
+      idleMotions = play.motions[group];
+      return true;
+    });
+
+    for (var i = 0; i < count; i++) saved[i] = values[i];
+    // Part opacities as loaded, restored before each frame's motions like
+    // the parameter values, so a curve blends from the same base each frame.
+    var savedOpacities = new Float32Array(opacities.length);
+    for (i = 0; i < opacities.length; i++) savedOpacities[i] = opacities[i];
+
+    function rangeValue(source, index) {
+      var value = source ? source[index] : undefined;
+      return Number.isFinite(value) ? value : null;
+    }
+
+    return {
+      frame: function (dtMs) {
+        now += dtMs / 1000;
+        var k;
+        for (k = 0; k < count; k++) values[k] = saved[k];
+        for (k = 0; k < opacities.length; k++) opacities[k] = savedOpacities[k];
+        if (idleMotions && queue.isFinished()) {
+          var pick = Math.floor(Math.random() * idleMotions.length);
+          queue.start(idleMotions[pick], now, Priority.IDLE);
+        }
+        driven.fill(0);
+        queue.update(values, opacities, now, driven);
+        for (k = 0; k < count; k++) saved[k] = values[k];
+        for (k = 0; k < opacities.length; k++) savedOpacities[k] = opacities[k];
+        expressions.update(values, now, parameterIndex);
+        var idle = queue.currentPriority() <= Priority.IDLE;
+        behavior.update(values, dtMs, { idle: idle, driven: idle ? null : driven });
+        for (var key in held) values[key] = held[key];
+      },
+      setParam: function (name, value) {
+        var index = parameterIndex(name);
+        if (index < 0) throw new Error('unknown parameter ' + name);
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          throw new Error('parameter value must be a finite number');
+        }
+        var min = rangeValue(params.minimumValues, index);
+        var max = rangeValue(params.maximumValues, index);
+        if (min !== null && value < min) value = min;
+        if (max !== null && value > max) value = max;
+        held[index] = value;
+      },
+      clearParam: function (name) {
+        var index = parameterIndex(name);
+        if (index < 0) throw new Error('unknown parameter ' + name);
+        delete held[index];
+      },
+      setExpression: function (name) {
+        if (name === null) {
+          expressions.set(null, now);
+          return;
+        }
+        if (typeof name !== 'string' || !(name in play.expressions)) {
+          throw new Error('unknown expression ' + name);
+        }
+        expressions.set(play.expressions[name], now);
+      },
+      setMotion: function (group, index) {
+        var list = typeof group === 'string' && group in play.motions ? play.motions[group] : null;
+        if (!list || !Number.isInteger(index) || index < 0 || index >= list.length) {
+          throw new Error('unknown motion ' + group + ' ' + index);
+        }
+        queue.start(list[index], now, Priority.FORCE);
+      },
+      setBehavior: function (blink, mouth) {
+        useBehaviorIds(behaviorIds(blink, 'blink', paramIndex),
+          behaviorIds(mouth, 'mouth', paramIndex));
+      },
+      blink: function () {
+        behavior.blinkNow();
+      },
+      speak: function (levels, step) {
+        behavior.speak(levels, step === null ? undefined : step);
+      },
+    };
+  }
+
+  // Milliseconds since the previous animation frame, at most 100 so a stall
+  // does not jump the animation; 0 for a first frame or one without a time.
+  function frameDelta(time) {
+    if (typeof time !== 'number' || !Number.isFinite(time)) return 0;
+    var last = state.lastFrameTime;
+    state.lastFrameTime = time;
+    return last === null ? 0 : Math.min(100, Math.max(0, time - last));
   }
 
   async function load(command) {
@@ -401,6 +661,9 @@
         typeof window.Live2DRenderer.prepare !== 'function' ||
         typeof window.Live2DRenderer.draw !== 'function') {
       throw new Error('renderer adapter missing');
+    }
+    if (!window.Live2DMotion || !window.Live2DBehavior) {
+      throw new Error('animation modules missing');
     }
 
     state.loading = true;
@@ -426,7 +689,7 @@
 
       // Loaded before the swap, so the shown model stays up meanwhile. Never
       // throws; a list that cannot be reported whole comes back null.
-      var lists = await readyExpressionsAndMotions(model3Url, refs);
+      var lists = await readyExpressionsAndMotions(model3Url, refs, window.Live2DMotion);
       if (state.disposed) throw new Error('viewer disposed');
 
       var textures = [];
@@ -445,6 +708,12 @@
       adopted = true;
       state.modelId = command.modelId;
       state.profileRev = command.profileRev;
+      // A model whose parameters cannot be read is shown without animation.
+      try {
+        state.anim = createAnimation(model, lists.play, json);
+      } catch (_) {
+        state.anim = null;
+      }
 
       var prepared = await window.Live2DRenderer.prepare(canvas, model, textures);
       if (state.disposed) throw new Error('viewer disposed');
@@ -485,12 +754,15 @@
     }
   }
 
-  // Runs one core update + renderer draw. Returns false when no frame ran or
-  // the frame failed; a failure is reported once and releases the model.
-  function tick() {
+  // Runs one animation frame, core update and renderer draw. `time` is the
+  // requestAnimationFrame timestamp. Returns false when no frame ran or the
+  // frame failed; a failure is reported once and releases the model.
+  function tick(time) {
     state.raf = 0;
     if (state.disposed || !state.model) return false;
     try {
+      var dt = frameDelta(time);
+      if (state.anim) state.anim.frame(dt);
       state.model.update();
       window.Live2DRenderer.draw(state.model);
     } catch (error) {
@@ -502,27 +774,23 @@
     return true;
   }
 
-  function setParam(command) {
+  // Runs an animation command on the ready model. A malformed command throws
+  // before it changes anything.
+  function animate(command) {
     if (!state.ready || !state.model) throw new Error('model not ready');
-    var parameters = state.model.parameters;
-    if (!parameters) throw new Error('model has no parameters');
-    for (var i = 0; i < parameters.count; i++) {
-      if (parameters.ids[i] === command.name) {
-        parameters.values[i] = command.value;
-        return;
-      }
+    var anim = state.anim;
+    if (!anim) throw new Error('animation unavailable for this model');
+    switch (command.cmd) {
+      case 'setParam': anim.setParam(command.name, command.value); break;
+      case 'clearParam': anim.clearParam(command.name); break;
+      case 'setExpression':
+        anim.setExpression(command.name === undefined ? undefined : command.name);
+        break;
+      case 'setMotion': anim.setMotion(command.group, command.index); break;
+      case 'behavior': anim.setBehavior(command.blink, command.mouth); break;
+      case 'blink': anim.blink(); break;
+      case 'speak': anim.speak(command.levels, command.step); break;
     }
-    throw new Error('unknown parameter ' + command.name);
-  }
-
-  function applyExpression(command) {
-    if (!state.ready) throw new Error('model not ready');
-    window.Live2DRenderer.setExpression(command.name);
-  }
-
-  function applyMotion(command) {
-    if (!state.ready) throw new Error('model not ready');
-    window.Live2DRenderer.setMotion(command.group, command.index);
   }
 
   function dispose() {
@@ -548,13 +816,13 @@
         load(message).catch(function (error) { fail(error, 'load_failed'); });
         break;
       case 'setParam':
-        try { setParam(message); } catch (e) { fail(e, 'bad_command'); }
-        break;
+      case 'clearParam':
       case 'setExpression':
-        try { applyExpression(message); } catch (e) { fail(e, 'bad_command'); }
-        break;
       case 'setMotion':
-        try { applyMotion(message); } catch (e) { fail(e, 'bad_command'); }
+      case 'behavior':
+      case 'blink':
+      case 'speak':
+        try { animate(message); } catch (e) { fail(e, 'bad_command'); }
         break;
       case 'dispose':
         dispose();

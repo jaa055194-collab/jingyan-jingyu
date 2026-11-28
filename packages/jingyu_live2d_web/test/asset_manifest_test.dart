@@ -31,6 +31,8 @@ void main() {
       final runtime = html.indexOf('runtime/purismcore/purismcore.js');
       // The renderer's prepare() needs window.Live2DTextureBudget.
       final budget = html.indexOf('live2d_texture_budget.js');
+      final motion = html.indexOf('live2d_motion.js');
+      final behavior = html.indexOf('live2d_behavior.js');
       final renderer = html.indexOf('live2d_renderer_webgl.js');
       final viewer = html.indexOf('live2d_viewer.js');
       expect(runtime, isNonNegative);
@@ -38,13 +40,18 @@ void main() {
       expect(renderer, greaterThan(runtime));
       expect(renderer, greaterThan(budget));
       expect(viewer, greaterThan(renderer));
+      expect(motion, greaterThan(budget));
+      expect(behavior, greaterThan(motion));
+      expect(viewer, greaterThan(behavior));
     });
 
-    test('viewer, renderer and texture budget carry no remote model URLs', () {
+    test('viewer scripts carry no remote model URLs', () {
       for (final path in [
         'web/live2d_viewer.js',
         'web/live2d_renderer_webgl.js',
         'web/live2d_texture_budget.js',
+        'web/live2d_motion.js',
+        'web/live2d_behavior.js',
       ]) {
         final source = _read(path).toLowerCase();
         expect(source, isNot(contains('http://')), reason: path);
