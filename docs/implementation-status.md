@@ -36,6 +36,7 @@ M01 提供 SQLite、事务迁移、Windows 密钥保护、加密列及持久审�
 - 群成员列表：认证 `GET /conversations/{id}/members` 供当前成员列出成员（accountId、是否群主、加入时间）；非成员 404、匿名 401；身份只取 principal。
 - 客户端本地消息缓存：`jingyu_client_kit` 新增纯 Dart `LocalMessageCache`（按账号/会话/seq 有序、同身份编辑覆盖、冲突身份拒绝、深不可变正文、撤回终态、分页、账号隔离、版本化快照原子导入导出）；旧页和旧快照不复活已知撤回正文，损坏快照不清空现有数据。不落盘，加密持久化与服务端授权由外壳负责。
 - 插件包安全校验：`jingyu_client_kit` 新增纯 Dart `validatePluginPackage`（基于 archive 解压校验 + crypto sha256 完整性；zip-slip/zip-bomb/条目数/体积/压缩比/重复/符号链接/清单严格解析/JSON 深度；不读文件系统、不改既有插件接口），附契约测试；未接入 M11 安装 UI 与真实签名。
+- 插件运行时内核：新增纯 Dart `jingyu_plugin_runtime`（`plugin_loader` / `plugin_manager` / `plugin_sandbox`）与 `jingyu_protocol` JSON-RPC 2.0 能力桥（严格编解码、方法/scope/slot 目录、大小/深度限制），`jingyu_client_kit` 增加 `extractPluginPackage` 有界流式安全解包。实现 bundle 字节→校验→解包→bundle 解析→运行期描述；安装/更新/启停/卸载/配置的权限审批、依赖检查与状态快照持久化接口；每插件独立 origin、CSP、默认禁网、方法 scope、限流、超时与无正文审计的沙箱策略与能力桥。各包 `dart analyze --fatal-infos` 无问题；`jingyu_protocol` 60 项、`jingyu_client_kit` 309 项（含插件解包 16 项）、`jingyu_plugin_runtime` 127 项（含 e2e 3 项）测试通过。未实现 Flutter WebView 平台适配器/UI、安装 UI、私有市场、HMR、动态生成与真实签名；WebView 0day 与宿主 Dart 插件信任是残余风险；本切片不等于完整 M11 验收。
 
 ## 管理员审计envelope读取
 

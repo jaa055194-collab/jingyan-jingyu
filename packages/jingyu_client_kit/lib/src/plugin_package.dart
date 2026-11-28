@@ -277,7 +277,7 @@ PluginPackageValidation validatePluginPackage(
 
   late final Uint8List manifestBytes;
   try {
-    manifestBytes = _inflateManifestBounded(manifestFile, manifestCap);
+    manifestBytes = _inflateEntryBounded(manifestFile, manifestCap);
   } on _OutputLimitExceeded {
     issues.add(PluginPackageIssue(manifestCapCode(),
         'plugin.json 实际解压超过上限 $manifestCap 字节（伪造头/压缩炸弹，已在解压中中止）',
@@ -586,10 +586,10 @@ class _BoundedOutputStream extends OutputStream {
   }
 }
 
-/// 对清单条目做有界解压：STORE 直接取原始字节（仍按上限校验），DEFLATE 走纯 Dart
-/// 流式 inflate 在解压过程中按真实输出字节封顶；超过 [maxBytes] 抛
+/// 对任意 zip 条目做有界解压：STORE 直接取原始字节（仍按上限校验），DEFLATE 走
+/// 纯 Dart 流式 inflate 在解压过程中按真实输出字节封顶；超过 [maxBytes] 抛
 /// [_OutputLimitExceeded]。不依赖中央目录里可伪造的“声明未压缩尺寸”。
-Uint8List _inflateManifestBounded(ArchiveFile file, int maxBytes) {
+Uint8List _inflateEntryBounded(ArchiveFile file, int maxBytes) {
   final cap = maxBytes < 0 ? 0 : maxBytes;
   final compression = file.compressionType;
   final raw = file.rawContent;
@@ -601,10 +601,10 @@ Uint8List _inflateManifestBounded(ArchiveFile file, int maxBytes) {
     return stored;
   }
   if (compression != ArchiveFile.DEFLATE) {
-    throw FormatException('不支持的清单压缩方式 $compression');
+    throw FormatException('不支持的条目压缩方式 $compression');
   }
   if (raw == null) {
-    throw const FormatException('清单缺少压缩数据');
+    throw const FormatException('条目缺少压缩数据');
   }
   return _inflateDeflateBounded(raw.toUint8List(), cap);
 }
@@ -649,4 +649,183 @@ int _jsonNestingDepth(String text) {
     }
   }
   return maxDepth;
+}
+
+/// 解包后的插件包内容（纯内存，不含目录条目）。
+///
+/// [files] 的 key 为经 [sanitizePackageEntryPath] 规范化的相对路径（含根
+/// `plugin.json`），value 为条目真实解压后的字节。返回的 Map 与字节均为不可变
+/// 语义：Map 为 [Map.unmodifiable]，字节为独立拷贝，不会泄漏输入 zip 的可变缓冲。
+class PluginPackageExtraction {
+  const PluginPackageExtraction._({
+    required this.ok,
+    required this.sha256Hex,
+    required this.manifest,
+    required this.files,
+    required this.issues,
+  });
+
+  /// 是否成功解包（校验通过且所有条目都在限额内解压完成）。
+  final bool ok;
+
+  /// 整个插件包字节的 sha256（小写十六进制）。
+  final String sha256Hex;
+
+  /// 解析出的插件清单；仅当校验通过时非 null。
+  final PluginManifest? manifest;
+
+  /// 规范化路径 -> 真实解压字节。任何失败时为空 Map。
+  final Map<String, Uint8List> files;
+
+  /// 全部问题。空表示成功。
+  final List<PluginPackageIssue> issues;
+
+  @override
+  String toString() =>
+      'PluginPackageExtraction(ok=$ok, files=${files.length}, '
+      'sha256=$sha256Hex, issues=${issues.length})';
+}
+
+/// 把通过校验的插件包 zip 安全解包为内存中的条目集合。
+///
+/// 安全约束（对齐插件方案 v3 §7 与 FR-39）：
+/// - 先调用 [validatePluginPackage]；不通过时原样返回其 issues 与 sha256。
+/// - 校验通过才进入 `ZipDecoder`；目录与符号链接条目不放入结果。
+/// - 每个条目都复用 [_inflateEntryBounded] 的有界流式 inflate，按「真实输出字节」
+///   封顶 `min(单条上限, 剩余总量上限)`；伪造头 / zip bomb 在解压过程中即
+///   fail-closed，绝不先完整解压再检查。
+/// - 任何失败：`ok=false`、`files` 为空、issues 至少一条。
+PluginPackageExtraction extractPluginPackage(
+  Uint8List bytes, {
+  PluginPackageLimits limits = const PluginPackageLimits(),
+  String? expectedSha256Hex,
+}) {
+  final validation = validatePluginPackage(
+    bytes,
+    limits: limits,
+    expectedSha256Hex: expectedSha256Hex,
+  );
+  if (!validation.ok) {
+    return PluginPackageExtraction._(
+      ok: false,
+      sha256Hex: validation.sha256Hex,
+      manifest: validation.manifest,
+      files: const <String, Uint8List>{},
+      issues: List<PluginPackageIssue>.unmodifiable(validation.issues),
+    );
+  }
+
+  PluginPackageExtraction fail(List<PluginPackageIssue> issues) =>
+      PluginPackageExtraction._(
+        ok: false,
+        sha256Hex: validation.sha256Hex,
+        manifest: validation.manifest,
+        files: const <String, Uint8List>{},
+        issues: List<PluginPackageIssue>.unmodifiable(issues),
+      );
+
+  final issues = <PluginPackageIssue>[];
+  final Archive archive;
+  try {
+    archive = ZipDecoder().decodeBytes(bytes);
+  } catch (error) {
+    issues.add(
+      PluginPackageIssue(PluginPackageIssueCode.notZip, '插件包解码失败：$error'),
+    );
+    return fail(issues);
+  }
+
+  final perEntryLimit = limits.maxEntryUncompressedBytes < 0
+      ? 0
+      : limits.maxEntryUncompressedBytes;
+  final totalLimit = limits.maxTotalUncompressedBytes < 0
+      ? 0
+      : limits.maxTotalUncompressedBytes;
+  var remainingTotal = totalLimit;
+  final files = <String, Uint8List>{};
+  final seen = <String>{};
+
+  for (final file in archive.files) {
+    // 校验阶段已拒绝符号链接；这里仍按契约跳过，避免任何解引用。
+    if (!file.isFile || file.isSymbolicLink) continue;
+
+    final safe = sanitizePackageEntryPath(file.name);
+    if (safe == null) {
+      issues.add(
+        PluginPackageIssue(
+          PluginPackageIssueCode.unsafeEntryPath,
+          '不安全的条目路径（绝对路径、盘符或包含 ..）',
+          path: file.name,
+        ),
+      );
+      return fail(issues);
+    }
+    if (!seen.add(safe.toLowerCase())) {
+      issues.add(
+        PluginPackageIssue(
+          PluginPackageIssueCode.duplicateEntry,
+          '重复条目（不区分大小写）',
+          path: file.name,
+        ),
+      );
+      return fail(issues);
+    }
+
+    // 按真实解压字节封顶：单条上限与「扣除已解压内容后的剩余总量」取较小值。
+    final cap = perEntryLimit < remainingTotal ? perEntryLimit : remainingTotal;
+    final Uint8List content;
+    try {
+      content = _inflateEntryBounded(file, cap);
+    } on _OutputLimitExceeded {
+      if (perEntryLimit <= remainingTotal) {
+        issues.add(
+          PluginPackageIssue(
+            PluginPackageIssueCode.entryTooLarge,
+            '条目实际解压超过上限 $perEntryLimit 字节（伪造头/压缩炸弹，已在解压中中止）',
+            path: file.name,
+          ),
+        );
+      } else {
+        issues.add(
+          PluginPackageIssue(
+            PluginPackageIssueCode.totalTooLarge,
+            '解压后总量超过上限 $totalLimit 字节（伪造头/压缩炸弹，已在解压中中止）',
+            path: file.name,
+          ),
+        );
+      }
+      return fail(issues);
+    } catch (error) {
+      issues.add(
+        PluginPackageIssue(
+          PluginPackageIssueCode.notZip,
+          '条目解压失败：$error',
+          path: file.name,
+        ),
+      );
+      return fail(issues);
+    }
+
+    remainingTotal -= content.length;
+    // 独立拷贝：STORE 条目的 rawContent 可能是输入 zip 的视图，绝不能泄漏。
+    files[safe] = Uint8List.fromList(content);
+  }
+
+  if (!files.containsKey('plugin.json')) {
+    issues.add(
+      const PluginPackageIssue(
+        PluginPackageIssueCode.missingManifest,
+        '缺少根目录 plugin.json',
+      ),
+    );
+    return fail(issues);
+  }
+
+  return PluginPackageExtraction._(
+    ok: true,
+    sha256Hex: validation.sha256Hex,
+    manifest: validation.manifest,
+    files: Map<String, Uint8List>.unmodifiable(files),
+    issues: const <PluginPackageIssue>[],
+  );
 }

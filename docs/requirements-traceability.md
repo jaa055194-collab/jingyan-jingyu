@@ -233,3 +233,11 @@ M14 附件列表后续复核见 [验收 §F.3](acceptance.md#f3-汇总与限制)
 |---|---|---|---|---|
 | REQ-P1-14 | FR-49/50 子集（聊天历史自动记忆） | 仅采集主人本人在**已授权私聊**中的文字：显式记忆指令（记住/记下/别忘了/以后/别忘）且长度有界→T0 active，其余→T1 pending；绝不 T2，绝不群聊或第三人内容；每 AI 最多 50 条、单条 ≤512 UTF-8 字节；默认关闭、开启需精确核对接收目标 token；可查看/删除/清空；仅 active 的 T0/T1 以独立 `untrusted_owner_memory` user 段注入 B2（≤5 条、≤1024 字节），pending 不注入；撤销后不再采集，旧来源不补采 | [宿主契约](phase-one/owner-auto-memory.md)、[客户端设置](phase-one/owner-auto-memory-ui.md)、`owner_auto_memory_test` 19 项、[端到端实测](../apps/host/test/phase_one_memory_proactive_e2e_test.dart) | 实测通过（隔离宿主/合成账号/合成 worker）；不是通用记忆管理器，不含 T2 打码、自然语言遗忘、跨用户检索、导出或客户端真机 |
 | REQ-P1-15 | FR-42–44/48 子集（模型主动联系） | 仅主人本人 AI 私聊；默认关闭；开启需固定 UTC 偏移、L3/L4、有效私聊、未全局停止、B3 预算就绪及三项已审核 revision；静默窗顺延不发送；`interval_minutes`(60–10080) 频率上限；到点调用模型（B3/chat）生成短句后原子 append + 水位 + 无正文审计；预算缺失/未知/耗尽或模型失败一律静默、不补发、不重放、不伪装成规则问候；`clientMsgId` + 水位双重去重；全局停止撤销全部且解除不复活 | [宿主契约](phase-one/owner-model-proactive.md)、[客户端设置](phase-one/owner-model-proactive-ui.md)、`owner_model_proactive_test` 28 项 + `model_gateway_test` B3、[端到端实测](../apps/host/test/phase_one_memory_proactive_e2e_test.dart) | 实测通过（隔离宿主/合成账号/合成 worker）；不含真实外部 Provider、真机、AI-AI 私信、朋友圈/串门或完整生活引擎 |
+
+## 插件运行时内核（2026-11-28，ticket bc3219827aa3）
+
+基线 `4a08f19c`（分支 `agent/plugin-module-bc3219827aa3`）。本切片只交付纯 Dart 加载 / 管理器 / 沙箱策略与能力桥，不是完整插件生态或 M11 验收；主表 `REQ-028` 已被消息撤回占用，本切片使用下一空闲编号 `REQ-064`。
+
+| ID | 来源/章节 | 要求摘要 | 审批 | 可观察验收 | 实现 | 检查/证据 | 状态与缺口 |
+|---|---|---|---|---|---|---|---|
+| REQ-064 | 插件方案 v3 §4/§5/§7、§9 阶段 1 | 插件包安全加载、安装管理器与 WebView/JS 沙箱策略/能力桥（纯 Dart、无 IO、不依赖 Flutter） | 已授权局部 | bundle 字节经校验/解包/严格解析得到运行期描述；安装/更新/启停/卸载/配置受权限审批与依赖约束且快照可恢复；沙箱每插件独立 origin/CSP/默认禁网，JSON-RPC 方法白名单 + scope + 限流 + 超时 + 无正文审计 | `jingyu_protocol/plugin_bridge.dart`、`jingyu_client_kit/plugin_package.dart`（`extractPluginPackage`）、`jingyu_plugin_runtime/{plugin_loader,plugin_manager,plugin_sandbox}.dart` | `plugin_bridge_test`、`plugin_package_extractor_test`、`plugin_loader_test`、`plugin_manager_test`、`plugin_sandbox_test`、`plugin_module_e2e_test`；Windows 本地 `dart analyze --fatal-infos` 无问题，protocol 60 / client_kit 309（含解包 16）/ plugin_runtime 127（含 e2e 3）项通过 | 已实现未验证（纯 Dart 单测通过）；未实现 Flutter WebView 平台适配器/UI、安装 UI、私有市场、HMR、动态生成、真实签名；WebView 0day 与宿主 Dart 插件信任为残余风险；本切片不等于完整 M11 验收 |

@@ -11,6 +11,7 @@ packages/
   jingyu_protocol/    线协议：帧、路由常量、错误码、严格编解码。依赖 core。
   jingyu_host_kit/    宿主模块框架：HostModule、Registry、Router、Pipeline。依赖 core + protocol。
   jingyu_client_kit/  客户端内核：插件契约与 PluginHost、Outbox、SyncCursor。依赖 core + protocol。
+  jingyu_plugin_runtime/ 插件运行时内核：bundle 加载、安装管理器、沙箱策略与能力桥。依赖 core + protocol + client_kit；纯 Dart、无 Flutter 与 dart:io。
 apps/
   host/               宿主服务（家中常驻 Windows 电脑）。按模块装配。
   client_flutter/     Android + Windows 外壳（M11 创建），只做 UI 绑定，逻辑放 client_kit。
