@@ -5,6 +5,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/friends_api.dart';
 import '../../net/host_connection.dart';
+import '../../app/status_panel.dart';
+import '../../ui/ui.dart';
 
 /// Contacts surface.
 ///
@@ -52,13 +54,20 @@ class _ContactsScreenState extends State<ContactsScreen> {
   bool _requestActive = false;
   bool _requestSending = false;
   String? _requestIdError;
-  ({String text, Object scope})? _requestResult;
+  ({String text, Object scope, bool ok})? _requestResult;
   String? _result;
   bool _busy = false;
   List<FriendContact>? _friends;
   bool _loadingFriends = false;
   String? _friendsMessage;
+
+  /// Whether [_friendsMessage] reports a failed invitation action rather
+  /// than a failed read. It only picks the panel title.
+  bool _friendsActionFailed = false;
   String? _friendActionBusy;
+
+  /// Whether the deck of incoming requests is open; kept across reloads.
+  bool _requestsExpanded = false;
 
   @override
   void initState() {
@@ -96,6 +105,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
               error.failure.code == FailureCode.unauthenticated);
       setState(() {
         _friends = null;
+        _friendsActionFailed = false;
         _friendsMessage = denied
             ? '未认证或无权限读取好友列表；不会自动重试'
             : '好友列表读取失败或结果未知；不会自动重试';
@@ -156,6 +166,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
               error.failure.code == FailureCode.unauthenticated);
       setState(() {
         _friendActionBusy = null;
+        _friendsActionFailed = true;
         _friendsMessage = denied
             ? '未认证或无权限处理邀请；不会自动重试'
             : error is FormatException
@@ -202,7 +213,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final openedAt = navigationGeneration?.call();
     final dialogAt = openedAt == null ? null : openedAt + 1;
     final returnedAt = openedAt == null ? null : openedAt + 2;
-    late final DialogRoute<bool> dialog;
+    late final JyDialogRoute<bool> dialog;
 
     bool sameSession() => mounted && widget.requestContext?.call() == scope;
     bool currentSource() =>
@@ -240,10 +251,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
       }
     }
 
-    dialog = DialogRoute<bool>(
+    dialog = JyDialogRoute<bool>(
       context: context,
       themes: InheritedTheme.capture(from: context, to: navigator.context),
-      barrierColor: DialogTheme.of(context).barrierColor ?? Colors.black54,
+      barrierColor: DialogTheme.of(context).barrierColor,
       builder: (_) => AlertDialog(
         key: const Key('contacts-request-confirmation'),
         title: const Text('发送好友请求？'),
@@ -289,9 +300,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
       }
       setState(() => _requestSending = true);
       var message = '宿主已确认收到发给 $target 的请求；不代表对方已同意。';
+      var ok = true;
       try {
         await send(target);
       } on HostRequestException catch (error) {
+        ok = false;
         message = switch (error.failure.code) {
           FailureCode.unauthenticated ||
           FailureCode.forbidden => '未认证或无权限发送好友请求；不会自动重试。',
@@ -301,10 +314,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
           _ => '好友请求结果未确认；不会自动重试。',
         };
       } catch (_) {
+        ok = false;
         message = '好友请求结果未确认；不会自动重试。';
       }
       if (!invalidated && currentSource()) {
-        setState(() => _requestResult = (text: message, scope: scope));
+        setState(() => _requestResult = (text: message, scope: scope, ok: ok));
       }
     } finally {
       changes?.removeListener(onChange);
@@ -317,50 +331,353 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
   }
 
+  Widget _sectionGap() => const SizedBox(height: JySpace.lg);
+
+  InputDecoration _pillInput(
+    BuildContext context, {
+    required String labelText,
+    String? errorText,
+  }) {
+    final palette = JyPalette.of(context);
+    OutlineInputBorder border(Color color, [double width = 1]) =>
+        OutlineInputBorder(
+          borderRadius: BorderRadius.circular(JyRadius.pill),
+          borderSide: BorderSide(color: color, width: width),
+        );
+    return InputDecoration(
+      labelText: labelText,
+      errorText: errorText,
+      border: border(palette.outline),
+      enabledBorder: border(palette.outline),
+      focusedBorder: border(palette.signal, 2),
+      errorBorder: border(palette.danger),
+      focusedErrorBorder: border(palette.danger, 2),
+      disabledBorder: border(palette.hairline),
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: JySpace.lg,
+        vertical: JySpace.md,
+      ),
+    );
+  }
+
+  Widget _resultStrip(BuildContext context, String text, bool ok) {
+    final palette = JyPalette.of(context);
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        decoration: ShapeDecoration(
+          color: ok ? palette.signalSoft : palette.dangerSoft,
+          shape: JyShapes.rounded(JyRadius.md),
+        ),
+        padding: const EdgeInsets.symmetric(
+          horizontal: JySpace.md,
+          vertical: JySpace.sm,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              ok
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.error_outline_rounded,
+              size: 18,
+              color: ok ? palette.onSignalSoft : palette.onDangerSoft,
+            ),
+            const SizedBox(width: JySpace.sm),
+            Expanded(
+              child: Text(
+                text,
+                key: const Key('contacts-request-result'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: ok ? palette.onSignalSoft : palette.onDangerSoft,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _requestForm(BuildContext context, Object scope) {
+    final palette = JyPalette.of(context);
     final result = _requestResult;
+    final shown = result != null && result.scope == scope ? result : null;
+    return JySlab(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '发起好友请求',
+            style: Theme.of(context).textTheme.titleSmall
+                ?.copyWith(color: palette.text1),
+          ),
+          const SizedBox(height: JySpace.sm),
+          Text(
+            '输入对方提供的账号 ID。请求需对方同意，不会自动开启聊天。',
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: palette.text2),
+          ),
+          const SizedBox(height: JySpace.md),
+          TextField(
+            key: const Key('contacts-request-account'),
+            controller: _requestAccount,
+            enabled: !_requestActive,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: _pillInput(
+              context,
+              labelText: '对方的账号 ID',
+              errorText: _requestIdError,
+            ),
+            onChanged: (_) => setState(() {
+              _requestIdError = null;
+              _requestResult = null;
+            }),
+          ),
+          const SizedBox(height: JySpace.md),
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: JyPressable(
+              borderRadius: BorderRadius.circular(JyRadius.md),
+              child: FilledButton(
+                key: const Key('contacts-request-review'),
+                onPressed: _requestActive || _friendActionBusy != null
+                    ? null
+                    : _reviewRequest,
+                child: Text(_requestSending ? '正在发送…' : '核对好友请求'),
+              ),
+            ),
+          ),
+          JySwitcher(
+            child: shown == null
+                ? const SizedBox.shrink(key: ValueKey('request-result-none'))
+                : Padding(
+                    key: const ValueKey('request-result-shown'),
+                    padding: const EdgeInsets.only(top: JySpace.md),
+                    child: _resultStrip(context, shown.text, shown.ok),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _lookupForm(BuildContext context) {
+    final palette = JyPalette.of(context);
+    return JySlab(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const Key('contacts-account-id'),
+            controller: _account,
+            decoration: _pillInput(context, labelText: '按账号 ID 查询关系'),
+          ),
+          const SizedBox(height: JySpace.md),
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: JyPressable(
+              borderRadius: BorderRadius.circular(JyRadius.md),
+              child: FilledButton(
+                key: const Key('contacts-query'),
+                onPressed: _busy ? null : _lookup,
+                child: const Text('查询关系'),
+              ),
+            ),
+          ),
+          if (_result != null) ...[
+            const SizedBox(height: JySpace.sm),
+            Text(
+              _result!,
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: palette.text2),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _friendRow(BuildContext context, FriendContact friend) {
+    final palette = JyPalette.of(context);
+    final text = Theme.of(context).textTheme;
+    return ListTile(
+      key: Key('contacts-friend-${friend.accountId}'),
+      minTileHeight: JySpace.rowMinHeight,
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: JySpace.lg,
+        vertical: JySpace.xs,
+      ),
+      leading: JyAvatar(label: _contactTitle(friend)),
+      title: Text(
+        _contactTitle(friend),
+        style: text.titleMedium?.copyWith(color: palette.text1),
+      ),
+      subtitle: Text(
+        '${friend.accountId} · ${_label(friend.state)}',
+        style: text.bodyMedium?.copyWith(color: palette.text2),
+      ),
+    );
+  }
+
+  Widget _requestCard(BuildContext context, FriendContact friend) {
+    final palette = JyPalette.of(context);
+    final busy = _requestActive || _friendActionBusy != null;
+    return JySlab(
+      tone: JyTone.raised,
+      padding: const EdgeInsets.all(JySpace.sm),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _friendRow(context, friend),
+          OverflowBar(
+            alignment: MainAxisAlignment.end,
+            spacing: JySpace.sm,
+            overflowSpacing: JySpace.sm,
+            children: [
+              JyPressable(
+                borderRadius: BorderRadius.circular(JyRadius.md),
+                child: TextButton(
+                  key: Key('friend-deny-${friend.accountId}'),
+                  onPressed: !busy && widget.denyFriend != null
+                      ? () => _respondFriend(friend, accept: false)
+                      : null,
+                  child: const Text('拒绝'),
+                ),
+              ),
+              JyPressable(
+                borderRadius: BorderRadius.circular(JyRadius.md),
+                child: TextButton(
+                  key: Key('friend-accept-${friend.accountId}'),
+                  style: TextButton.styleFrom(
+                    backgroundColor: palette.signalSoft,
+                    foregroundColor: palette.onSignalSoft,
+                  ),
+                  onPressed: !busy && widget.acceptFriend != null
+                      ? () => _respondFriend(friend, accept: true)
+                      : null,
+                  child: const Text('接受'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _friendsList(BuildContext context) {
+    final friends = _friends!;
+    final pending = [
+      for (final f in friends)
+        if (f.state == FriendState.incomingPending) f,
+    ];
+    final mine = [
+      for (final f in friends)
+        if (f.state == FriendState.friends) f,
+    ];
+    final others = [
+      for (final f in friends)
+        if (f.state != FriendState.incomingPending &&
+            f.state != FriendState.friends)
+          f,
+    ];
+    final sections = <Widget>[];
+    if (pending.isNotEmpty) {
+      final cards = [for (final f in pending) _requestCard(context, f)];
+      sections.add(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const JySectionHeader(title: '好友申请'),
+            if (cards.length == 1)
+              cards.first
+            else
+              JyStackDeck(
+                children: cards,
+                summary: '${cards.length} 条好友申请',
+                expanded: _requestsExpanded,
+                onExpandedChanged: (open) =>
+                    setState(() => _requestsExpanded = open),
+              ),
+          ],
+        ),
+      );
+    }
+    var entranceIndex = 0;
+    Widget group(String header, List<FriendContact> list) {
+      final rows = <Widget>[];
+      for (final f in list) {
+        rows.add(
+          JyEntrance(index: entranceIndex, child: _friendRow(context, f)),
+        );
+        entranceIndex++;
+      }
+      return JyGroup(header: header, children: rows);
+    }
+
+    if (mine.isNotEmpty) sections.add(group('我的好友', mine));
+    if (others.isNotEmpty) sections.add(group('其他关系', others));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        const SizedBox(height: 24),
-        Text('发起好友请求', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        const Text('输入对方提供的账号 ID。请求需对方同意，不会自动开启聊天。'),
-        const SizedBox(height: 12),
-        TextField(
-          key: const Key('contacts-request-account'),
-          controller: _requestAccount,
-          enabled: !_requestActive,
-          autocorrect: false,
-          enableSuggestions: false,
-          decoration: InputDecoration(
-            labelText: '对方的账号 ID',
-            border: const OutlineInputBorder(),
-            errorText: _requestIdError,
-          ),
-          onChanged: (_) => setState(() {
-            _requestIdError = null;
-            _requestResult = null;
-          }),
-        ),
-        const SizedBox(height: 8),
-        Align(
-          alignment: AlignmentDirectional.centerStart,
-          child: FilledButton(
-            key: const Key('contacts-request-review'),
-            onPressed: _requestActive || _friendActionBusy != null
-                ? null
-                : _reviewRequest,
-            child: Text(_requestSending ? '正在发送…' : '核对好友请求'),
-          ),
-        ),
-        if (result != null && result.scope == scope)
-          Semantics(
-            liveRegion: true,
-            child: Text(result.text, key: const Key('contacts-request-result')),
+        for (final section in sections)
+          Padding(
+            padding: const EdgeInsets.only(bottom: JySpace.lg),
+            child: section,
           ),
       ],
     );
+  }
+
+  Widget _friendsSection(BuildContext context) {
+    final Widget body;
+    if (widget.loadFriends == null) {
+      body = const StatusPanel(
+        key: ValueKey('contacts-offline'),
+        tone: StatusTone.offline,
+        icon: Icons.link_off_rounded,
+        title: '当前未连接宿主，无法读取联系人。',
+      );
+    } else if (_loadingFriends) {
+      body = const Padding(
+        key: ValueKey('contacts-loading'),
+        padding: EdgeInsets.symmetric(vertical: JySpace.xl),
+        child: JyBusyIndicator(label: '正在读取联系人'),
+      );
+    } else if (_friendsMessage != null) {
+      body = StatusPanel(
+        key: const ValueKey('contacts-error'),
+        tone: StatusTone.error,
+        icon: _friendsActionFailed
+            ? Icons.person_off_outlined
+            : Icons.error_outline_rounded,
+        title: _friendsActionFailed ? '没能处理好友申请' : '没能读取联系人',
+        detail: _friendsMessage,
+        action: TextButton(
+          key: const Key('contacts-retry'),
+          onPressed: _friendActionBusy == null ? _loadFriends : null,
+          child: const Text('重新读取'),
+        ),
+      );
+    } else if (_friends == null) {
+      body = const SizedBox.shrink(key: ValueKey('contacts-idle'));
+    } else if (_friends!.isEmpty) {
+      body = const StatusPanel(
+        key: ValueKey('contacts-empty'),
+        icon: Icons.group_outlined,
+        title: '暂无联系人或待处理的好友邀请。',
+      );
+    } else {
+      body = KeyedSubtree(
+        key: const ValueKey('contacts-list'),
+        child: _friendsList(context),
+      );
+    }
+    return JySwitcher(child: body);
   }
 
   // Account names may contain controls per the host contract. Only the
@@ -373,107 +690,69 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.people_outline, size: 40),
-              const SizedBox(height: 16),
-              Text('联系人', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              Text(
-                widget.requestFriend == null
-                    ? '数据来自宿主实时读取；仅显式点击「接受/拒绝」处理好友邀请，其余只读。'
-                    : '数据来自宿主实时读取；可接受或拒绝来信，也可核对账号 ID 后确认发送好友请求。',
-                key: const Key('contacts-live-note'),
-              ),
-              if (widget.loadFriends == null)
-                const Text('当前未连接宿主，无法读取联系人。', textAlign: TextAlign.center)
-              else if (_loadingFriends)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: CircularProgressIndicator(),
-                )
-              else if (_friendsMessage != null)
-                Text(_friendsMessage!, textAlign: TextAlign.center)
-              else if (_friends != null) ...[
-                if (_friends!.isEmpty)
-                  const Text('暂无联系人或待处理的好友邀请。', textAlign: TextAlign.center)
-                else
-                  for (final friend in _friends!)
-                    ListTile(
-                      key: Key('contacts-friend-${friend.accountId}'),
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.person_outline),
-                      title: Text(_contactTitle(friend)),
-                      subtitle: Text(
-                        '${friend.accountId} · ${_label(friend.state)}',
+  Widget build(BuildContext context) {
+    final palette = JyPalette.of(context);
+    final width = MediaQuery.sizeOf(context).width;
+    final pagePad = width < 720 ? JySpace.pageNarrow : JySpace.pageWide;
+    return Scaffold(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: pagePad,
+                  vertical: JySpace.lg,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: JySpace.lg),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(top: 1),
+                            child: Icon(
+                              Icons.info_outline_rounded,
+                              size: 16,
+                              color: palette.text3,
+                            ),
+                          ),
+                          const SizedBox(width: JySpace.sm),
+                          Expanded(
+                            child: Text(
+                              widget.requestFriend == null
+                                  ? '数据来自宿主实时读取；仅显式点击「接受/拒绝」处理好友邀请，其余只读。'
+                                  : '数据来自宿主实时读取；可接受或拒绝来信，也可核对账号 ID 后确认发送好友请求。',
+                              key: const Key('contacts-live-note'),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: palette.text3),
+                            ),
+                          ),
+                        ],
                       ),
-                      trailing: friend.state == FriendState.incomingPending
-                          ? Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                TextButton(
-                                  key: Key('friend-accept-${friend.accountId}'),
-                                  onPressed:
-                                      !_requestActive &&
-                                          _friendActionBusy == null &&
-                                          widget.acceptFriend != null
-                                      ? () =>
-                                            _respondFriend(friend, accept: true)
-                                      : null,
-                                  child: const Text('接受'),
-                                ),
-                                TextButton(
-                                  key: Key('friend-deny-${friend.accountId}'),
-                                  onPressed:
-                                      !_requestActive &&
-                                          _friendActionBusy == null &&
-                                          widget.denyFriend != null
-                                      ? () => _respondFriend(
-                                          friend,
-                                          accept: false,
-                                        )
-                                      : null,
-                                  child: const Text('拒绝'),
-                                ),
-                              ],
-                            )
-                          : null,
                     ),
-              ],
-              if (widget.requestFriend != null)
-                if (widget.requestContext?.call() case final scope?)
-                  _requestForm(context, scope),
-              if (widget.lookupState != null) ...[
-                const SizedBox(height: 20),
-                TextField(
-                  key: const Key('contacts-account-id'),
-                  controller: _account,
-                  decoration: const InputDecoration(
-                    labelText: '按账号 ID 查询关系',
-                    border: OutlineInputBorder(),
-                  ),
+                    _friendsSection(context),
+                    if (widget.requestFriend != null)
+                      if (widget.requestContext?.call() case final scope?) ...[
+                        _sectionGap(),
+                        _requestForm(context, scope),
+                      ],
+                    if (widget.lookupState != null) ...[
+                      _sectionGap(),
+                      _lookupForm(context),
+                    ],
+                  ],
                 ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  key: const Key('contacts-query'),
-                  onPressed: _busy ? null : _lookup,
-                  child: const Text('查询关系'),
-                ),
-                if (_result != null) ...[
-                  const SizedBox(height: 12),
-                  Text(_result!),
-                ],
-              ],
-            ],
+              ),
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
