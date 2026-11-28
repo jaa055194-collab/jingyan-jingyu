@@ -909,13 +909,11 @@ class _ChatPaneState extends State<ChatPane> {
                         child: Container(
                           margin: const EdgeInsets.only(bottom: 16),
                           padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
+                          decoration: ShapeDecoration(
                             color: message.outgoing
-                                ? Theme.of(context).colorScheme.primaryContainer
-                                : Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(8),
+                                ? JyPalette.of(context).signal
+                                : JyPalette.of(context).raised,
+                            shape: JyShapes.bubble(mine: message.outgoing),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -925,10 +923,21 @@ class _ChatPaneState extends State<ChatPane> {
                                   '消息已撤回',
                                   key: Key('message-recalled-${message.id}'),
                                   style: Theme.of(context).textTheme.bodyMedium
-                                      ?.copyWith(fontStyle: FontStyle.italic),
+                                      ?.copyWith(
+                                        fontStyle: FontStyle.italic,
+                                        color: JyPalette.of(context).text2,
+                                      ),
                                 )
                               else
-                                SelectableText(message.text),
+                                SelectableText(
+                                  message.text,
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(
+                                        color: message.outgoing
+                                            ? JyPalette.of(context).onSignal
+                                            : JyPalette.of(context).text1,
+                                      ),
+                                ),
                               if (!message.recalled &&
                                   message.imageAttachment &&
                                   message.attachmentId != null)
