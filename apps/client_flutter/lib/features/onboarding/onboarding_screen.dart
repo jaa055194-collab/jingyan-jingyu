@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
+import '../../ui/ui.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({
@@ -130,6 +131,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             padding: const EdgeInsets.all(24),
             shrinkWrap: true,
             children: [
+              const Center(
+                child: JySonarRings(size: 96, rings: 3, pulseOnAppear: true),
+              ),
+              const SizedBox(height: JySpace.lg),
               Text(
                 '初次设置 · ${step + 1}/3',
                 style: Theme.of(context).textTheme.labelLarge,
@@ -394,8 +399,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ],
               if (model.busy)
                 const Padding(
-                  padding: EdgeInsets.only(top: 16),
-                  child: LinearProgressIndicator(),
+                  padding: EdgeInsets.only(top: JySpace.lg),
+                  child: JyBusyIndicator(label: '正在连接', linear: true),
                 ),
               if (model.error != null)
                 Padding(
