@@ -457,61 +457,66 @@ class SettingsScreen extends StatelessWidget {
           children: [
             _accountCard(context),
             const JySectionHeader(title: '隐私与安全'),
-            SwitchListTile(
-              title: const Text('应用锁'),
-              subtitle: const Text('使用 PIN 保护本机聊天内容'),
-              value: model.appLockEnabled,
-              onChanged: model.busy
-                  ? null
-                  : (value) => editLock(context, value),
-            ),
-            SwitchListTile(
-              title: const Text('隐藏通知正文'),
-              subtitle: const Text('通知仅显示有新消息'),
-              value: model.hideNotificationBody,
-              onChanged: model.busy ? null : model.setHideNotificationBody,
-            ),
-            SwitchListTile(
-              title: const Text('允许 AI 读取附件'),
-              subtitle: Text(
-                model.selectedConversationId == null
-                    ? '请先选择会话，再管理附件授权'
-                    : '仅对当前会话生效，可随时撤销',
-              ),
-              value: model.aiConsentGranted,
-              onChanged: model.busy || model.selectedConversationId == null
-                  ? null
-                  : model.setAiConsent,
-            ),
-            ListTile(
-              key: const Key('open-device-sessions'),
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.devices_outlined),
-              title: const Text('设备会话'),
-              subtitle: const Text('查看已登录设备，或远程下线'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) {
-                    final runtime = model;
-                    final connection =
-                        runtime is ClientRuntime &&
-                            runtime.authenticated &&
-                            !runtime.locked
-                        ? runtime.connection
-                        : null;
-                    final api = connection == null
-                        ? null
-                        : DeviceSessionsApi(connection);
-                    return DeviceSessionsScreen(
-                      listDevices: api?.listDevices,
-                      revokeDevice: api?.revokeDevice,
-                      session: api == null ? null : model,
-                    );
-                  },
+            JyGroup(
+              children: [
+                SwitchListTile(
+                  title: const Text('应用锁'),
+                  subtitle: const Text('使用 PIN 保护本机聊天内容'),
+                  value: model.appLockEnabled,
+                  onChanged: model.busy
+                      ? null
+                      : (value) => editLock(context, value),
                 ),
-              ),
+                SwitchListTile(
+                  title: const Text('隐藏通知正文'),
+                  subtitle: const Text('通知仅显示有新消息'),
+                  value: model.hideNotificationBody,
+                  onChanged: model.busy ? null : model.setHideNotificationBody,
+                ),
+                SwitchListTile(
+                  title: const Text('允许 AI 读取附件'),
+                  subtitle: Text(
+                    model.selectedConversationId == null
+                        ? '请先选择会话，再管理附件授权'
+                        : '仅对当前会话生效，可随时撤销',
+                  ),
+                  value: model.aiConsentGranted,
+                  onChanged: model.busy || model.selectedConversationId == null
+                      ? null
+                      : model.setAiConsent,
+                ),
+                ListTile(
+                  key: const Key('open-device-sessions'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.devices_outlined),
+                  title: const Text('设备会话'),
+                  subtitle: const Text('查看已登录设备，或远程下线'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) {
+                        final runtime = model;
+                        final connection =
+                            runtime is ClientRuntime &&
+                                runtime.authenticated &&
+                                !runtime.locked
+                            ? runtime.connection
+                            : null;
+                        final api = connection == null
+                            ? null
+                            : DeviceSessionsApi(connection);
+                        return DeviceSessionsScreen(
+                          listDevices: api?.listDevices,
+                          revokeDevice: api?.revokeDevice,
+                          session: api == null ? null : model,
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
             ),
+            const SizedBox(height: JySpace.sm),
             if (model is ClientRuntime)
               OwnerRuleGreetingSettingsPanel(
                 onOpen: model.authenticated && !model.locked
