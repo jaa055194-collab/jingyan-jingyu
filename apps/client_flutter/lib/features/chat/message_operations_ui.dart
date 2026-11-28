@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
 import '../../net/message_operations_api.dart';
+import '../../ui/ui.dart';
 import 'chat_pins_dialog.dart';
 import 'message_reactions_sheet.dart';
 
@@ -80,7 +81,8 @@ Future<void> openMessageActions(
                           ? () => Navigator.of(sheet).pop(_Action.edit)
                           : null,
                     ),
-                  if (model.supportsMessageReactions && message.operationEligible)
+                  if (model.supportsMessageReactions &&
+                      message.operationEligible)
                     ListTile(
                       key: const Key('message-action-reactions'),
                       leading: const Icon(Icons.emoji_emotions_outlined),
@@ -318,7 +320,8 @@ class _MessageMutationDialogState extends State<_MessageMutationDialog> {
                   )
                 else
                   const Text('撤回后，宿主不再下发原正文，本机会显示占位。不会清除其他设备已有的副本或剪贴板内容。'),
-                if (_submitting) const LinearProgressIndicator(),
+                if (_submitting)
+                  const JyBusyIndicator(label: '正在处理消息操作', linear: true),
                 if (_failure != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),

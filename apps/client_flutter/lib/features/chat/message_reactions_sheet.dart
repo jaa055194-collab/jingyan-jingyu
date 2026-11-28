@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../app/shell_view_model.dart';
 import '../../net/host_connection.dart' show HostReadCancellation;
 import '../../net/message_reactions_api.dart';
+import '../../ui/ui.dart';
 
 Future<void> openMessageReactions(
   BuildContext context, {
@@ -195,9 +196,10 @@ class _MessageReactionsSheetState extends State<_MessageReactionsSheet> {
                 else ...[
                   if (_working) ...[
                     const SizedBox(height: 8),
-                    LinearProgressIndicator(
+                    JyBusyIndicator(
                       key: const Key('message-reactions-working'),
-                      semanticsLabel: _saving ? '正在确认回应' : '正在读取回应',
+                      label: _saving ? '正在确认回应' : '正在读取回应',
+                      linear: true,
                     ),
                   ] else ...[
                     if (_notice case final notice?)

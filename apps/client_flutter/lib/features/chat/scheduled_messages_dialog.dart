@@ -6,6 +6,7 @@ import '../../app/shell_view_model.dart';
 import '../../net/host_connection.dart' show HostReadCancellation;
 import '../../net/scheduled_messages_api.dart';
 import '../../net/scheduled_messages_scope.dart';
+import '../../ui/ui.dart';
 
 /// The group-only scheduling surface. It acts on the exact captured
 /// conversation scope and never reads or rewrites the chat composer draft.
@@ -392,7 +393,11 @@ class _ScheduledMessagesScreenState extends State<ScheduledMessagesScreen> {
                 const Text('仅用于当前群聊的普通文字；一次定时发送。桌面端入口不会发送手机通知、附件或触发 AI。'),
                 const SizedBox(height: 8),
                 if (_busy)
-                  const LinearProgressIndicator(key: Key('schedule-loading')),
+                  const JyBusyIndicator(
+                    key: Key('schedule-loading'),
+                    label: '正在读取定时消息',
+                    linear: true,
+                  ),
                 if (_readProblem != null)
                   Text(
                     _readProblem!,
@@ -602,7 +607,8 @@ class _ScheduledMessagesScreenState extends State<ScheduledMessagesScreen> {
                   key: Key('schedule-status-legend'),
                 ),
                 for (final item in items)
-                  Card(
+                  JySlab(
+                    padding: EdgeInsets.zero,
                     key: Key('schedule-row-${item.id}'),
                     child: ListTile(
                       title: Text(_formatLocal(item.at)),
