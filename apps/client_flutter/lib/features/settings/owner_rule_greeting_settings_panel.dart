@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
 import '../../net/owner_rule_greeting_api.dart';
+import '../../ui/ui.dart';
 
 /// The account-wide control is available without resolving or selecting an AI.
 class OwnerRuleGreetingSettingsPanel extends StatelessWidget {
@@ -133,14 +134,11 @@ class _OwnerRuleGreetingStopScreenState
   }
 
   Widget _note(String text, String key) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Semantics(
-      liveRegion: true,
-      child: Text(
-        text,
-        key: Key('owner-rule-greeting-global-$key'),
-        style: TextStyle(color: Theme.of(context).colorScheme.error),
-      ),
+    padding: const EdgeInsets.symmetric(vertical: JySpace.xs),
+    child: JyBanner(
+      key: Key('owner-rule-greeting-global-$key'),
+      kind: JyBannerKind.error,
+      message: text,
     ),
   );
 
@@ -166,7 +164,10 @@ class _OwnerRuleGreetingStopScreenState
                 ),
                 const SizedBox(height: 8),
                 if (_busy)
-                  const LinearProgressIndicator(semanticsLabel: '正在读取或提交账户级停止'),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: JySpace.sm),
+                    child: JyBusyIndicator(label: '正在读取或提交账户级停止', linear: true),
+                  ),
                 if (!widget.session.online && !_busy)
                   const Text('请连接宿主后读取或修改。'),
                 if (_writeProblem case final problem?)

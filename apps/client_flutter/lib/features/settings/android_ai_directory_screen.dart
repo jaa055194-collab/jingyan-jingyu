@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
 import '../../app/status_panel.dart';
+import '../../ui/ui.dart';
 
 /// Android's entry for each owned AI. Opening it performs no host request.
 class AndroidAiDirectoryScreen extends StatefulWidget {
@@ -320,8 +321,9 @@ class _AndroidAiDirectoryScreenState extends State<AndroidAiDirectoryScreen> {
                           : '连接宿主后，点“刷新我的 AI”读取。',
                     ),
             for (final ai in model.ownAiAccounts)
-              Card(
+              JySlab(
                 key: Key('android-ai-row-${ai.accountId}'),
+                padding: EdgeInsets.zero,
                 child: Column(
                   children: [
                     ListTile(
