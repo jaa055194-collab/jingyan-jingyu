@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/creative_api.dart';
+import '../../ui/ui.dart';
 
 /// Read-only presentation of the report carried by the selected list row.
 class CreativeReportDetail extends StatelessWidget {
@@ -22,62 +23,111 @@ class CreativeReportDetail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = JyPalette.of(context);
+    final text = Theme.of(context).textTheme;
     final moods = report.moodCurve.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
-    final scopes = report.sourceScopes.map(
-      (scope) => _scopeLabels[scope] ?? scope,
-    );
+    final scopes = report.sourceScopes
+        .map((scope) => _scopeLabels[scope] ?? scope)
+        .toList();
     final busiestDay = report.busiestDay;
 
     Widget section(String label, Widget body) => Padding(
-      padding: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.only(top: JySpace.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Semantics(
             header: true,
-            child: Text(label, style: theme.textTheme.titleSmall),
+            child: Text(
+              label,
+              style: text.labelMedium?.copyWith(
+                color: palette.text2,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: JySpace.xs),
           body,
         ],
       ),
     );
 
-    Widget entries(Iterable<String> values, String emptyLabel) => values.isEmpty
-        ? Text(emptyLabel)
+    Widget pill(String value) => Container(
+      decoration: ShapeDecoration(
+        color: palette.raised,
+        shape: JyShapes.rounded(JyRadius.pill),
+      ),
+      padding: const EdgeInsets.symmetric(
+        horizontal: JySpace.md,
+        vertical: JySpace.xs,
+      ),
+      child: Text(value, style: text.bodySmall?.copyWith(color: palette.text2)),
+    );
+
+    Widget pills(Iterable<String> values, String emptyLabel) => values.isEmpty
+        ? Text(
+            emptyLabel,
+            style: text.bodyMedium?.copyWith(color: palette.text2),
+          )
         : Wrap(
-            spacing: 24,
-            runSpacing: 4,
-            children: [for (final value in values) Text(value)],
+            spacing: JySpace.sm,
+            runSpacing: JySpace.sm,
+            children: [for (final value in values) pill(value)],
           );
+
+    Widget miniSlab(String value) => Container(
+      decoration: ShapeDecoration(
+        color: palette.raised,
+        shape: JyShapes.rounded(JyRadius.md),
+      ),
+      padding: const EdgeInsets.all(JySpace.md),
+      child: Text(
+        value,
+        style: text.bodyMedium?.copyWith(color: palette.text1),
+      ),
+    );
 
     return Align(
       alignment: AlignmentDirectional.centerStart,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 804),
-        child: Container(
-          width: double.infinity,
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(
+            JySpace.lg,
+            0,
+            JySpace.lg,
+            JySpace.lg,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('统计区间：${report.windowStartDay} 至 ${report.windowEndDay}'),
-              Text('生成时间：$_generatedAt'),
-              const SizedBox(height: 8),
-              entries([
-                '完成的约定：${report.completedAgreements} 项',
-                '打卡天数：${report.checkinDays} 天',
-              ], ''),
+              Text(
+                '统计区间：${report.windowStartDay} 至 ${report.windowEndDay}',
+                style: text.bodySmall?.copyWith(
+                  color: palette.text3,
+                  fontFeatures: JyTypography.tabularFigures,
+                ),
+              ),
+              Text(
+                '生成时间：$_generatedAt',
+                style: text.bodySmall?.copyWith(
+                  color: palette.text3,
+                  fontFeatures: JyTypography.tabularFigures,
+                ),
+              ),
+              const SizedBox(height: JySpace.sm),
+              Wrap(
+                spacing: JySpace.sm,
+                runSpacing: JySpace.sm,
+                children: [
+                  miniSlab('完成的约定：${report.completedAgreements} 项'),
+                  miniSlab('打卡天数：${report.checkinDays} 天'),
+                ],
+              ),
               section(
                 '共同话题',
-                entries(
+                pills(
                   report.commonTopics.map(
                     (topic) => '${topic.label} · ${topic.count} 次',
                   ),
@@ -86,7 +136,7 @@ class CreativeReportDetail extends StatelessWidget {
               ),
               section(
                 '心情记录（按日）',
-                entries(
+                pills(
                   moods.map((entry) => '${entry.key}：${entry.value}'),
                   '暂无心情记录',
                 ),
@@ -98,32 +148,80 @@ class CreativeReportDetail extends StatelessWidget {
                     report.keywords.isEmpty
                         ? '暂无年度关键词'
                         : report.keywords.join('、'),
+                    style: text.bodyMedium?.copyWith(color: palette.text1),
                   ),
                 ),
                 section(
                   '年度里程碑',
                   report.milestones.isEmpty
-                      ? const Text('暂无年度里程碑')
+                      ? Text(
+                          '暂无年度里程碑',
+                          style: text.bodyMedium?.copyWith(
+                            color: palette.text2,
+                          ),
+                        )
                       : Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             for (final milestone in report.milestones)
-                              Text(milestone),
+                              Text(
+                                milestone,
+                                style: text.bodyMedium?.copyWith(
+                                  color: palette.text1,
+                                ),
+                              ),
                           ],
                         ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: JySpace.sm),
                 Text(
                   '最热闹的一天：${busiestDay == null || busiestDay.trim().isEmpty ? '未记录' : busiestDay}',
+                  style: text.bodyMedium?.copyWith(color: palette.text1),
                 ),
               ],
               section(
                 '报告信',
-                Text(report.letter.trim().isEmpty ? '未附信件' : report.letter),
+                Container(
+                  decoration: ShapeDecoration(
+                    color: palette.raised,
+                    shape: JyShapes.rounded(JyRadius.md),
+                  ),
+                  padding: const EdgeInsets.all(JySpace.md),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: ExcludeSemantics(
+                          child: Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: palette.ember,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: JySpace.sm),
+                      Expanded(
+                        child: Text(
+                          report.letter.trim().isEmpty ? '未附信件' : report.letter,
+                          style: text.bodyMedium?.copyWith(
+                            color: palette.text1,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
               section(
                 '来源范围',
-                Text(scopes.isEmpty ? '未记录来源范围' : scopes.join('、')),
+                Text(
+                  scopes.isEmpty ? '未记录来源范围' : scopes.join('、'),
+                  style: text.bodySmall?.copyWith(color: palette.text3),
+                ),
               ),
             ],
           ),

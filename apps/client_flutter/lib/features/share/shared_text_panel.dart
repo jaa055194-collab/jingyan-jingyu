@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
+import '../../ui/ui.dart';
 
 /// A staged share is never routed to the current conversation by default.
 class SharedTextPanel extends StatelessWidget {
@@ -33,7 +34,7 @@ class SharedTextPanel extends StatelessWidget {
     final chooserContext = context;
     final session = model.ownAiSessionContext;
     int? dialogGeneration;
-    final applied = await showDialog<bool>(
+    final applied = await showJyDialog<bool>(
       context: chooserContext,
       builder: (_) {
         dialogGeneration ??= navigationGeneration();
@@ -66,17 +67,17 @@ class SharedTextPanel extends StatelessWidget {
     final share = model.incomingSharedText;
     final notice = model.incomingShareNotice;
     if (share == null && notice == null) return const SizedBox.shrink();
-    final color = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final palette = JyPalette.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: JySpace.lg,
+        vertical: JySpace.sm,
+      ),
+      child: JySlab(
         key: const Key('incoming-shared-text-panel'),
-        width: double.infinity,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: color.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(8),
-        ),
+        tone: JyTone.raised,
+        padding: const EdgeInsets.all(JySpace.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -88,25 +89,36 @@ class SharedTextPanel extends StatelessWidget {
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 softWrap: true,
+                style: text.bodyMedium?.copyWith(color: palette.text1),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: JySpace.sm),
             ],
             if (notice != null) ...[
-              Text(notice, key: const Key('shared-text-notice')),
-              if (share != null) const SizedBox(height: 8),
+              Text(
+                notice,
+                key: const Key('shared-text-notice'),
+                style: text.bodySmall?.copyWith(color: palette.text2),
+              ),
+              if (share != null) const SizedBox(height: JySpace.sm),
             ],
             if (share != null)
               Wrap(
-                spacing: 8,
-                runSpacing: 4,
+                spacing: JySpace.sm,
+                runSpacing: JySpace.xs,
                 children: [
-                  OutlinedButton(
-                    onPressed: model.busy ? null : () => _choose(context),
-                    child: const Text('选择会话'),
+                  JyPressable(
+                    borderRadius: BorderRadius.circular(JyRadius.md),
+                    child: OutlinedButton(
+                      onPressed: model.busy ? null : () => _choose(context),
+                      child: const Text('选择会话'),
+                    ),
                   ),
-                  TextButton(
-                    onPressed: model.busy ? null : model.discardSharedText,
-                    child: const Text('丢弃分享'),
+                  JyPressable(
+                    borderRadius: BorderRadius.circular(JyRadius.md),
+                    child: TextButton(
+                      onPressed: model.busy ? null : model.discardSharedText,
+                      child: const Text('丢弃分享'),
+                    ),
                   ),
                 ],
               ),
@@ -266,7 +278,7 @@ final class _ShareTargetDialogState extends State<_ShareTargetDialog> {
               child: applying
                   ? const SizedBox.square(
                       dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: JyBusyIndicator(label: '正在加入草稿'),
                     )
                   : const Text('加入草稿'),
             ),

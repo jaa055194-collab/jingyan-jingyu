@@ -15,7 +15,9 @@ const _readOnlyKeys = <String>[
 ];
 
 void main() {
-  testWidgets('developer section groups read-only and write entries', (tester) async {
+  testWidgets('developer section groups read-only and write entries', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -62,6 +64,7 @@ void main() {
       // the previous scroll offset, which can be below an earlier entry.
       final entry = find.byKey(Key(key));
       await tester.scrollUntilVisible(entry, 200);
+      await tester.pumpAndSettle();
       await tester.tap(entry);
       await tester.pumpAndSettle();
       expect(find.byType(screenType), findsOneWidget);

@@ -1,6 +1,8 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../../app/status_panel.dart';
 import '../../net/lifecycle_api.dart';
+import '../../ui/ui.dart';
 import 'backup_file_preview_panel.dart';
 import 'backup_files.dart';
 
@@ -320,34 +322,55 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
     return '$value B';
   }
 
+  static JyBannerKind _noticeKind(String notice) {
+    if (notice.contains('失败') || notice.contains('未确认')) {
+      return JyBannerKind.error;
+    }
+    if (notice.contains('已导出') ||
+        notice.contains('已保存') ||
+        notice.contains('导入完成') ||
+        notice.contains('已清除')) {
+      return JyBannerKind.success;
+    }
+    return JyBannerKind.info;
+  }
+
   @override
   Widget build(BuildContext context) {
     final api = widget.api;
     final actionsAvailable = api != null;
+    final palette = JyPalette.of(context);
+    final text = Theme.of(context).textTheme;
+    final secondaryButtonStyle = FilledButton.styleFrom(
+      backgroundColor: palette.raised,
+      foregroundColor: palette.text1,
+      side: BorderSide(color: palette.outline),
+    );
     return Scaffold(
       appBar: AppBar(title: const Text('配额与生命周期状态')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(JySpace.lg),
         children: [
-          const Text(
+          Text(
             '只读配额/清点；导出为非破坏性，导入为显式写操作（需确认），清理仅只读预览、不执行删除。不代表可用、已授权或已清理。',
+            style: text.bodySmall?.copyWith(color: palette.text2),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: JySpace.md),
           if (_loading)
             const Padding(
-              padding: EdgeInsets.all(24),
-              child: Center(child: CircularProgressIndicator()),
+              padding: EdgeInsets.all(JySpace.xl),
+              child: Center(child: JyBusyIndicator(label: '正在读取用量')),
             ),
           if (_unknown)
-            Card(
+            StatusPanel(
               key: const Key('lifecycle-unknown'),
-              child: const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('状态未知：宿主暂不可用，或响应无法验证。不会自动重试或推测配置。'),
-              ),
+              tone: StatusTone.error,
+              icon: Icons.help_outline_rounded,
+              title: '状态未知：宿主暂不可用，或响应无法验证。不会自动重试或推测配置。',
             ),
           if (!_loading && !_unknown && _quota != null)
-            Card(
+            JySlab(
+              padding: EdgeInsets.zero,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -368,7 +391,8 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
               ),
             ),
           if (!_loading && !_unknown && _survey != null)
-            Card(
+            JySlab(
+              padding: EdgeInsets.zero,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -409,6 +433,7 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
               ),
               FilledButton(
                 key: const Key('save-lifecycle'),
+                style: secondaryButtonStyle,
                 onPressed:
                     actionsAvailable &&
                         widget.canWritePlaintext &&
@@ -421,6 +446,7 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
               ),
               FilledButton(
                 key: const Key('import-lifecycle'),
+                style: secondaryButtonStyle,
                 onPressed:
                     actionsAvailable &&
                         widget.canWritePlaintext &&
@@ -441,9 +467,10 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
           if (actionsAvailable)
             const Text('保存的文件为聊天明文，不受应用锁保护；宿主导入当前仍为内存参考实现，重启后不会保留。'),
           if (actionsAvailable && !widget.canWritePlaintext)
-            const Text(
-              key: Key('lifecycle-write-locked'),
-              '当前已锁定或账号状态已变化：保存和导入已停用。',
+            JyBanner(
+              key: const Key('lifecycle-write-locked'),
+              kind: JyBannerKind.info,
+              message: '当前已锁定或账号状态已变化：保存和导入已停用。',
             ),
           if (widget.filePreview case final access?)
             BackupFilePreviewPanel(
@@ -458,13 +485,14 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
             const SizedBox(height: 8),
             if (_cleanupLoading)
               const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Center(child: CircularProgressIndicator()),
+                padding: EdgeInsets.symmetric(vertical: JySpace.sm),
+                child: Center(child: JyBusyIndicator(label: '正在读取清理预览')),
               )
             else if (_cleanupUnknown)
-              const Text(
-                key: Key('cleanup-preview-unknown'),
-                '清理预览读取失败或结果未知；不会自动重试。',
+              JyBanner(
+                key: const Key('cleanup-preview-unknown'),
+                kind: JyBannerKind.error,
+                message: '清理预览读取失败或结果未知；不会自动重试。',
               )
             else if (_cleanupPreview != null) ...[
               Text('运行日：${_cleanupPreview!.dayKey}'),
@@ -480,21 +508,24 @@ class _BackupQuotaScreenState extends State<BackupQuotaScreen> {
               onPressed: _cleanupLoading ? null : _loadCleanupPreview,
               child: const Text('刷新清理预览'),
             ),
-            const Text(
-              key: Key('cleanup-execution-gap'),
-              '执行尚未提供：宿主仅有每日系统清理任务，本页只做只读预览，不会删除任何数据。',
+            JyBanner(
+              key: const Key('cleanup-execution-gap'),
+              kind: JyBannerKind.info,
+              message: '执行尚未提供：宿主仅有每日系统清理任务，本页只做只读预览，不会删除任何数据。',
             ),
           ] else
-            const Text(
-              key: Key('cleanup-execution-gap'),
-              '清理：宿主未提供清理 HTTP 接口（缺口），本页不执行清理。',
+            JyBanner(
+              key: const Key('cleanup-execution-gap'),
+              kind: JyBannerKind.info,
+              message: '清理：宿主未提供清理 HTTP 接口（缺口），本页不执行清理。',
             ),
           if (_actionNotice != null)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                _actionNotice!,
+              padding: const EdgeInsets.only(top: JySpace.sm),
+              child: JyBanner(
                 key: const Key('lifecycle-action-notice'),
+                kind: _noticeKind(_actionNotice!),
+                message: _actionNotice!,
               ),
             ),
         ],

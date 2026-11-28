@@ -4,6 +4,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart' show HostReadCancellation;
 import '../../net/owner_auto_memory_api.dart';
+import '../../ui/ui.dart';
+import 'ai_config_problem_line.dart';
 
 /// Default-off, per-AI opt-in auto chat-history memory. Only the owner's own
 /// authorized private chat is collected; never group or third-party content.
@@ -26,8 +28,7 @@ class OwnerAutoMemorySection extends StatefulWidget {
   final bool Function() canContactHost;
 
   @override
-  State<OwnerAutoMemorySection> createState() =>
-      _OwnerAutoMemorySectionState();
+  State<OwnerAutoMemorySection> createState() => _OwnerAutoMemorySectionState();
 }
 
 class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
@@ -58,7 +59,10 @@ class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
     super.dispose();
   }
 
-  void _remember(OwnerAutoMemorySettings settings, OwnerAutoMemoryList entries) {
+  void _remember(
+    OwnerAutoMemorySettings settings,
+    OwnerAutoMemoryList entries,
+  ) {
     _settings = settings;
     _entries = entries;
     _readProblem = null;
@@ -176,7 +180,10 @@ class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
 
   Future<void> _clear() async {
     final entries = _entries;
-    if (!_canRequest || _busyNow || entries == null || entries.entries.isEmpty) {
+    if (!_canRequest ||
+        _busyNow ||
+        entries == null ||
+        entries.entries.isEmpty) {
       return;
     }
     final approved = await showDialog<bool>(
@@ -293,7 +300,9 @@ class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
             const SizedBox(height: 8),
             const Text('范围：仅采集当前本人 AI 私聊中你本人的文字消息；不采集群聊或第三人内容，不主动发送或通知。'),
             const SizedBox(height: 8),
-            const Text('只有明确说“记住/记下/别忘了/以后/别忘”且长度有界的内容会立即生效；其余文字仅作为待确认保留，可在下方删除。'),
+            const Text(
+              '只有明确说“记住/记下/别忘了/以后/别忘”且长度有界的内容会立即生效；其余文字仅作为待确认保留，可在下方删除。',
+            ),
             const SizedBox(height: 8),
             Text('接收方：${fresh.target!.providerId} / ${fresh.target!.model}'),
             Text('Origin：${fresh.target!.origin}'),
@@ -374,17 +383,8 @@ class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
   }
 
   Widget _noticeText(String text, Key key, {bool error = false}) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Semantics(
-      liveRegion: true,
-      child: Text(
-        text,
-        key: key,
-        style: error
-            ? TextStyle(color: Theme.of(context).colorScheme.error)
-            : null,
-      ),
-    ),
+    padding: const EdgeInsets.symmetric(vertical: JySpace.xs),
+    child: AiConfigNoticeLine(text, textKey: key, problem: error),
   );
 
   String _problemText(OwnerAutoMemoryProblem problem) => switch (problem) {
@@ -407,7 +407,8 @@ class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
     final canWrite = canRequest && settings != null && _entries != null;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Card(
+      child: JySlab(
+        padding: EdgeInsets.zero,
         key: const Key('owner-auto-memory-section'),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -419,7 +420,11 @@ class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
               const Text('默认关闭。开启后仅自动采集你本人与当前 AI 私聊中的文字；不采集群聊或第三人内容，不主动联系。'),
               const SizedBox(height: 8),
               if (_busyNow)
-                const LinearProgressIndicator(key: Key('auto-memory-loading')),
+                const JyBusyIndicator(
+                  key: Key('auto-memory-loading'),
+                  label: '正在读取自动记忆',
+                  linear: true,
+                ),
               if (!widget.canContactHost() && !_busyNow)
                 _noticeText(
                   '连接宿主后才能读取或修改自动记忆。',
@@ -473,7 +478,8 @@ class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
                         : '未授权采集（默认关闭）。开启需单独确认当前接收条件。',
                   ),
                   value: settings.enabled,
-                  onChanged: canWrite && (settings.enabled || settings.target != null)
+                  onChanged:
+                      canWrite && (settings.enabled || settings.target != null)
                       ? _toggle
                       : null,
                 ),

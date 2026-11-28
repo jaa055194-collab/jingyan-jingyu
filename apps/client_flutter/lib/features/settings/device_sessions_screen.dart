@@ -2,10 +2,10 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/shell_view_model.dart';
 import '../../net/device_sessions_api.dart';
+import '../../ui/ui.dart';
 
 typedef DeviceSessionLister = Future<DeviceSessionsRead> Function();
-typedef DeviceRevoker =
-    Future<DeviceRevokeOutcome> Function(String deviceId);
+typedef DeviceRevoker = Future<DeviceRevokeOutcome> Function(String deviceId);
 
 /// Remote device-session list with an explicit, confirmed remote sign-off.
 ///
@@ -105,7 +105,8 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
     if (_routeInvalid) return false;
     final session = _routeSession;
     if (session == null) return true;
-    final valid = _routeAccount != null &&
+    final valid =
+        _routeAccount != null &&
         session.authenticated &&
         !session.locked &&
         session.connectedAccountId == _routeAccount &&
@@ -160,9 +161,8 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
           ? read.devices
           : const [];
       _phase = switch (read.status) {
-        DeviceSessionsStatus.loaded => _devices.isEmpty
-            ? _Phase.empty
-            : _Phase.ready,
+        DeviceSessionsStatus.loaded =>
+          _devices.isEmpty ? _Phase.empty : _Phase.ready,
         DeviceSessionsStatus.unauthenticated => _Phase.denied,
         DeviceSessionsStatus.unavailable => _Phase.unavailable,
         DeviceSessionsStatus.malformed => _Phase.malformed,
@@ -267,14 +267,16 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
             ),
             Text('设备标识：${device.id}'),
             Text('最近使用：${device.lastUsedAt.toIso8601String()}'),
-            if (device.current)
-              const Text('这是宿主标记的当前设备：下线后本机需要重新登录。'),
+            if (device.current) const Text('这是宿主标记的当前设备：下线后本机需要重新登录。'),
             Align(
               alignment: AlignmentDirectional.centerStart,
               child: TextButton(
                 key: Key('device-revoke-${device.id}'),
                 onPressed:
-                    _routeInvalid || _loading || _revoking || _routeRevoker == null
+                    _routeInvalid ||
+                        _loading ||
+                        _revoking ||
+                        _routeRevoker == null
                     ? null
                     : () => _askRevoke(device),
                 child: const Text('远程下线'),
@@ -341,7 +343,7 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
             if (confirmation.submitting)
               const Padding(
                 padding: EdgeInsets.only(top: 8),
-                child: LinearProgressIndicator(),
+                child: JyBusyIndicator(label: '正在下线', linear: true),
               ),
             Row(
               children: [
@@ -414,7 +416,7 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
             if (_phase == _Phase.loading)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
-                child: Center(child: CircularProgressIndicator()),
+                child: Center(child: JyBusyIndicator(label: '正在读取设备会话')),
               )
             else if (_phase == _Phase.denied)
               const Text(
@@ -432,10 +434,7 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
                 key: Key('device-sessions-malformed'),
               )
             else if (_phase == _Phase.empty)
-              const Text(
-                '当前账号没有可显示的设备会话。',
-                key: Key('device-sessions-empty'),
-              )
+              const Text('当前账号没有可显示的设备会话。', key: Key('device-sessions-empty'))
             else ...[
               if (!_devices.any((row) => row.current))
                 const Padding(
@@ -446,7 +445,8 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
                     '不会默认任何一台可安全下线。',
                   ),
                 ),
-              for (final device in _devices) _deviceCard(device, text.titleMedium),
+              for (final device in _devices)
+                _deviceCard(device, text.titleMedium),
             ],
             _confirmationPanel(),
           ],

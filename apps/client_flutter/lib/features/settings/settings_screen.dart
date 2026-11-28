@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
@@ -25,6 +26,7 @@ import '../../net/search_api.dart';
 import '../../net/voice_api.dart';
 import '../../net/voice_call_api.dart';
 import '../../net/world_api.dart';
+import '../../ui/ui.dart';
 import '../ai_config/ai_config_editor.dart';
 import '../ai_config/ai_config_panel.dart';
 import '../ai_config/model_diagnostics_screen.dart';
@@ -402,6 +404,42 @@ class SettingsScreen extends StatelessWidget {
     ];
   }
 
+  Widget _accountCard(BuildContext context) {
+    final palette = JyPalette.of(context);
+    final text = Theme.of(context).textTheme;
+    final account = model.connectedAccountId;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: JySpace.md),
+      child: JySlab(
+        padding: const EdgeInsets.all(JySpace.lg),
+        child: Row(
+          children: [
+            JyAvatar(label: account ?? '?'),
+            const SizedBox(width: JySpace.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    account ?? '未登录',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: text.titleMedium?.copyWith(color: palette.text1),
+                  ),
+                  Text(
+                    model.online ? '已连接宿主' : '未连接到宿主',
+                    style: text.bodySmall?.copyWith(color: palette.text3),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Column(
     children: [
@@ -417,62 +455,68 @@ class SettingsScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text('隐私与安全', style: Theme.of(context).textTheme.titleMedium),
-            SwitchListTile(
-              title: const Text('应用锁'),
-              subtitle: const Text('使用 PIN 保护本机聊天内容'),
-              value: model.appLockEnabled,
-              onChanged: model.busy
-                  ? null
-                  : (value) => editLock(context, value),
-            ),
-            SwitchListTile(
-              title: const Text('隐藏通知正文'),
-              subtitle: const Text('通知仅显示有新消息'),
-              value: model.hideNotificationBody,
-              onChanged: model.busy ? null : model.setHideNotificationBody,
-            ),
-            SwitchListTile(
-              title: const Text('允许 AI 读取附件'),
-              subtitle: Text(
-                model.selectedConversationId == null
-                    ? '请先选择会话，再管理附件授权'
-                    : '仅对当前会话生效，可随时撤销',
-              ),
-              value: model.aiConsentGranted,
-              onChanged: model.busy || model.selectedConversationId == null
-                  ? null
-                  : model.setAiConsent,
-            ),
-            ListTile(
-              key: const Key('open-device-sessions'),
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.devices_outlined),
-              title: const Text('设备会话'),
-              subtitle: const Text('查看已登录设备，或远程下线'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) {
-                    final runtime = model;
-                    final connection =
-                        runtime is ClientRuntime &&
-                            runtime.authenticated &&
-                            !runtime.locked
-                        ? runtime.connection
-                        : null;
-                    final api = connection == null
-                        ? null
-                        : DeviceSessionsApi(connection);
-                    return DeviceSessionsScreen(
-                      listDevices: api?.listDevices,
-                      revokeDevice: api?.revokeDevice,
-                      session: api == null ? null : model,
-                    );
-                  },
+            _accountCard(context),
+            const JySectionHeader(title: '隐私与安全'),
+            JyGroup(
+              children: [
+                SwitchListTile(
+                  title: const Text('应用锁'),
+                  subtitle: const Text('使用 PIN 保护本机聊天内容'),
+                  value: model.appLockEnabled,
+                  onChanged: model.busy
+                      ? null
+                      : (value) => editLock(context, value),
                 ),
-              ),
+                SwitchListTile(
+                  title: const Text('隐藏通知正文'),
+                  subtitle: const Text('通知仅显示有新消息'),
+                  value: model.hideNotificationBody,
+                  onChanged: model.busy ? null : model.setHideNotificationBody,
+                ),
+                SwitchListTile(
+                  title: const Text('允许 AI 读取附件'),
+                  subtitle: Text(
+                    model.selectedConversationId == null
+                        ? '请先选择会话，再管理附件授权'
+                        : '仅对当前会话生效，可随时撤销',
+                  ),
+                  value: model.aiConsentGranted,
+                  onChanged: model.busy || model.selectedConversationId == null
+                      ? null
+                      : model.setAiConsent,
+                ),
+                ListTile(
+                  key: const Key('open-device-sessions'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.devices_outlined),
+                  title: const Text('设备会话'),
+                  subtitle: const Text('查看已登录设备，或远程下线'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) {
+                        final runtime = model;
+                        final connection =
+                            runtime is ClientRuntime &&
+                                runtime.authenticated &&
+                                !runtime.locked
+                            ? runtime.connection
+                            : null;
+                        final api = connection == null
+                            ? null
+                            : DeviceSessionsApi(connection);
+                        return DeviceSessionsScreen(
+                          listDevices: api?.listDevices,
+                          revokeDevice: api?.revokeDevice,
+                          session: api == null ? null : model,
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
             ),
+            const SizedBox(height: JySpace.sm),
             if (model is ClientRuntime)
               OwnerRuleGreetingSettingsPanel(
                 onOpen: model.authenticated && !model.locked
@@ -484,7 +528,7 @@ class SettingsScreen extends StatelessWidget {
                 model.authenticated &&
                 !model.locked) ...[
               const Divider(height: 32),
-              Text('我的 AI 配置', style: Theme.of(context).textTheme.titleMedium),
+              const JySectionHeader(title: '我的 AI 配置'),
               const Text('查看每个 AI 使用的模型与 API、人格和活人感设置，或打开本机私聊。'),
               ListTile(
                 key: const Key('open-android-ai-directory'),
@@ -510,46 +554,59 @@ class SettingsScreen extends StatelessWidget {
               ),
             ],
             const Divider(height: 32),
-            Text('通用', style: Theme.of(context).textTheme.titleMedium),
-            SwitchListTile(
-              title: const Text('开机自启动'),
-              subtitle: const Text('由当前设备的平台能力决定是否可用'),
-              value: model.autoStart,
-              onChanged: model.busy ? null : model.setAutoStart,
-            ),
-            const SizedBox(height: 16),
-            const Text('外观'),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
+            const JySectionHeader(title: '通用'),
+            JyGroup(
               children: [
-                for (final item in const {
-                  ThemeMode.system: '跟随系统',
-                  ThemeMode.light: '浅色',
-                  ThemeMode.dark: '深色',
-                }.entries)
-                  ChoiceChip(
-                    label: Text(item.value),
-                    selected: model.themeMode == item.key,
-                    onSelected: model.busy
-                        ? null
-                        : (_) => model.setThemeMode(item.key),
-                  ),
+                SwitchListTile(
+                  title: const Text('开机自启动'),
+                  subtitle: const Text('由当前设备的平台能力决定是否可用'),
+                  value: model.autoStart,
+                  onChanged: model.busy ? null : model.setAutoStart,
+                ),
               ],
             ),
-            const SizedBox(height: 24),
-            Text('字体大小 · ${(model.fontScale * 100).round()}%'),
-            Slider(
-              value: model.fontScale.clamp(0.85, 1.5),
-              min: 0.85,
-              max: 1.5,
-              divisions: 13,
-              label: '${(model.fontScale * 100).round()}%',
-              onChanged: model.busy ? null : model.setFontScale,
+            const SizedBox(height: 16),
+            const JySectionHeader(title: '外观'),
+            const SizedBox(height: 8),
+            JySlab(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final item in const {
+                        ThemeMode.system: '跟随系统',
+                        ThemeMode.light: '浅色',
+                        ThemeMode.dark: '深色',
+                      }.entries)
+                        ChoiceChip(
+                          label: Text(item.value),
+                          selected: model.themeMode == item.key,
+                          onSelected: model.busy
+                              ? null
+                              : (_) => model.setThemeMode(item.key),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  _FontScaleControl(model: model),
+                  const Text('此设置同时应用于导航、消息和输入区域。'),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    key: const Key('reduce-motion'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('减少动效'),
+                    subtitle: const Text('关闭位移、缩放和弹簧动画，只保留不超过 120ms 的淡入淡出'),
+                    value: model.reduceMotion,
+                    onChanged: model.busy ? null : model.setReduceMotion,
+                  ),
+                ],
+              ),
             ),
-            const Text('此设置同时应用于导航、消息和输入区域。'),
             const Divider(height: 32),
-            Text('开发者', style: Theme.of(context).textTheme.titleMedium),
+            const JySectionHeader(title: '开发者'),
             Text('只读检查', style: Theme.of(context).textTheme.labelLarge),
             const Text('以下入口只读展示宿主安全元数据，不代表可用、已授权或已清理。'),
             const SizedBox(height: 4),
@@ -874,6 +931,117 @@ class SettingsScreen extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// Completes the next time [listenable] notifies its listeners.
+Future<void> _nextNotification(Listenable listenable) {
+  final completer = Completer<void>();
+  void listener() {
+    listenable.removeListener(listener);
+    completer.complete();
+  }
+
+  listenable.addListener(listener);
+  return completer.future;
+}
+
+/// Font size slider with a live sample. Dragging only previews the size; the
+/// value is saved once, when the drag (or a key press) ends.
+class _FontScaleControl extends StatefulWidget {
+  const _FontScaleControl({required this.model});
+
+  final ShellViewModel model;
+
+  @override
+  State<_FontScaleControl> createState() => _FontScaleControlState();
+}
+
+class _FontScaleControlState extends State<_FontScaleControl> {
+  static const _min = 0.85;
+  static const _max = 1.5;
+
+  /// The dragged or released value, until the model has saved it.
+  double? _pending;
+
+  /// Bumped by every drag and save, so a superseded save neither runs late nor
+  /// clears [_pending].
+  int _generation = 0;
+
+  Future<void> _save(double value) async {
+    final model = widget.model;
+    final generation = ++_generation;
+    // The runtime drops a call made while another operation holds the model
+    // busy, so wait until it is idle rather than lose the user's choice. The
+    // wait outlives this screen, so leaving settings straight away still saves.
+    while (model.busy) {
+      await _nextNotification(model);
+      if (generation != _generation) {
+        return;
+      }
+    }
+    try {
+      await model.setFontScale(value);
+    } finally {
+      if (mounted && generation == _generation) {
+        setState(() => _pending = null);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final model = widget.model;
+    final value = _pending ?? model.fontScale;
+    final percent = '${(value * 100).round()}%';
+    final sample = theme.textTheme.bodyLarge ?? const TextStyle(fontSize: 16);
+    // The shell already scales all text by model.fontScale, so scale the sample
+    // by the ratio to show `value` without applying the scale twice.
+    final ratio = model.fontScale > 0 ? value / model.fontScale : 1.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('字体大小 · $percent'),
+        MergeSemantics(
+          child: Semantics(
+            label: '字体大小',
+            child: Slider(
+              value: value.clamp(_min, _max),
+              min: _min,
+              max: _max,
+              divisions: 13,
+              label: percent,
+              // Announce the size itself, not the thumb position (100% read
+              // as 23%).
+              semanticFormatterCallback: (v) => '${(v * 100).round()}%',
+              // Stays enabled while the model is busy; _save waits instead.
+              onChangeStart: (_) => _generation++,
+              onChanged: (v) => setState(() => _pending = v),
+              onChangeEnd: (v) {
+                setState(() => _pending = v);
+                _save(v);
+              },
+            ),
+          ),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Text(
+              '预览：消息和输入框中的文字会显示成这样。',
+              key: const Key('font-scale-preview'),
+              style: sample.copyWith(fontSize: (sample.fontSize ?? 16) * ratio),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
 }
 
 class _OwnAiDirectControls extends StatelessWidget {

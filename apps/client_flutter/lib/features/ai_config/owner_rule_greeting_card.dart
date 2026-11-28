@@ -2,6 +2,8 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/owner_rule_greeting_api.dart';
+import '../../ui/ui.dart';
+import 'ai_config_problem_line.dart';
 
 typedef _Schedule = ({int local, int? offset, int start, int end});
 typedef _Review = ({OwnerRuleGreetingSettings state, _Schedule schedule});
@@ -258,16 +260,11 @@ class _OwnerRuleGreetingCardState extends State<OwnerRuleGreetingCard>
   );
 
   Widget _note(String text, String key, {bool error = false}) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Semantics(
-      liveRegion: true,
-      child: Text(
-        text,
-        key: Key('owner-rule-greeting-$key'),
-        style: error
-            ? TextStyle(color: Theme.of(context).colorScheme.error)
-            : null,
-      ),
+    padding: const EdgeInsets.symmetric(vertical: JySpace.xs),
+    child: AiConfigNoticeLine(
+      text,
+      textKey: Key('owner-rule-greeting-$key'),
+      problem: error,
     ),
   );
 
@@ -281,7 +278,8 @@ class _OwnerRuleGreetingCardState extends State<OwnerRuleGreetingCard>
     final canRequest = _canRequest && !_busy;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Card(
+      child: JySlab(
+        padding: EdgeInsets.zero,
         key: const Key('owner-rule-greeting-card'),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -292,7 +290,7 @@ class _OwnerRuleGreetingCardState extends State<OwnerRuleGreetingCard>
               const SizedBox(height: 4),
               const Text('默认关闭，仅允许该 AI 在本人私聊中使用固定问候。不使用模型或聊天历史，不保证发送。'),
               if (_busy)
-                const LinearProgressIndicator(semanticsLabel: '正在读取或提交规则问候'),
+                const JyBusyIndicator(label: '正在读取或提交规则问候', linear: true),
               if (!widget.canContactHost() && !_busy)
                 _note('连接宿主后才能读取或修改。', 'offline'),
               if (_notice case final note?) _note(note, 'saved'),

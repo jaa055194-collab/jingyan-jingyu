@@ -401,14 +401,10 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
                   key: const Key('android-ai-config-progress'),
                   height: 4,
                   child: _resolving || _busy
-                      ? const LinearProgressIndicator()
+                      ? const JyBusyIndicator(label: '正在读取或保存', linear: true)
                       : null,
                 ),
-                if (_readNotice case final notice?)
-                  Text(
-                    notice,
-                    style: TextStyle(color: theme.colorScheme.error),
-                  ),
+                if (_readNotice case final notice?) AiConfigProblemLine(notice),
                 const SizedBox(height: 16),
                 _modelSummary(),
                 KeyedSubtree(
@@ -448,15 +444,8 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
                     title: const Text('高级配置'),
                     subtitle: const Text('Provider、聊天绑定、预算与记忆'),
                     children: [
-                      if (_status case final status?)
-                        Text(
-                          status,
-                          style: TextStyle(
-                            color: _statusError
-                                ? theme.colorScheme.error
-                                : null,
-                          ),
-                        ),
+                      if (_status != null && _statusGroup == null)
+                        _writeStatusBlock(),
                       ..._advancedSections(generation),
                       ?_ownerMemoryNotes(generation),
                       ?_ownerAutoMemory(generation),
@@ -632,18 +621,8 @@ mixin _AndroidAiConfigDetails on _AiConfigEditorBase {
       ],
       if (notice != null)
         Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: Semantics(
-            liveRegion: true,
-            child: Text(
-              notice,
-              style: TextStyle(
-                color: _personaError
-                    ? Theme.of(context).colorScheme.error
-                    : null,
-              ),
-            ),
-          ),
+          padding: const EdgeInsets.only(top: JySpace.sm),
+          child: AiConfigNoticeLine(notice, problem: _personaError),
         ),
       if (draft == null && notice != null && _personaError)
         TextButton(

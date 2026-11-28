@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:client_flutter/app/shell_view_model.dart';
 import 'package:client_flutter/features/ai_config/ai_config_editor.dart';
+import 'package:client_flutter/features/ai_config/ai_config_problem_line.dart';
 import 'package:client_flutter/net/ai_config_write_api.dart';
 import 'package:client_flutter/net/host_connection.dart';
 import 'package:client_flutter/net/owner_ai_direct_api.dart';
@@ -294,6 +295,21 @@ Future<void> _enter(WidgetTester tester, String key, String value) async {
   await tester.pumpAndSettle();
 }
 
+void _expectProblemIcon(Finder text) {
+  final line = find.ancestor(
+    of: text,
+    matching: find.byType(AiConfigProblemLine, skipOffstage: false),
+  );
+  expect(
+    find.descendant(
+      of: line,
+      matching: find.byIcon(Icons.error_outline, skipOffstage: false),
+      skipOffstage: false,
+    ),
+    findsOneWidget,
+  );
+}
+
 void main() {
   testWidgets('opening the pinned Android editor does not register or read', (
     tester,
@@ -410,6 +426,13 @@ void main() {
     host.holdPatch!.complete();
     await tester.pumpAndSettle();
     expect(find.text('人格已保存。'), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.text('人格已保存。'),
+        matching: find.byType(AiConfigProblemLine),
+      ),
+      findsNothing,
+    );
     expect(find.byType(CircularProgressIndicator), findsNothing);
     expect(topProgress, findsNothing);
   });
@@ -431,6 +454,7 @@ void main() {
           find.textContaining(conflict ? '版本冲突' : '保存结果未知'),
           findsOneWidget,
         );
+        _expectProblemIcon(find.textContaining(conflict ? '版本冲突' : '保存结果未知'));
         expect(find.textContaining('版本 7'), findsNothing);
         expect(_key('android-persona-save'), findsNothing);
         expect(_key('android-persona-edit'), findsNothing);
@@ -485,6 +509,7 @@ void main() {
     expect(find.text('高级配置'), findsNothing);
     expect(_key('android-persona-edit'), findsNothing);
     expect(find.textContaining('无权读取该 AI 的配置'), findsOneWidget);
+    _expectProblemIcon(find.textContaining('无权读取该 AI 的配置'));
     expect(find.textContaining('private host detail'), findsNothing);
     expect(
       host.requests.where(

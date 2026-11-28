@@ -117,13 +117,12 @@ class _PrivateAiSessionState extends State<_PrivateAiSession> {
   Future<void> _run(
     Future<bool> Function() action, {
     required String fallback,
-    bool sending = false,
+    String? unsent,
   }) async {
     setState(() {
       _running = true;
       _localNotice = null;
     });
-    final draft = _draft.text;
     var accepted = false;
     try {
       accepted = await action();
@@ -138,29 +137,40 @@ class _PrivateAiSessionState extends State<_PrivateAiSession> {
         _localNotice = fallback;
       }
     });
-    if (_current && accepted && sending) {
-      if (_draft.text == draft) {
-        _draft.clear();
+    if (unsent == null || !_current) return;
+    if (!accepted) {
+      // A send that did not complete puts its text back, unless something
+      // new was typed meanwhile.
+      if (_draft.text.isEmpty) {
+        _draft.value = TextEditingValue(
+          text: unsent,
+          selection: TextSelection.collapsed(offset: unsent.length),
+        );
       }
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_current && _history.hasClients) {
-          _history.jumpTo(_history.position.maxScrollExtent);
-        }
-      });
+      return;
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_current && _history.hasClients) {
+        _history.jumpTo(_history.position.maxScrollExtent);
+      }
+    });
   }
 
   Future<void> _send() async {
-    final text = _draft.text.trim();
+    final unsent = _draft.text;
+    final text = unsent.trim();
     if (!_canSend ||
         text.isEmpty ||
         ModalRoute.of(context)?.isCurrent == false) {
       return;
     }
+    // Empty the draft as the send starts, so nothing typed later can extend
+    // the text being sent.
+    _draft.clear();
     await _run(
       () => _chat.send(text),
       fallback: '未完成发送，草稿仍在。请检查模型服务的网络后重试。',
-      sending: true,
+      unsent: unsent,
     );
   }
 

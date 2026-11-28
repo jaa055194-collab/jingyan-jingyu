@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../app/shell_view_model.dart';
 import '../../net/chat_pins_api.dart';
 import '../../net/host_connection.dart' show HostReadCancellation;
+import '../../ui/ui.dart';
 
 /// With a target, this is an explicit pin/unpin confirmation. Without a target,
 /// it is a read-only list of the pins already visible in the current history.
@@ -191,7 +192,11 @@ class _ChatPinsDialogState extends State<_ChatPinsDialog> {
                     const Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        LinearProgressIndicator(key: Key('chat-pins-loading')),
+                        JyBusyIndicator(
+                          key: Key('chat-pins-loading'),
+                          label: '正在读取置顶消息',
+                          linear: true,
+                        ),
                         SizedBox(height: 8),
                       ],
                     ),

@@ -50,8 +50,24 @@ abstract class ShellViewModel extends ChangeNotifier {
     required bool enabled,
     required Object interactionContext,
   }) async {}
+
+  /// Conversation id of the user's own AI partner direct chat, or null while
+  /// it is unknown. The default takes the first account in [ownAiAccounts]
+  /// whose [ownAiDirectState] names a conversation.
+  String? get partnerConversationId {
+    for (final ai in ownAiAccounts) {
+      final id = ownAiDirectState(ai.accountId).conversationId;
+      if (id != null && id.isNotEmpty) return id;
+    }
+    return null;
+  }
+
   String? get selectedConversationId;
   List<ShellConversation> get conversations;
+
+  /// False until the first read of the conversation list has finished, even a
+  /// failed one, so the UI can tell "loading" apart from "empty".
+  bool get conversationsLoaded => true;
   List<ShellMessage> get messages;
   int get queuedCount;
   String get draft;
@@ -61,6 +77,11 @@ abstract class ShellViewModel extends ChangeNotifier {
   bool get autoStart;
   ThemeMode get themeMode;
   double get fontScale;
+
+  /// Reduce-motion preference; when true the shell also turns off Material's
+  /// own animations.
+  bool get reduceMotion => false;
+  Future<void> setReduceMotion(bool value) async {}
   String? get roomPreview;
   String? get connectedAccountId => null;
   Future<void> connectHost(
@@ -295,6 +316,7 @@ class ShellConversation {
     this.unread = 0,
     this.kind = 'unknown',
     this.ownerAccountId,
+    this.lastActivityAt,
   });
   final String id;
   final String title;
@@ -302,6 +324,9 @@ class ShellConversation {
   final int unread;
   final String kind;
   final String? ownerAccountId;
+
+  /// Latest known activity, for the row's time label; null without data.
+  final DateTime? lastActivityAt;
 }
 
 class ShellMessage {

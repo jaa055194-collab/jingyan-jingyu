@@ -2,8 +2,16 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../net/owner_model_proactive_api.dart';
+import '../../ui/ui.dart';
+import 'ai_config_problem_line.dart';
 
-typedef _Schedule = ({int local, int? offset, int start, int end, int interval});
+typedef _Schedule = ({
+  int local,
+  int? offset,
+  int start,
+  int end,
+  int interval,
+});
 typedef _Review = ({OwnerModelProactiveSettings state, _Schedule schedule});
 
 /// A profile-scoped permission editor for model-driven proactive contact.
@@ -305,7 +313,13 @@ class _OwnerModelProactiveCardState extends State<OwnerModelProactiveCard>
     autocorrect: false,
     enableSuggestions: false,
     inputFormatters: [
-      LengthLimitingTextInputFormatter(offset ? 6 : numeric ? 5 : 5),
+      LengthLimitingTextInputFormatter(
+        offset
+            ? 6
+            : numeric
+            ? 5
+            : 5,
+      ),
       if (numeric) FilteringTextInputFormatter.digitsOnly,
     ],
     decoration: InputDecoration(
@@ -317,16 +331,11 @@ class _OwnerModelProactiveCardState extends State<OwnerModelProactiveCard>
   );
 
   Widget _note(String text, String key, {bool error = false}) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Semantics(
-      liveRegion: true,
-      child: Text(
-        text,
-        key: Key('owner-model-proactive-$key'),
-        style: error
-            ? TextStyle(color: Theme.of(context).colorScheme.error)
-            : null,
-      ),
+    padding: const EdgeInsets.symmetric(vertical: JySpace.xs),
+    child: AiConfigNoticeLine(
+      text,
+      textKey: Key('owner-model-proactive-$key'),
+      problem: error,
     ),
   );
 
@@ -340,7 +349,8 @@ class _OwnerModelProactiveCardState extends State<OwnerModelProactiveCard>
     final canRequest = _canRequest && !_busy;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Card(
+      child: JySlab(
+        padding: EdgeInsets.zero,
         key: const Key('owner-model-proactive-card'),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -349,9 +359,11 @@ class _OwnerModelProactiveCardState extends State<OwnerModelProactiveCard>
             children: [
               Text('本人模型主动联系', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 4),
-              const Text('默认关闭。开启后该 AI 会在 B3 预算内，于本人私聊中主动发出简短问候；使用模型但不会读取记忆或聊天历史，不保证发送，错过不补发。'),
+              const Text(
+                '默认关闭。开启后该 AI 会在 B3 预算内，于本人私聊中主动发出简短问候；使用模型但不会读取记忆或聊天历史，不保证发送，错过不补发。',
+              ),
               if (_busy)
-                const LinearProgressIndicator(semanticsLabel: '正在读取或提交模型主动联系'),
+                const JyBusyIndicator(label: '正在读取或提交模型主动联系', linear: true),
               if (!widget.canContactHost() && !_busy)
                 _note('连接宿主后才能读取或修改。', 'offline'),
               if (_notice case final note?) _note(note, 'saved'),

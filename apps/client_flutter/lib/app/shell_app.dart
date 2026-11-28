@@ -1,6 +1,11 @@
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
 
+import '../ui/jy_motion.dart';
+import '../ui/jy_dock.dart';
+import '../ui/jy_presence.dart';
+import '../ui/jy_surfaces.dart';
+import '../ui/jy_tokens.dart';
 import '../net/creative_api.dart';
 import '../net/host_connection.dart';
 import '../net/notification_api.dart';
@@ -52,11 +57,15 @@ class _WhaleChatAppState extends State<WhaleChatApp> {
           textScaler: TextScaler.linear(
             MediaQuery.textScalerOf(context).scale(1) * model.fontScale,
           ),
+          disableAnimations:
+              MediaQuery.maybeDisableAnimationsOf(context) == true ||
+              model.reduceMotion,
         ),
-        child: child!,
+        // Above the Navigator, so routes, dialogs and sheets also see it.
+        child: JyMotionScope(reduce: model.reduceMotion, child: child!),
       ),
       home: !model.ready
-          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+          ? const ShellSplash()
           : model.locked
           ? UnlockScreen(model: model)
           : !model.onboarded && !(model.authenticated && model.chatEntered)
@@ -71,6 +80,33 @@ class _WhaleChatAppState extends State<WhaleChatApp> {
 
 // Observes route intent without altering any push, pop, or back behavior. A
 // generation tracks transient dialogs/pages even if the source is current again.
+/// Shown while the app starts: the companion's light core breathes above the
+/// app name (MASTER.md section 7). With reduced motion the core is still.
+class ShellSplash extends StatelessWidget {
+  /// Creates the start-up screen.
+  const ShellSplash({super.key});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: Center(
+      child: Semantics(
+        label: '正在启动鲸言鲸语',
+        liveRegion: true,
+        child: ExcludeSemantics(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const JyPresenceOrb(size: 72, state: JyPresence.thinking),
+              const SizedBox(height: 20),
+              Text('鲸言鲸语', style: Theme.of(context).textTheme.titleMedium),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class _NavigationIntentObserver extends NavigatorObserver with ChangeNotifier {
   int generation = 0;
 
@@ -116,6 +152,13 @@ class _ShellHomeState extends State<_ShellHome> {
     Icons.people_outline,
     Icons.photo_library_outlined,
     Icons.inbox_outlined,
+    Icons.public,
+  ];
+  static const iconsSelected = [
+    Icons.chat_bubble,
+    Icons.people,
+    Icons.photo_library,
+    Icons.inbox,
     Icons.public,
   ];
   void select(String id) async {
@@ -232,11 +275,7 @@ class _ShellHomeState extends State<_ShellHome> {
         builder: (routeContext) => ListenableBuilder(
           listenable: model,
           builder: (_, _) {
-            if (!model.ready) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
+            if (!model.ready) return const ShellSplash();
             if (model.locked) return UnlockScreen(model: model);
             if (!model.authenticated) {
               return OnboardingScreen(
@@ -266,11 +305,7 @@ class _ShellHomeState extends State<_ShellHome> {
         builder: (_) => ListenableBuilder(
           listenable: model,
           builder: (_, _) {
-            if (!model.ready) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
+            if (!model.ready) return const ShellSplash();
             if (model.locked) return UnlockScreen(model: model);
             final connection = model is ClientRuntime ? model.connection : null;
             final selfId = model.connectedAccountId;
@@ -475,20 +510,39 @@ class _ShellHomeState extends State<_ShellHome> {
           : destination != 0
           ? empty()
           : wide
-          ? Row(
-              children: [
-                SizedBox(
-                  width: 280,
-                  child: ConversationList(model: model, onSelected: select),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: ChatPane(
-                    model: model,
-                    openRevision: _chatOpenRevision,
+          // Wide: the conversation list and the chat are separate boards
+          // with a 12dp gap that shows the canvas (MASTER.md section 9).
+          ? Padding(
+              padding: const EdgeInsets.fromLTRB(
+                0,
+                JySpace.md,
+                JySpace.md,
+                JySpace.md,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: 320,
+                    child: JySlab(
+                      key: const Key('shell-list-board'),
+                      padding: EdgeInsets.zero,
+                      child: ConversationList(model: model, onSelected: select),
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: JySpace.md),
+                  Expanded(
+                    child: JySlab(
+                      key: const Key('shell-chat-board'),
+                      padding: EdgeInsets.zero,
+                      child: ChatPane(
+                        model: model,
+                        openRevision: _chatOpenRevision,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             )
           : showChat
           ? ChatPane(
@@ -497,131 +551,159 @@ class _ShellHomeState extends State<_ShellHome> {
               onBack: () => setState(() => mobileChat = false),
             )
           : ConversationList(model: model, onSelected: select);
-      return Scaffold(
-        appBar: AppBar(
-          title: Text(settings ? '鲸言鲸语' : labels[destination]),
-          actions: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Center(
-                child: Text(
-                  model.online ? '在线' : '离线',
-                  style: Theme.of(context).textTheme.labelLarge,
+      // System back steps out of the shell's own levels before leaving the
+      // app: settings, then an open narrow-screen chat, then a non-home tab.
+      final backToChat = showChat && !wide;
+      final canLeave = !settings && !backToChat && destination == 0;
+      return PopScope(
+        canPop: canLeave,
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop || !mounted) return;
+          setState(() {
+            widget.navigation.generation++;
+            if (settings) {
+              settings = false;
+            } else if (backToChat) {
+              mobileChat = false;
+            } else {
+              destination = 0;
+            }
+          });
+        },
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text(settings ? '鲸言鲸语' : labels[destination]),
+            actions: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      JyStatusDot(online: model.online),
+                      const SizedBox(width: 6),
+                      Text(
+                        model.online ? '在线' : '离线',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            IconButton(
-              tooltip: '设置',
-              onPressed: () => setState(() {
-                widget.navigation.generation++;
-                settings = !settings;
-              }),
-              icon: const Icon(Icons.settings_outlined),
-            ),
-          ],
-        ),
-        body: SafeArea(
-          child: Row(
-            children: [
-              if (wide)
-                NavigationRail(
-                  labelType: NavigationRailLabelType.all,
-                  selectedIndex: destination,
-                  onDestinationSelected: (value) => setState(() {
-                    widget.navigation.generation++;
-                    destination = value;
-                    settings = false;
-                  }),
-                  destinations: [
-                    for (var i = 0; i < labels.length; i++)
-                      NavigationRailDestination(
-                        icon: Icon(icons[i]),
-                        label: Text(labels[i]),
-                      ),
-                  ],
-                ),
-              if (wide) const VerticalDivider(width: 1),
-              Expanded(
-                child: Column(
-                  children: [
-                    if (model.authenticated && !model.locked)
-                      SharedTextPanel(
-                        model: model,
-                        navigationGeneration: () =>
-                            widget.navigation.generation,
-                        navigationChanges: widget.navigation,
-                        onApplied: () async {
-                          if (!mounted ||
-                              !model.authenticated ||
-                              model.locked) {
-                            return;
-                          }
-                          setState(() {
-                            destination = 0;
-                            settings = false;
-                            if (!wide) mobileChat = true;
-                            _chatOpenRevision++;
-                          });
-                        },
-                      ),
-                    if (model.busy) const LinearProgressIndicator(),
-                    if (model.error != null)
-                      Material(
-                        color: Theme.of(context).colorScheme.errorContainer,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Semantics(
-                                  liveRegion: true,
-                                  child: Text(model.error!),
-                                ),
-                              ),
-                              IconButton(
-                                tooltip: '关闭提示',
-                                onPressed: model.clearError,
-                                icon: const Icon(Icons.close),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    if (activity != null &&
-                        model.authenticated &&
-                        !model.locked &&
-                        _noticeViewGeneration() != null)
-                      ForegroundMessageNotice(
-                        key: ValueKey(destination),
-                        model: model,
-                        activity: activity,
-                        navigation: widget.navigation,
-                        activeViewGeneration: _noticeViewGeneration,
-                      ),
-                    Expanded(child: content),
-                  ],
-                ),
+              IconButton(
+                tooltip: '设置',
+                onPressed: () => setState(() {
+                  widget.navigation.generation++;
+                  settings = !settings;
+                }),
+                icon: const Icon(Icons.settings_outlined),
               ),
             ],
           ),
-        ),
-        bottomNavigationBar: wide || showChat || settings
-            ? null
-            : NavigationBar(
-                selectedIndex: destination,
-                onDestinationSelected: (value) => setState(() {
-                  widget.navigation.generation++;
-                  destination = value;
-                  mobileChat = false;
-                }),
-                destinations: [
-                  for (var i = 0; i < labels.length; i++)
-                    NavigationDestination(
-                      icon: Icon(icons[i]),
-                      label: labels[i],
+          body: SafeArea(
+            child: Row(
+              children: [
+                if (wide)
+                  Padding(
+                    padding: const EdgeInsets.all(JySpace.md),
+                    child: JySlab(
+                      key: const Key('shell-nav-board'),
+                      padding: EdgeInsets.zero,
+                      child: NavigationRail(
+                        backgroundColor: Colors.transparent,
+                        labelType: NavigationRailLabelType.all,
+                        selectedIndex: destination,
+                        onDestinationSelected: (value) => setState(() {
+                          widget.navigation.generation++;
+                          destination = value;
+                          settings = false;
+                        }),
+                        destinations: [
+                          for (var i = 0; i < labels.length; i++)
+                            NavigationRailDestination(
+                              icon: Icon(icons[i]),
+                              selectedIcon: Icon(iconsSelected[i]),
+                              label: Text(labels[i]),
+                            ),
+                        ],
+                      ),
                     ),
-                ],
-              ),
+                  ),
+                Expanded(
+                  child: Column(
+                    children: [
+                      if (model.authenticated && !model.locked)
+                        SharedTextPanel(
+                          model: model,
+                          navigationGeneration: () =>
+                              widget.navigation.generation,
+                          navigationChanges: widget.navigation,
+                          onApplied: () async {
+                            if (!mounted ||
+                                !model.authenticated ||
+                                model.locked) {
+                              return;
+                            }
+                            setState(() {
+                              destination = 0;
+                              settings = false;
+                              if (!wide) mobileChat = true;
+                              _chatOpenRevision++;
+                            });
+                          },
+                        ),
+                      if (model.busy)
+                        const JyBusyIndicator(label: '正在处理', linear: true),
+                      if (model.error != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            JySpace.lg,
+                            JySpace.sm,
+                            JySpace.lg,
+                            0,
+                          ),
+                          child: JyBanner(
+                            message: model.error!,
+                            onClose: model.clearError,
+                          ),
+                        ),
+                      if (activity != null &&
+                          model.authenticated &&
+                          !model.locked &&
+                          _noticeViewGeneration() != null)
+                        ForegroundMessageNotice(
+                          key: ValueKey(destination),
+                          model: model,
+                          activity: activity,
+                          navigation: widget.navigation,
+                          activeViewGeneration: _noticeViewGeneration,
+                        ),
+                      Expanded(child: content),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          bottomNavigationBar: wide || showChat || settings
+              ? null
+              : JyDock(
+                  selectedIndex: destination,
+                  onSelected: (value) => setState(() {
+                    widget.navigation.generation++;
+                    destination = value;
+                    mobileChat = false;
+                  }),
+                  items: [
+                    for (var i = 0; i < labels.length; i++)
+                      JyDockItem(
+                        icon: icons[i],
+                        selectedIcon: iconsSelected[i],
+                        label: labels[i],
+                      ),
+                  ],
+                ),
+        ),
       );
     },
   );

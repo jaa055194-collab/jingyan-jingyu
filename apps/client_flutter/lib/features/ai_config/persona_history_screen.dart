@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart';
 import '../../net/persona_history_api.dart';
+import '../../ui/ui.dart';
 
 /// Read-only, one-page disclosure within the existing Persona editor card.
 class PersonaHistorySection extends StatefulWidget {
@@ -145,16 +146,24 @@ class _PersonaHistorySectionState extends State<PersonaHistorySection> {
           ],
         ),
         if (_notice case final notice?)
-          Text(notice, key: const Key('persona-history-notice')),
+          Padding(
+            padding: const EdgeInsets.only(top: JySpace.sm),
+            child: JyBanner(
+              key: const Key('persona-history-notice'),
+              kind: JyBannerKind.error,
+              message: notice,
+            ),
+          ),
         if (page != null) ...[
           const Text('按版本升序 · 仅显示变更摘要，不修改人格。'),
           if (page.entries.isEmpty)
             const Text('没有历史记录。')
           else
             for (final entry in page.entries)
-              Padding(
+              JySlab(
                 key: Key('persona-history-version-${entry.version}'),
-                padding: const EdgeInsets.symmetric(vertical: 4),
+                tone: JyTone.raised,
+                padding: const EdgeInsets.all(JySpace.md),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [

@@ -71,6 +71,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   Timer? reconnect;
   Map<String, Object?> preferences = {};
   List<ShellConversation> _conversations = [];
+
+  /// Set once a conversation-list read for the current session has finished,
+  /// successfully or not; cleared whenever the list is reset.
+  bool _conversationsLoaded = false;
   List<ShellOwnedAi> _ownAiAccounts = [];
   String? _ownAiNotice;
   bool _ownAiLoaded = false;
@@ -124,14 +128,18 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     String purpose, [
     String? aiAccount,
   ]) => sha256
-      .convert(utf8.encode(jsonEncode([
-        'jingyu.android-private-ai.v1',
-        credentials.host.origin,
-        credentials.accountId,
-        credentials.deviceId,
-        purpose,
-        aiAccount,
-      ])))
+      .convert(
+        utf8.encode(
+          jsonEncode([
+            'jingyu.android-private-ai.v1',
+            credentials.host.origin,
+            credentials.accountId,
+            credentials.deviceId,
+            purpose,
+            aiAccount,
+          ]),
+        ),
+      )
       .toString();
 
   Future<Map<String, Object?>?> readAndroidPrivateAiVault(
@@ -184,7 +192,9 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       final saved = await const AndroidPrivateAiVault().read(
         _privateAiScope(credentials, 'directory'),
       );
-      if (!_current(generation) || _credentials != credentials || saved == null) {
+      if (!_current(generation) ||
+          _credentials != credentials ||
+          saved == null) {
         return;
       }
       final records = saved['accounts'];
@@ -194,6 +204,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       // An unavailable or unreadable device catalog is not an empty host list.
     }
   }
+
   @override
   String? get ownAiNotice => _ownAiNotice;
   bool _ready = false, _busy = false, _online = false, _onboarded = false;
@@ -459,8 +470,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
               unread: _unreadFor(conversation.id),
               kind: conversation.kind,
               ownerAccountId: conversation.ownerAccountId,
+              lastActivityAt: _lastActivityFor(conversation),
             ),
         ];
+
+  @override
+  bool get conversationsLoaded => !authenticated || _conversationsLoaded;
 
   /// The cache is already pruned to the visible history floor, so every cached
   /// canonical row above the read position is genuinely unread. The user's own
@@ -473,6 +488,18 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       if (message.seq > read && message.senderId != self) count++;
     }
     return count;
+  }
+
+  /// Newest known activity: the row's own time or the latest cached canonical
+  /// message. Queued and dropped rows are not activity yet.
+  DateTime? _lastActivityFor(ShellConversation conversation) {
+    var latest = conversation.lastActivityAt;
+    for (final message in shell.messagesFor(conversation.id)) {
+      if (latest == null || message.sentAt.isAfter(latest)) {
+        latest = message.sentAt;
+      }
+    }
+    return latest;
   }
 
   @override
@@ -507,14 +534,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     final recalled = message.body['recalled'] == true;
     return ShellMessage(
       id: message.messageId,
-      text: recalled
-          ? '消息已撤回'
-          : _messageLabel(message.kind, message.body),
+      text: recalled ? '消息已撤回' : _messageLabel(message.kind, message.body),
       outgoing: message.senderId == connectedAccountId,
       attachmentId: !recalled && message.body['attachmentId'] is String
           ? message.body['attachmentId'] as String
           : null,
-      attachmentName: recalled ? null : _attachmentName(message.kind, message.body),
+      attachmentName: recalled
+          ? null
+          : _attachmentName(message.kind, message.body),
       imageAttachment:
           message.kind == MessageKind.image &&
           message.body['attachmentId'] is String &&
@@ -526,10 +553,9 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
           ? _liveText(message.kind, message.body)
           : null,
       sentAt: message.sentAt,
-      edited: !recalled && shell.isMessageEdited(
-        message.conversationId,
-        message.messageId,
-      ),
+      edited:
+          !recalled &&
+          shell.isMessageEdited(message.conversationId, message.messageId),
       recalled: recalled,
     );
   }
@@ -541,6 +567,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     if (text is! String || text.trim().isEmpty) return null;
     return text;
   }
+
   static String? _attachmentName(MessageKind kind, Map<String, Object?> body) {
     if (kind != MessageKind.image && kind != MessageKind.file) return null;
     if (body['attachmentId'] is! String) return null;
@@ -698,7 +725,9 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         _selected != conversationId ||
         !_online ||
         _busy ||
-        !_conversations.any((row) => row.id == conversationId && row.kind == 'group')) {
+        !_conversations.any(
+          (row) => row.id == conversationId && row.kind == 'group',
+        )) {
       return null;
     }
     bool current() =>
@@ -745,10 +774,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         _currentPinView(conversationId, expectedContext) &&
         viewIsCurrent();
     if (transport == null || !current()) return const ChatPinsUnavailable();
-    final result = await ChatPinsApi(transport).read(
-      conversationId,
-      cancellation: cancellation,
-    );
+    final result = await ChatPinsApi(transport)
+        .read(conversationId, cancellation: cancellation);
     if (result is! ChatPinsLoaded || !current()) {
       return const ChatPinsUnavailable();
     }
@@ -778,20 +805,17 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     if (transport == null || !messageOperationsAvailable || !current()) {
       return ChatPinWrite.cancelled;
     }
-    bool visible() => shell.messagesFor(conversationId).any(
-      (row) => row.messageId == messageId && _favoriteSource(row),
-    );
+    bool visible() => shell
+        .messagesFor(conversationId)
+        .any((row) => row.messageId == messageId && _favoriteSource(row));
     if (!visible()) return ChatPinWrite.cancelled;
     // Pins are shared by the conversation. Author/pinner IDs are not proof
     // of permission; the host applies canPost and the source visibility rule.
     final key = (shell, conversationId, messageId);
     if (!_messageWrites.add(key)) return ChatPinWrite.cancelled;
     try {
-      final result = await ChatPinsApi(transport).setPinned(
-        conversationId,
-        messageId,
-        pinned: pinned,
-      );
+      final result = await ChatPinsApi(transport)
+          .setPinned(conversationId, messageId, pinned: pinned);
       return current() && visible() ? result : ChatPinWrite.cancelled;
     } finally {
       _messageWrites.remove(key);
@@ -813,10 +837,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _selected == conversationId &&
       messageOperationsContext == expectedContext &&
       viewIsCurrent() &&
-      shell.messagesFor(conversationId).any(
-        (row) => row.conversationId == conversationId &&
-            row.messageId == messageId && _favoriteSource(row),
-      );
+      shell
+          .messagesFor(conversationId)
+          .any(
+            (row) =>
+                row.conversationId == conversationId &&
+                row.messageId == messageId &&
+                _favoriteSource(row),
+          );
 
   @override
   Future<ReactionRead> readMessageReactions({
@@ -828,9 +856,15 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   }) async {
     final transport = connection;
     final owner = connectedAccountId;
-    bool current() => transport != null && _currentReactionMessage(
-      transport, conversationId, messageId, expectedContext, viewIsCurrent,
-    );
+    bool current() =>
+        transport != null &&
+        _currentReactionMessage(
+          transport,
+          conversationId,
+          messageId,
+          expectedContext,
+          viewIsCurrent,
+        );
     if (owner == null || !current()) return const ReactionsUnavailable();
     final result = await MessageReactionsApi(transport!).read(
       conversationId,
@@ -850,16 +884,23 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     required bool Function() viewIsCurrent,
   }) async {
     final transport = connection;
-    bool current() => transport != null && _currentReactionMessage(
-      transport, conversationId, messageId, expectedContext, viewIsCurrent,
-    );
-    if (!messageOperationsAvailable || !current()) return const ReactionCancelled();
+    bool current() =>
+        transport != null &&
+        _currentReactionMessage(
+          transport,
+          conversationId,
+          messageId,
+          expectedContext,
+          viewIsCurrent,
+        );
+    if (!messageOperationsAvailable || !current()) {
+      return const ReactionCancelled();
+    }
     final key = (shell, conversationId, messageId);
     if (!_messageWrites.add(key)) return const ReactionCancelled();
     try {
-      final result = await MessageReactionsApi(transport!).toggle(
-        conversationId, messageId, choice,
-      );
+      final result = await MessageReactionsApi(transport!)
+          .toggle(conversationId, messageId, choice);
       return current() ? result : const ReactionCancelled();
     } finally {
       _messageWrites.remove(key);
@@ -918,8 +959,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         authenticated &&
         identical(shell, sessionShell) &&
         identical(connection, transport);
-    final source = sessionShell.messagesFor(conversationId)
-        .where((row) => row.messageId == messageId).firstOrNull;
+    final source = sessionShell
+        .messagesFor(conversationId)
+        .where((row) => row.messageId == messageId)
+        .firstOrNull;
     if (source == null ||
         !_favoriteSource(source) ||
         source.senderId != connectedAccountId) {
@@ -929,17 +972,23 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       if (_liveText(source.kind, source.body) != edit.expectedText) {
         return const MessageWriteCancelled();
       }
-    } else if (DateTime.now().difference(source.sentAt) > const Duration(hours: 24)) {
+    } else if (DateTime.now().difference(source.sentAt) >
+        const Duration(hours: 24)) {
       return const MessageWriteRejected();
     }
 
     final key = (sessionShell, conversationId, messageId);
-    if (_unconfirmedMessageWrites.contains(key)) return const MessageWriteUnknown();
+    if (_unconfirmedMessageWrites.contains(key)) {
+      return const MessageWriteUnknown();
+    }
     if (!_messageWrites.add(key)) return const MessageWriteCancelled();
     try {
       final api = MessageOperationsApi(transport);
       final result = edit == null
-          ? await api.recallMessage(conversationId: conversationId, messageId: messageId)
+          ? await api.recallMessage(
+              conversationId: conversationId,
+              messageId: messageId,
+            )
           : await api.editMessage(source: source, text: edit.text);
       if (!currentSession()) return const MessageWriteCancelled();
       final body = switch (result) {
@@ -954,17 +1003,19 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       try {
         await sessionShell.applyMessageRevisions(
           conversationId,
-          [MessageEventFrame(
-            id: source.id,
-            at: source.at,
-            conversationId: source.conversationId,
-            seq: source.seq,
-            messageId: source.messageId,
-            senderId: source.senderId,
-            kind: source.kind,
-            body: body,
-            sentAt: source.sentAt,
-          )],
+          [
+            MessageEventFrame(
+              id: source.id,
+              at: source.at,
+              conversationId: source.conversationId,
+              seq: source.seq,
+              messageId: source.messageId,
+              senderId: source.senderId,
+              kind: source.kind,
+              body: body,
+              sentAt: source.sentAt,
+            ),
+          ],
           markEdited: edit == null ? null : messageId,
           checkActive: () {
             if (!currentSession()) throw const _SyncInterrupted();
@@ -975,11 +1026,15 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       } catch (_) {
         if (!currentSession()) return const MessageWriteCancelled();
         _unconfirmedMessageWrites.add(key);
-        return currentView() ? const MessageWriteUnknown() : const MessageWriteCancelled();
+        return currentView()
+            ? const MessageWriteUnknown()
+            : const MessageWriteCancelled();
       }
       if (!currentSession()) return const MessageWriteCancelled();
       notifyListeners();
-      return currentView() ? const MessageWriteAccepted() : const MessageWriteCancelled();
+      return currentView()
+          ? const MessageWriteAccepted()
+          : const MessageWriteCancelled();
     } finally {
       _messageWrites.remove(key);
     }
@@ -1087,11 +1142,13 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       if (!_voiceIsCurrent(attempt)) return;
       attempt.nativeStarted = true;
       final started = await Future.any<bool>([
-        native.playVoiceMessage(
-          requestId: attempt.requestId,
-          epoch: attempt.epoch,
-          bytes: voice.bytes,
-        ).timeout(const Duration(seconds: 12)),
+        native
+            .playVoiceMessage(
+              requestId: attempt.requestId,
+              epoch: attempt.epoch,
+              bytes: voice.bytes,
+            )
+            .timeout(const Duration(seconds: 12)),
         attempt.stopped.future.then((_) => false),
       ]);
       if (!_voiceIsCurrent(attempt) || !attempt.active) return;
@@ -1103,7 +1160,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       }
     } catch (error) {
       if (!_voiceIsCurrent(attempt) || !attempt.active) return;
-      final denied = error is HostRequestException &&
+      final denied =
+          error is HostRequestException &&
           const {
             FailureCode.unauthenticated,
             FailureCode.forbidden,
@@ -1205,11 +1263,14 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   @override
   double get fontScale => (preferences['fontScale'] as num? ?? 1).toDouble();
   @override
+  bool get reduceMotion => preferences['reduceMotion'] == true;
+  @override
   String? get roomPreview => _preview;
   Future<void> initialize() async {
     final generation = _generation;
     final lifecycle = WidgetsBinding.instance.lifecycleState;
-    _voiceFlutterResumed = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    _voiceFlutterResumed =
+        lifecycle == null || lifecycle == AppLifecycleState.resumed;
     foregroundMessageActivity?.setForeground(
       lifecycle == AppLifecycleState.resumed,
     );
@@ -1219,7 +1280,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       final nativeState = await native.invoke<Object?>('initialize');
       if (!_current(generation)) return;
       if (nativeState is Map) {
-        _androidVoicePlayback = nativeState['platform'] == 'android' &&
+        _androidVoicePlayback =
+            nativeState['platform'] == 'android' &&
             nativeState['voicePlaybackEpoch'] is int;
         if (_androidVoicePlayback) {
           _setNativeVoiceForeground(
@@ -1550,6 +1612,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     _chatEntered = false;
     _online = false;
     _conversations = [];
+    _conversationsLoaded = false;
     _ownAiAccounts = [];
     _ownAiNotice = null;
     _ownAiLoaded = false;
@@ -1744,6 +1807,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         directs: direct['conversations'],
       );
       _conversations = conversations;
+      _conversationsLoaded = true;
       _online = true;
       await sessionShell.flush();
       for (final conversation in conversations) {
@@ -1777,7 +1841,11 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         }
       }
     } catch (_) {
-      if (_current(generation) && _historySyncEpoch == epoch) _online = false;
+      if (_current(generation) && _historySyncEpoch == epoch) {
+        _online = false;
+        // A failed read still ends "loading", so the UI can show offline.
+        _conversationsLoaded = true;
+      }
     }
     if (_current(generation)) notifyListeners();
   }
@@ -1851,6 +1919,7 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
       _selected = null;
       _draft = '';
       _conversations = [];
+      _conversationsLoaded = false;
       _ownAiAccounts = [];
       _ownAiNotice = null;
       _ownAiLoaded = false;
@@ -2341,8 +2410,8 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         if (!current()) return;
         _error = switch (error.failure.code) {
           FailureCode.unauthenticated => '请重新连接宿主并刷新“我的 AI”。',
-          FailureCode.notFound || FailureCode.forbidden =>
-            '无法移除该 AI：宿主可能不支持此操作，或该 AI 已不在你名下。请刷新列表。',
+          FailureCode.notFound ||
+          FailureCode.forbidden => '无法移除该 AI：宿主可能不支持此操作，或该 AI 已不在你名下。请刷新列表。',
           _ => '移除结果未确认。请先刷新“我的 AI”，不要重复提交。',
         };
         return;
@@ -2610,15 +2679,54 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
     final selected = _selected!;
     final text = _draft;
     final draftRevision = _draftRevisions[selected] ?? 0;
-    await sessionShell.enqueueTextDraft(selected, text);
+    // Empty the composer in this frame, so typing during the checkpoint or the
+    // flush starts a new draft instead of extending the sent text. The durable
+    // draft is still consumed by the checkpoint itself.
+    _draft = '';
+    notifyListeners();
+    try {
+      await sessionShell.enqueueTextDraft(selected, text);
+    } catch (_) {
+      _restoreUnsentDraft(generation, selected, text, draftRevision);
+      rethrow;
+    }
     if (!_current(generation)) return;
+    // Switching away and back during the checkpoint reads the old durable
+    // draft into the composer again.
     if (_selected == selected &&
         _draft == text &&
         (_draftRevisions[selected] ?? 0) == draftRevision) {
       _draft = '';
+      notifyListeners();
     }
     if (_online && !locked) await sessionShell.flush();
   });
+
+  /// Puts the text of a send that did not complete back into an empty
+  /// composer. Text typed meanwhile is kept instead, and nothing is restored
+  /// once the session or the selected chat has changed.
+  void _restoreUnsentDraft(
+    int generation,
+    String conversationId,
+    String text,
+    int draftRevision,
+  ) {
+    if (!_current(generation) ||
+        _selected != conversationId ||
+        _draft.isNotEmpty) {
+      return;
+    }
+    if ((_draftRevisions[conversationId] ?? 0) == draftRevision) {
+      // Nothing has rewritten the durable draft since the send began.
+      _draft = text;
+      notifyListeners();
+    } else {
+      // Typing replaced the durable draft and erased it again; save the
+      // restored text as well.
+      updateDraft(text);
+    }
+  }
+
   @override
   bool get canMentionAi =>
       authenticated &&
@@ -2687,6 +2795,10 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
         (!sameIntent || pending.target != target)) {
       throw const FormatException('上一条提及保存尚未确认，请返回原会话重试原提及，避免重复发送');
     }
+    // As with an ordinary send, the composer empties now; a failure below
+    // puts the text back unless something new was typed meanwhile.
+    _draft = '';
+    notifyListeners();
     if (!sameIntent) {
       final previousIds = sessionShell.outbox.items
           .map((item) => item.clientMsgId)
@@ -2733,17 +2845,34 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
             break;
           }
         }
+        _restoreUnsentDraft(
+          generation,
+          conversationId,
+          expectedDraft,
+          draftRevision,
+        );
         throw const FormatException('本条提及仍保留待发送；保存未确认，请重试原提及，勿重复普通发送');
       }
     }
     if (!_current(generation)) return;
     if ((_draftRevisions[conversationId] ?? 0) != draftRevision) return;
-    await sessionShell.saveDraft(conversationId, '');
+    try {
+      await sessionShell.saveDraft(conversationId, '');
+    } catch (_) {
+      _restoreUnsentDraft(
+        generation,
+        conversationId,
+        expectedDraft,
+        draftRevision,
+      );
+      rethrow;
+    }
     if (!_current(generation)) return;
     if (_selected == conversationId &&
         _draft == expectedDraft &&
         (_draftRevisions[conversationId] ?? 0) == draftRevision) {
       _draft = '';
+      notifyListeners();
     }
     if (_pendingMention?.id == pending.id) _pendingMention = null;
     if (_online && !locked && authenticated) await sessionShell.flush();
@@ -2979,6 +3108,12 @@ class ClientRuntime extends ShellViewModel with WidgetsBindingObserver {
   @override
   Future<void> setFontScale(double value) => _run(() async {
     preferences['fontScale'] = value;
+    await _savePreferences();
+  });
+
+  @override
+  Future<void> setReduceMotion(bool value) => _run(() async {
+    preferences['reduceMotion'] = value;
     await _savePreferences();
   });
 
