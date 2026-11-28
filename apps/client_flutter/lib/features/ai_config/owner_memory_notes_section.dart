@@ -4,7 +4,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart' show HostReadCancellation;
 import '../../net/owner_memory_notes_api.dart';
-import '../../ui/jy_tokens.dart';
+import '../../ui/ui.dart';
 import 'ai_config_problem_line.dart';
 
 /// Manual notes are independent from chat history, reply preferences and the
@@ -441,7 +441,8 @@ class _OwnerMemoryNotesSectionState extends State<OwnerMemoryNotesSection>
     final canWrite = canRequest && state != null;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Card(
+      child: JySlab(
+        padding: EdgeInsets.zero,
         key: const Key('owner-memory-notes-section'),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -453,7 +454,11 @@ class _OwnerMemoryNotesSectionState extends State<OwnerMemoryNotesSection>
               const Text('仅你手动保存的非敏感文字便签；不是聊天记录，也不会自动采集、读取历史、群聊或第三人内容，不会主动联系。'),
               const SizedBox(height: 8),
               if (_busyNow)
-                const LinearProgressIndicator(key: Key('memory-notes-loading')),
+                const JyBusyIndicator(
+                  key: Key('memory-notes-loading'),
+                  label: '正在读取便签',
+                  linear: true,
+                ),
               if (!widget.canContactHost() && !_busyNow)
                 _noticeText(
                   '连接宿主后才能读取或修改便签。',

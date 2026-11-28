@@ -4,7 +4,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart' show HostReadCancellation;
 import '../../net/owner_auto_memory_api.dart';
-import '../../ui/jy_tokens.dart';
+import '../../ui/ui.dart';
 import 'ai_config_problem_line.dart';
 
 /// Default-off, per-AI opt-in auto chat-history memory. Only the owner's own
@@ -407,7 +407,8 @@ class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
     final canWrite = canRequest && settings != null && _entries != null;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Card(
+      child: JySlab(
+        padding: EdgeInsets.zero,
         key: const Key('owner-auto-memory-section'),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -419,7 +420,11 @@ class _OwnerAutoMemorySectionState extends State<OwnerAutoMemorySection>
               const Text('默认关闭。开启后仅自动采集你本人与当前 AI 私聊中的文字；不采集群聊或第三人内容，不主动联系。'),
               const SizedBox(height: 8),
               if (_busyNow)
-                const LinearProgressIndicator(key: Key('auto-memory-loading')),
+                const JyBusyIndicator(
+                  key: Key('auto-memory-loading'),
+                  label: '正在读取自动记忆',
+                  linear: true,
+                ),
               if (!widget.canContactHost() && !_busyNow)
                 _noticeText(
                   '连接宿主后才能读取或修改自动记忆。',

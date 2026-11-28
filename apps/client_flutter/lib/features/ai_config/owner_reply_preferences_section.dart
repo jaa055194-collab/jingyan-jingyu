@@ -2,7 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart' show HostReadCancellation;
 import '../../net/owner_reply_preferences_api.dart';
-import '../../ui/jy_tokens.dart';
+import '../../ui/ui.dart';
 import 'ai_config_problem_line.dart';
 
 /// Inline review intentionally stays within the selected profile's widget:
@@ -254,7 +254,8 @@ class _OwnerReplyPreferencesSectionState
     final editing = state != null && !_busy && review == null && !_clearPending;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Card(
+      child: JySlab(
+        padding: EdgeInsets.zero,
         key: const Key('owner-reply-preferences-section'),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -266,8 +267,9 @@ class _OwnerReplyPreferencesSectionState
               const Text('独立授权，默认关闭。仅保存回复长短和排版；不读取历史、不保存任意文字，不用于群聊或主动联系。'),
               const SizedBox(height: 8),
               if (_busy)
-                LinearProgressIndicator(
-                  semanticsLabel: _saving ? '正在提交回复偏好' : '正在读取回复偏好',
+                JyBusyIndicator(
+                  label: _saving ? '正在提交回复偏好' : '正在读取回复偏好',
+                  linear: true,
                 ),
               if (!canRequest && !_busy)
                 _note('连接宿主后才能读取或更改授权。', 'owner-reply-preferences-offline'),
