@@ -48,10 +48,16 @@ class Live2DImportPanel extends StatefulWidget {
     required this.open,
     this.enabled = true,
     this.openStore = openDeviceLive2DStore,
+    this.onAvatarEnabled,
   });
 
   final Future<Live2DImportSession?> Function() open;
   final bool enabled;
+
+  /// Called after the enabled model changed (another model enabled, disabled,
+  /// or its mapping re-enabled), so the resident chat card can reload it while
+  /// hidden from chat.
+  final VoidCallback? onAvatarEnabled;
 
   /// Opens the store of the models kept on this device. Only Android keeps
   /// models, so it is not called elsewhere.
@@ -337,6 +343,7 @@ class _Live2DImportPanelState extends State<Live2DImportPanel>
       _busy = false;
       _keptErrors = errors ?? const [];
     });
+    if (errors == null) widget.onAvatarEnabled?.call();
   }
 
   Future<void> _disable() async {
@@ -357,6 +364,7 @@ class _Live2DImportPanelState extends State<Live2DImportPanel>
       _busy = false;
       _keptErrors = errors;
     });
+    if (errors.isEmpty) widget.onAvatarEnabled?.call();
   }
 
   Future<void> _delete(Live2DStoredModel model) async {
@@ -656,7 +664,10 @@ class _Live2DImportPanelState extends State<Live2DImportPanel>
             blink: controller.blink,
             speak: controller.speak,
             onClose: () => setState(() => _wizard = false),
-            onChanged: () => setState(() {}),
+            onChanged: () {
+              setState(() {});
+              widget.onAvatarEnabled?.call();
+            },
           )
         else
           const Text('预览就绪后即可设置映射。', key: Key('live2d-wizard-waiting')),

@@ -11,6 +11,8 @@
 // The platform view is never animated or composited with Flutter Opacity or
 // Transform. Collapsing unmounts it (the native view is disposed); expanding
 // mounts a new one, which reloads the model.
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import 'android_live2d_renderer_host.dart';
@@ -41,6 +43,8 @@ class Live2DAvatarCard extends StatefulWidget {
     super.key,
     required this.openStore,
     required this.supported,
+    this.active = true,
+    this.revision = 0,
     this.layout,
     this.maxHeight,
     this.firstFrameTimeout = const Duration(seconds: 20),
@@ -53,6 +57,14 @@ class Live2DAvatarCard extends StatefulWidget {
 
   /// Whether this platform hosts the Live2D view (Android only today).
   final bool supported;
+
+  /// Whether the card is on screen. When false the session pauses its frame
+  /// loop but keeps the model loaded, so returning to chat does not reload.
+  final bool active;
+
+  /// Bumped after the World page enables another model; the session re-reads
+  /// the active model and loads it behind the hidden card.
+  final int revision;
 
   /// Defaults to [Live2DAvatarLayout.appRun].
   final Live2DAvatarLayout? layout;
@@ -77,7 +89,19 @@ class _Live2DAvatarCardState extends State<Live2DAvatarCard> {
   void initState() {
     super.initState();
     _session.addListener(_changed);
+    _session.setActive(widget.active);
     _session.refresh();
+  }
+
+  @override
+  void didUpdateWidget(Live2DAvatarCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.active != widget.active) {
+      _session.setActive(widget.active);
+    }
+    if (oldWidget.revision != widget.revision) {
+      unawaited(_session.onActiveModelChanged());
+    }
   }
 
   @override

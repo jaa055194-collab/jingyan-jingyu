@@ -97,6 +97,7 @@ final class Live2DAvatarSession extends ChangeNotifier {
   StreamSubscription<Live2DPreviewState>? _states;
   int _generation = 0;
   bool _disposed = false;
+  bool _active = true;
 
   Live2DAvatarStatus get status => _status;
 
@@ -123,6 +124,72 @@ final class Live2DAvatarSession extends ChangeNotifier {
 
   /// Bumped whenever the widget must mount a fresh platform view (on retry).
   int get generation => _generation;
+
+  /// Whether the card is on screen. When false the viewer's frame loop is
+  /// paused but its model stays loaded, so returning does not reload it.
+  bool get active => _active;
+
+  /// Pauses or resumes the frame loop. Pausing does not release the model.
+  void setActive(bool active) {
+    if (_disposed || _active == active) return;
+    _active = active;
+    final Live2DAvatarRenderer? renderer = _renderer;
+    if (renderer == null) return;
+    if (active) {
+      unawaited(renderer.controller.resume().catchError((Object _) {}));
+    } else {
+      unawaited(renderer.controller.pause().catchError((Object _) {}));
+    }
+  }
+
+  /// Re-reads the enabled model after the World page changed it.
+  ///
+  /// With a mounted view the new model is served and loaded behind the hidden
+  /// card, so returning to chat does not wait for a reload and no blank frame
+  /// is shown. The same model is a no-op; no enabled model hides the card.
+  Future<void> onActiveModelChanged() async {
+    if (_disposed || !supported) return;
+    final Live2DFileStore store;
+    try {
+      store = await openStore();
+    } catch (_) {
+      return;
+    }
+    if (_disposed) return;
+    final String? id = store.activeModelId;
+    if (id == null) {
+      _hide();
+      return;
+    }
+    final Live2DStoredModel? model = store.model(id);
+    if (model == null) {
+      _hide();
+      return;
+    }
+    if (id == _model?.id && _status != Live2DAvatarStatus.hidden) return;
+    final String directory;
+    try {
+      directory = store.modelDirectory(id);
+    } catch (_) {
+      _fail('形象文件无法读取。');
+      return;
+    }
+    _model = model;
+    _profile = store.profile(id);
+    _directory = directory;
+    _errorText = null;
+    _errorDetail = null;
+    final Live2DAvatarRenderer? renderer = _renderer;
+    if (renderer == null) {
+      // Collapsed card: resolve the model; expanding mounts and loads it.
+      _status = Live2DAvatarStatus.loading;
+      _notify();
+      return;
+    }
+    _status = Live2DAvatarStatus.loading;
+    _notify();
+    await _serveAndLoad(renderer, directory);
+  }
 
   /// Reads the enabled model from the device store.
   ///
@@ -262,6 +329,9 @@ final class Live2DAvatarSession extends ChangeNotifier {
         _errorDetail = null;
         _status = Live2DAvatarStatus.ready;
         _notify();
+        if (!_active && _renderer != null) {
+          unawaited(_renderer!.controller.pause().catchError((Object _) {}));
+        }
       case Live2DPreviewState.failed:
         _failFromController(_renderer!.controller.failure);
       case Live2DPreviewState.idle:

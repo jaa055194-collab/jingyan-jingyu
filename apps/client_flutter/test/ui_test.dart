@@ -974,6 +974,28 @@ void main() {
     expect(find.text('小鲸'), findsOneWidget);
   });
 
+  testWidgets('chat page stays mounted while another tab is shown', (
+    tester,
+  ) async {
+    final model = TestShellModel()..selectedConversationId = 'a';
+    await tester.pumpWidget(WhaleChatApp(model: model));
+    await tester.pumpAndSettle();
+    final before = tester.state(find.byType(ChatPane, skipOffstage: false));
+    await tester.tap(find.text('世界'));
+    await tester.pumpAndSettle();
+    final after = tester.state(find.byType(ChatPane, skipOffstage: false));
+    expect(identical(before, after), isTrue);
+    await tester.tap(find.text('聊天'));
+    await tester.pumpAndSettle();
+    expect(
+      identical(
+        tester.state(find.byType(ChatPane, skipOffstage: false)),
+        before,
+      ),
+      isTrue,
+    );
+  });
+
   testWidgets(
     'mobile conversation route provides back navigation and honest module tabs',
     (tester) async {

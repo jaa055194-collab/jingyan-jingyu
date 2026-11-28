@@ -224,6 +224,25 @@ final class Live2DPreviewController {
     await host.send(_bridge.speakCommand(levels, stepMs));
   }
 
+  /// Stops the viewer's frame loop without releasing the model, so an avatar
+  /// that is not on screen costs less. Idempotent. Throws [StateError] after
+  /// [close].
+  Future<void> pause() async {
+    if (_state == Live2DPreviewState.disposed) {
+      throw StateError('preview controller disposed');
+    }
+    await host.send(_bridge.pauseCommand());
+  }
+
+  /// Resumes the frame loop after [pause]. Idempotent. Throws [StateError]
+  /// after [close].
+  Future<void> resume() async {
+    if (_state == Live2DPreviewState.disposed) {
+      throw StateError('preview controller disposed');
+    }
+    await host.send(_bridge.resumeCommand());
+  }
+
   /// Releases the viewer and makes this controller terminal. Safe to call
   /// repeatedly.
   Future<void> close() async {

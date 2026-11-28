@@ -306,6 +306,13 @@ class Live2DRendererBridge {
     };
   }
 
+  /// Stops the viewer's frame loop without releasing the model, so a hidden
+  /// avatar costs less. Safe to repeat.
+  Map<String, Object?> pauseCommand() => const {'cmd': 'pause'};
+
+  /// Resumes the frame loop after [pauseCommand].
+  Map<String, Object?> resumeCommand() => const {'cmd': 'resume'};
+
   Map<String, Object?> disposeCommand() => const {'cmd': 'dispose'};
 
   /// Parses an event emitted by the viewer page.

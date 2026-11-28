@@ -20,10 +20,12 @@ class WorldScreen extends StatelessWidget {
     required this.onOpenSetup,
     this.openLive2D,
     this.onOpenStreet,
+    this.onAvatarEnabled,
   });
   final ShellViewModel model;
   final VoidCallback onOpenSetup;
   final Future<Live2DImportSession?> Function()? openLive2D;
+  final VoidCallback? onAvatarEnabled;
 
   /// Opens the 3D street page; without it the page shows no street entry.
   final VoidCallback? onOpenStreet;
@@ -60,6 +62,7 @@ class WorldScreen extends StatelessWidget {
           )),
           enabled: model.authenticated && !model.busy && !model.appLockEnabled,
           open: openLive2D ?? openLocalLive2DZip,
+          onAvatarEnabled: onAvatarEnabled,
         ),
         if (model.appLockEnabled)
           const Text('应用锁已开启，暂不支持切换到系统文件选择器。'),

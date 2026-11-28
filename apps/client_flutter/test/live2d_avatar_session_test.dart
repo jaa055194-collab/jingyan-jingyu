@@ -235,6 +235,98 @@ void main() {
     expect(session.directory, isNull);
   });
 
+  test('pausing and resuming keeps the model and only stops the loop',
+      () async {
+    store.addModel('m1', active: true);
+    final session = Live2DAvatarSession(openStore: () async => store);
+    addTearDown(session.dispose);
+    await session.refresh();
+    final renderer = _FakeRenderer();
+    session.attach(renderer);
+    await _flush();
+    renderer.host.emit(<String, Object?>{
+      'event': 'ready',
+      'modelId': 'm1',
+      'profileRev': 1,
+    });
+    await _flush();
+    expect(session.status, Live2DAvatarStatus.ready);
+
+    session.setActive(false);
+    await _flush();
+    expect(renderer.host.commands.last['cmd'], 'pause');
+    expect(session.status, Live2DAvatarStatus.ready);
+
+    session.setActive(true);
+    await _flush();
+    expect(renderer.host.commands.last['cmd'], 'resume');
+    expect(renderer.disposed, isFalse);
+  });
+
+  test('enabling another model while hidden reloads it behind the card',
+      () async {
+    store.addModel('m1', active: true);
+    final session = Live2DAvatarSession(openStore: () async => store);
+    addTearDown(session.dispose);
+    await session.refresh();
+    final renderer = _FakeRenderer();
+    session.attach(renderer);
+    await _flush();
+    renderer.host.emit(<String, Object?>{
+      'event': 'ready',
+      'modelId': 'm1',
+      'profileRev': 1,
+    });
+    await _flush();
+    session.setActive(false);
+    await _flush();
+
+    store.addModel('m2', active: true);
+    await session.onActiveModelChanged();
+    await _flush();
+
+    expect(renderer.served, [
+      store.modelDirectory('m1'),
+      store.modelDirectory('m2'),
+    ]);
+    expect(
+      renderer.host.commands.where((command) => command['cmd'] == 'load'),
+      hasLength(2),
+    );
+    renderer.host.emit(<String, Object?>{
+      'event': 'ready',
+      'modelId': 'm2',
+      'profileRev': 1,
+    });
+    await _flush();
+    expect(session.modelId, 'm2');
+    expect(session.status, Live2DAvatarStatus.ready);
+    expect(renderer.host.commands.last['cmd'], 'pause');
+  });
+
+  test('re-reading the same active model does not reload', () async {
+    store.addModel('m1', active: true);
+    final session = Live2DAvatarSession(openStore: () async => store);
+    addTearDown(session.dispose);
+    await session.refresh();
+    final renderer = _FakeRenderer();
+    session.attach(renderer);
+    await _flush();
+    renderer.host.emit(<String, Object?>{
+      'event': 'ready',
+      'modelId': 'm1',
+      'profileRev': 1,
+    });
+    await _flush();
+    await session.onActiveModelChanged();
+    await _flush();
+    expect(renderer.served, [store.modelDirectory('m1')]);
+    expect(
+      renderer.host.commands.where((command) => command['cmd'] == 'load'),
+      hasLength(1),
+    );
+  });
+
   test('an unsupported platform stays hidden without touching the store',
       () async {
     var opened = 0;
