@@ -1103,44 +1103,53 @@ class _ChatPaneState extends State<ChatPane> {
             ),
           ),
         Padding(
-          padding: const EdgeInsets.all(8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              IconButton(
-                tooltip: '添加图片',
-                onPressed: canManageAttachment ? () => attach('image') : null,
-                icon: const Icon(Icons.image_outlined),
-              ),
-              IconButton(
-                tooltip: '添加文件',
-                onPressed: canManageAttachment ? () => attach('file') : null,
-                icon: const Icon(Icons.attach_file),
-              ),
-              Expanded(
-                child: TextField(
-                  key: const Key('composer'),
-                  controller: composer,
-                  minLines: 1,
-                  maxLines: 5,
-                  // Stays enabled while busy: disabling it drops focus and
-                  // closes the keyboard mid-typing. Only sending waits.
-                  onChanged: model.updateDraft,
-                  decoration: const InputDecoration(
-                    hintText: '输入消息',
-                    border: OutlineInputBorder(),
+          padding: const EdgeInsets.all(JySpace.sm),
+          child: JySlab(
+            tone: JyTone.overlay,
+            floating: true,
+            radius: JyRadius.xl,
+            padding: const EdgeInsets.symmetric(
+              horizontal: JySpace.sm,
+              vertical: JySpace.xs,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                IconButton(
+                  tooltip: '添加图片',
+                  onPressed: canManageAttachment ? () => attach('image') : null,
+                  icon: const Icon(Icons.image_outlined),
+                ),
+                IconButton(
+                  tooltip: '添加文件',
+                  onPressed: canManageAttachment ? () => attach('file') : null,
+                  icon: const Icon(Icons.attach_file),
+                ),
+                Expanded(
+                  child: TextField(
+                    key: const Key('composer'),
+                    controller: composer,
+                    minLines: 1,
+                    maxLines: 5,
+                    // Stays enabled while busy: disabling it drops focus and
+                    // closes the keyboard mid-typing. Only sending waits.
+                    onChanged: model.updateDraft,
+                    decoration: const InputDecoration(
+                      hintText: '输入消息',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              IconButton.filled(
-                tooltip: '发送',
-                onPressed: model.busy || model.draft.trim().isEmpty
-                    ? null
-                    : model.sendMessage,
-                icon: const Icon(Icons.send),
-              ),
-            ],
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  tooltip: '发送',
+                  onPressed: model.busy || model.draft.trim().isEmpty
+                      ? null
+                      : model.sendMessage,
+                  icon: const Icon(Icons.send),
+                ),
+              ],
+            ),
           ),
         ),
       ],
