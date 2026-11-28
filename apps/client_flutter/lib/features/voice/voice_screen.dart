@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart';
 import '../../net/voice_api.dart';
+import '../../ui/ui.dart';
 
 /// Read-only voice profile inspector (developer tool).
 ///
@@ -139,12 +140,13 @@ class _VoiceScreenState extends State<VoiceScreen> {
         Text(_stateText()),
         if (_state == _VoiceState.loading)
           const Padding(
-            padding: EdgeInsets.all(16),
-            child: Center(child: CircularProgressIndicator()),
+            padding: EdgeInsets.all(JySpace.lg),
+            child: Center(child: JyBusyIndicator(label: '正在读取音色档案')),
           ),
         if (_state == _VoiceState.present && _profile != null)
-          Card(
+          JySlab(
             key: const Key('voice-profile'),
+            padding: EdgeInsets.zero,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -173,8 +175,9 @@ class _VoiceScreenState extends State<VoiceScreen> {
         const Divider(height: 32),
         Text('语音文件', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        Card(
+        JySlab(
           key: const Key('voice-assets-unavailable'),
+          padding: EdgeInsets.zero,
           child: const Padding(
             padding: EdgeInsets.all(16),
             child: Column(

@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart';
 import '../../net/voice_call_api.dart';
+import '../../ui/ui.dart';
 
 /// Honest, read-only single-call view.
 ///
@@ -120,8 +121,9 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
                 ),
               ),
             if (_call != null)
-              Card(
+              JySlab(
                 key: const Key('voice-call-metadata'),
+                padding: EdgeInsets.zero,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(

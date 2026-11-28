@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../net/host_connection.dart';
 import '../../net/voice_call_api.dart';
+import '../../ui/ui.dart';
 
 typedef VoiceCallLister = Future<List<VoiceCallView>> Function({
   String? status,
@@ -120,8 +121,9 @@ class _VoiceCallListScreenState extends State<VoiceCallListScreen> {
     }
   }
 
-  Widget _card(VoiceCallView call, TextStyle? title) => Card(
+  Widget _card(VoiceCallView call, TextStyle? title) => JySlab(
     key: Key('voice-call-item-${call.callId}'),
+    padding: EdgeInsets.zero,
     child: Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -184,7 +186,10 @@ class _VoiceCallListScreenState extends State<VoiceCallListScreen> {
             ),
             const SizedBox(height: 12),
             if (_phase == _Phase.loading)
-              const Center(child: CircularProgressIndicator())
+              const Padding(
+                padding: EdgeInsets.all(JySpace.lg),
+                child: Center(child: JyBusyIndicator(label: '正在读取通话列表')),
+              )
             else if (_phase == _Phase.denied)
               Text(
                 _notice ?? '无权限查看通话列表。',
