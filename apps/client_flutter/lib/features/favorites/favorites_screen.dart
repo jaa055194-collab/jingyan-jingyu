@@ -4,8 +4,10 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/runtime.dart';
 import '../../app/shell_view_model.dart';
+import '../../app/status_panel.dart';
 import '../../net/favorites_api.dart';
 import '../../net/host_connection.dart';
+import '../../ui/ui.dart';
 
 /// A private, read-only view of the current account's host favorites.
 class FavoritesScreen extends StatefulWidget {
@@ -148,17 +150,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720),
-          child: !_current
-              ? ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    _status(
-                      'favorites-invalidated',
-                      '已离开此页面或当前会话已变化。请返回后重新打开收藏。',
-                    ),
-                  ],
-                )
-              : _list(),
+          child: _list(),
         ),
       ),
     ),
@@ -170,78 +162,206 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         ? outcome.favorites
         : <FavoriteSummary>[];
     return ListView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(JySpace.lg),
       itemCount: favorites.length + 1,
       itemBuilder: (context, index) => index == 0
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('只读显示宿主返回的当前可见收藏，不打开消息、链接或文件。'),
-                const SizedBox(height: 16),
-                if (!_submitted)
-                  FilledButton.icon(
-                    key: const Key('load-favorites'),
-                    onPressed: _load,
-                    icon: const Icon(Icons.bookmark_outline),
-                    label: const Text('读取收藏'),
-                  )
-                else if (outcome == null)
-                  const LinearProgressIndicator(semanticsLabel: '正在读取收藏')
-                else if (outcome is FavoritesDenied)
-                  _status('favorites-denied', '宿主拒绝读取收藏。请确认登录后重新打开。')
-                else if (outcome is FavoritesUnavailable)
-                  _status('favorites-unavailable', '暂时无法读取收藏。请检查连接后重新打开。')
-                else if (outcome is FavoritesMalformed)
-                  _status('favorites-malformed', '收藏响应无效或过大，未显示任何条目。')
-                else if (favorites.isEmpty)
-                  _status('favorites-empty', '宿主没有返回当前可见的收藏。'),
-              ],
-            )
-          : _FavoriteTile(favorites[index - 1]),
+          ? _header(context, outcome, favorites)
+          : Padding(
+              padding: const EdgeInsets.only(bottom: JySpace.sm),
+              child: JyEntrance(
+                index: index - 1,
+                child: _FavoriteTile(favorites[index - 1]),
+              ),
+            ),
     );
   }
 
-  Widget _status(String key, String message) =>
-      Semantics(liveRegion: true, child: Text(message, key: Key(key)));
+  Widget _header(
+    BuildContext context,
+    FavoritesOutcome? outcome,
+    List<FavoriteSummary> favorites,
+  ) {
+    final palette = JyPalette.of(context);
+    final Widget state;
+    if (!_current) {
+      state = _status(
+        context,
+        'favorites-invalidated',
+        '已离开此页面或当前会话已变化。请返回后重新打开收藏。',
+        Icons.lock_outline_rounded,
+      );
+    } else if (!_submitted) {
+      state = Align(
+        key: const ValueKey('favorites-not-loaded'),
+        alignment: AlignmentDirectional.centerStart,
+        child: FilledButton.icon(
+          key: const Key('load-favorites'),
+          onPressed: _load,
+          icon: const Icon(Icons.bookmark_outline),
+          label: const Text('读取收藏'),
+        ),
+      );
+    } else if (outcome == null) {
+      state = const Padding(
+        key: ValueKey('favorites-loading'),
+        padding: EdgeInsets.symmetric(vertical: JySpace.md),
+        child: JyBusyIndicator(label: '正在读取收藏', linear: true),
+      );
+    } else if (outcome is FavoritesDenied) {
+      state = _status(
+        context,
+        'favorites-denied',
+        '宿主拒绝读取收藏。请确认登录后重新打开。',
+        Icons.lock_outline_rounded,
+      );
+    } else if (outcome is FavoritesUnavailable) {
+      state = _status(
+        context,
+        'favorites-unavailable',
+        '暂时无法读取收藏。请检查连接后重新打开。',
+        Icons.cloud_off_rounded,
+      );
+    } else if (outcome is FavoritesMalformed) {
+      state = _status(
+        context,
+        'favorites-malformed',
+        '收藏响应无效或过大，未显示任何条目。',
+        Icons.error_outline_rounded,
+      );
+    } else if (favorites.isEmpty) {
+      state = _status(
+        context,
+        'favorites-empty',
+        '宿主没有返回当前可见的收藏。',
+        Icons.bookmark_border_rounded,
+      );
+    } else {
+      state = const SizedBox.shrink(key: ValueKey('favorites-loaded'));
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: JySpace.md),
+      child: JySlab(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '只读显示宿主返回的当前可见收藏，不打开消息、链接或文件。',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: palette.text2),
+            ),
+            const SizedBox(height: JySpace.md),
+            JySwitcher(child: state),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _status(
+    BuildContext context,
+    String key,
+    String message,
+    IconData icon,
+  ) => Semantics(
+    liveRegion: true,
+    child: StatusPanel(key: Key(key), icon: icon, title: message),
+  );
 }
 
-class _FavoriteTile extends StatelessWidget {
+class _FavoriteTile extends StatefulWidget {
   const _FavoriteTile(this.item);
 
   final FavoriteSummary item;
 
   @override
+  State<_FavoriteTile> createState() => _FavoriteTileState();
+}
+
+class _FavoriteTileState extends State<_FavoriteTile> {
+  bool _expanded = false;
+
+  static (IconData, String) _kind(FavoriteKind kind) => switch (kind) {
+    FavoriteKind.message => (Icons.chat_bubble_outline, '消息收藏'),
+    FavoriteKind.text => (Icons.notes, '文本收藏'),
+    FavoriteKind.link => (Icons.link, '链接收藏'),
+    FavoriteKind.file => (Icons.insert_drive_file_outlined, '文件收藏'),
+  };
+
+  @override
   Widget build(BuildContext context) {
-    final (icon, label) = switch (item.kind) {
-      FavoriteKind.message => (Icons.chat_bubble_outline, '消息收藏'),
-      FavoriteKind.text => (Icons.notes, '文本收藏'),
-      FavoriteKind.link => (Icons.link, '链接收藏'),
-      FavoriteKind.file => (Icons.insert_drive_file_outlined, '文件收藏'),
-    };
+    final item = widget.item;
+    final palette = JyPalette.of(context);
+    final text = Theme.of(context).textTheme;
+    final (icon, label) = _kind(item.kind);
     final time = item.createdAt
         .toIso8601String()
         .substring(0, 16)
         .replaceFirst('T', ' ');
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(icon),
-      title: Text(
-        item.title ?? label,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Column(
+    final preview = switch (item.kind) {
+      FavoriteKind.message || FavoriteKind.text => item.preview,
+      _ => null,
+    };
+    final expandable = preview != null;
+    final body = JySlab(
+      padding: const EdgeInsets.all(JySpace.lg),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(item.title == null ? '$time UTC' : '$label · $time UTC'),
-          if (item.kind case FavoriteKind.message || FavoriteKind.text)
-            Text(
-              item.preview ?? '无可展示的文字摘要',
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
+          JyIconTile(icon: icon, color: palette.signal),
+          const SizedBox(width: JySpace.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  item.title ?? label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: text.titleMedium?.copyWith(color: palette.text1),
+                ),
+                const SizedBox(height: JySpace.xs),
+                Text(
+                  item.title == null ? '$time UTC' : '$label · $time UTC',
+                  style: text.labelSmall?.copyWith(
+                    color: palette.text3,
+                    fontFeatures: JyTypography.tabularFigures,
+                  ),
+                ),
+                if (preview != null) ...[
+                  const SizedBox(height: JySpace.sm),
+                  AnimatedSize(
+                    duration: JyMotion.of(context, JyDurations.standard),
+                    curve: JyCurves.enter,
+                    alignment: AlignmentDirectional.topStart,
+                    child: Text(
+                      preview,
+                      maxLines: _expanded ? null : 3,
+                      overflow: _expanded
+                          ? TextOverflow.visible
+                          : TextOverflow.ellipsis,
+                      style: text.bodyMedium?.copyWith(color: palette.text2),
+                    ),
+                  ),
+                ],
+              ],
             ),
+          ),
+          if (expandable) ...[
+            const SizedBox(width: JySpace.sm),
+            JyChevron(expanded: _expanded),
+          ],
         ],
       ),
+    );
+    if (!expandable) {
+      return body;
+    }
+    return JyPressable(
+      borderRadius: BorderRadius.circular(JyRadius.lg),
+      onTap: () => setState(() => _expanded = !_expanded),
+      child: body,
     );
   }
 }
